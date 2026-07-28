@@ -39,8 +39,9 @@ class ProjectContractTests(unittest.TestCase):
         )
         self.assertTrue((INTEGRATION / "translations" / "de.json").is_file())
         self.assertTrue((INTEGRATION / "translations" / "en.json").is_file())
-        self.assertTrue((ROOT / "brand" / "icon.png").is_file())
-        self.assertTrue((ROOT / "brand" / "icon@2x.png").is_file())
+        brand = INTEGRATION / "brand"
+        self.assertTrue((brand / "icon.png").is_file())
+        self.assertTrue((brand / "icon@2x.png").is_file())
 
     def test_runtime_and_personal_workspace_files_are_absent(self):
         for relative in (
