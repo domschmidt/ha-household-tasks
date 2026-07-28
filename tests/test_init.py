@@ -170,7 +170,6 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     assert await hass.config_entries.async_unload(entry.entry_id)
     await websocket.close()
     await client.close()
-    await hass.async_stop()
 
 
 async def test_presence_handover_and_resource_monitor_runtime(hass):
