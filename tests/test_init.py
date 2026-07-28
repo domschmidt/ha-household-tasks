@@ -17,6 +17,8 @@ from custom_components.household_tasks.engine import (
     async_unload_entry,
 )
 
+pytestmark = pytest.mark.usefixtures("mock_frontend_loaded")
+
 
 async def test_setup_requires_available_todo_entity(hass):
     """Setup is retried while the selected native to-do entity is unavailable."""
@@ -57,7 +59,7 @@ async def test_setup_and_unload_config_entry(hass):
 
 
 async def test_real_runtime_service_persistence_panel_and_unload(
-    hass, hass_client, hass_ws_client
+    hass, hass_client, hass_ws_client, unused_tcp_port
 ):
     """Exercise the complete critical path against a running HA instance."""
     items = []
@@ -84,7 +86,16 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     hass.services.async_register("todo", "add_item", add_item)
     hass.states.async_set("todo.household", "0")
 
-    assert await async_setup_component(hass, DOMAIN, {})
+    assert await async_setup_component(
+        hass,
+        DOMAIN,
+        {
+            "http": {
+                "server_host": "127.0.0.1",
+                "server_port": unused_tcp_port,
+            }
+        },
+    )
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"todo_entity": "todo.household"},
@@ -96,12 +107,12 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     engine = entry.runtime_data
 
     assert PANEL_URL in hass.data["frontend_panels"]
+    websocket = await hass_ws_client(hass)
     client = await hass_client()
     response = await client.get(f"{FRONTEND_PATH}/household-tasks-panel.js")
     assert response.status == 200
     assert "customElements.define" in await response.text()
 
-    websocket = await hass_ws_client(hass)
     await websocket.send_json({"id": 1, "type": f"{DOMAIN}/get"})
     message = await websocket.receive_json()
     assert message["success"]
@@ -157,6 +168,9 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     assert restored_engine.tasks["laundry"]["name"] == "Laundry"
     assert len(restored_engine.state["occurrences"]) == 1
     assert await hass.config_entries.async_unload(entry.entry_id)
+    await websocket.close()
+    await client.close()
+    await hass.async_stop()
 
 
 async def test_presence_handover_and_resource_monitor_runtime(hass):
