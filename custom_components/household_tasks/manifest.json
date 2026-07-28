@@ -1,14 +1,14 @@
 {
   "domain": "household_tasks",
   "name": "Household Tasks",
+  "after_dependencies": ["brother", "calendar", "frontend", "ipp", "local_todo", "mobile_app", "todo"],
   "codeowners": ["@domschmidt"],
   "config_flow": true,
-  "single_config_entry": true,
-  "integration_type": "service",
-  "documentation": "https://github.com/domschmidt/ha-household-tasks",
-  "issue_tracker": "https://github.com/domschmidt/ha-household-tasks/issues",
   "dependencies": ["frontend", "http"],
-  "after_dependencies": ["brother", "calendar", "frontend", "ipp", "local_todo", "mobile_app", "todo"],
+  "documentation": "https://github.com/domschmidt/ha-household-tasks",
+  "integration_type": "service",
   "iot_class": "local_push",
+  "issue_tracker": "https://github.com/domschmidt/ha-household-tasks/issues",
+  "single_config_entry": true,
   "version": "3.0.0"
 }
