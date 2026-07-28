@@ -3,6 +3,12 @@
 All notable changes are documented here. The project follows Semantic
 Versioning.
 
+## 3.0.1 - 2026-07-28
+
+### Fixed
+
+- fix(ci): make pytest imports and HA lifecycle deterministic ([#6](https://github.com/domschmidt/ha-household-tasks/pull/6))
+
 ## 3.0.0 - 2026-07-27
 
 ### Added
