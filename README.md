@@ -1,0 +1,295 @@
+# Household Tasks for Home Assistant
+
+[![HACS validation](https://github.com/domschmidt/ha-household-tasks/actions/workflows/validate.yml/badge.svg)](https://github.com/domschmidt/ha-household-tasks/actions/workflows/validate.yml)
+[![Tests](https://github.com/domschmidt/ha-household-tasks/actions/workflows/tests.yml/badge.svg)](https://github.com/domschmidt/ha-household-tasks/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Household Tasks is a local-first Home Assistant custom integration for planning,
+assigning, completing, and evaluating recurring household work. It combines
+native Home Assistant to-do items with fair assignment, dependencies,
+completion-based recurrence, state-triggered tasks, weekly reviews, NFC tags,
+push escalation, and a multilingual management panel.
+
+> The repository is prepared for community use and HACS validation. Until the
+> first tagged GitHub release exists, install from a local checkout or add the
+> repository to HACS as a custom repository.
+
+[Deutsche Anleitung](docs/user-guide.md) ·
+[Architecture](ARCHITECTURE.md) ·
+[Contributing](CONTRIBUTING.md) ·
+[Security](SECURITY.md)
+
+## Highlights
+
+- Native Home Assistant to-do items remain the source users interact with.
+- Fixed, rotating, fair, or open assignment with a human-readable explanation.
+- Weekly, monthly, yearly, interval, calendar, state, and completion schedules.
+- Dependent follow-up tasks, including delayed chains.
+- NFC create/complete flows with visible, configurable scan feedback.
+- Escalations, snoozing, help requests, takeover, and actionable notifications.
+- Weekly household review and 90-day analytics.
+- Import/export with schema validation and an explicit replace workflow.
+- German and English panel localization.
+- Admin-only configuration and privacy-aware diagnostics.
+- No cloud account, external API, telemetry, or YAML configuration required.
+
+## Requirements
+
+- Home Assistant 2024.10.0 or newer
+- HACS 2.0 or newer for the recommended installation path
+- One Home Assistant `todo` entity
+- The Home Assistant mobile app for actionable push notifications
+- Optional: Home Assistant tags/NFC, calendar entities, presence entities, or
+  monitored device entities
+
+## Installation
+
+### HACS
+
+1. Open HACS and choose **Integrations**.
+2. Add `https://github.com/domschmidt/ha-household-tasks` as a custom
+   **Integration** repository until it is available in the default catalog.
+3. Search for **Household Tasks**, download it, and restart Home Assistant.
+4. Open **Settings → Devices & services → Add integration**.
+5. Select **Household Tasks** and choose the to-do list it should manage.
+
+### Manual
+
+1. Copy `custom_components/household_tasks` into the Home Assistant
+   `/config/custom_components` directory.
+2. Restart Home Assistant.
+3. Add the integration from **Settings → Devices & services**.
+
+## First configuration
+
+After setup, **Tasks** appears in the sidebar. Add people first and map each
+person to the appropriate Home Assistant user, presence entity, and mobile
+notification service. Then create reusable task definitions.
+
+Only Home Assistant administrators may change people, task definitions, rules,
+or imports. Users who can control the selected to-do entity can complete and
+claim work, create quick tasks, and manually run active definitions.
+
+## Core concepts
+
+### Task definitions and native occurrences
+
+A task definition describes assignment, schedule, due time, escalation,
+dependencies, NFC behavior, and checklists. Every run creates an independent
+native Home Assistant to-do item. Runtime metadata is kept in Home Assistant's
+versioned storage, so definitions and progress survive restarts.
+
+### Assignment
+
+| Mode | Behavior |
+| --- | --- |
+| Fixed | Always assigns the selected person. |
+| Rotation | Cycles through eligible people and persists the cursor. |
+| Fair | Uses assignment count, then current workload, then configured order. |
+| Open | Creates an unassigned item that an eligible person can claim. |
+
+The panel exposes **Why was this assigned to me?** using the factors recorded at
+assignment time.
+
+Definitions may require presence. Eligible people are then filtered through
+their configured `person.*` state. If nobody is home, the occurrence remains
+open and is assigned automatically when an eligible person returns.
+
+Temporary household handovers transfer both open and future work. They can be
+scheduled with an end time, carry an audit reason, and never rewrite the
+underlying task definitions.
+
+### Scheduling
+
+| Type | Typical use |
+| --- | --- |
+| Manual | One-click or service-created work |
+| Weekly/monthly/yearly | Calendar-based routines |
+| Every N months | Quarterly or semiannual maintenance |
+| Calendar event | Preparation or follow-up around appointments |
+| State change | Dishwasher finished, filter warning, someone arrived |
+| After completion | Repeat relative to when work was actually completed |
+
+State schedules support `for`, due offsets, cooldowns, and duplicate
+suppression. Completion schedules include an initial due date to bootstrap the
+series.
+
+### Dependencies
+
+Completing one definition can create one or more follow-up definitions
+immediately or after a delay. This models workflows such as:
+
+```text
+Start washing machine → Hang laundry → Take laundry down
+```
+
+### NFC tags
+
+Assign a Home Assistant tag ID to a task definition and choose:
+
+- create or complete;
+- create only; or
+- complete only.
+
+The feedback mode can notify the scanning person, the assigned person, both, or
+no one. Each handled scan emits `household_tasks_nfc_action` for dashboards and
+automations. Treat tag IDs as security-sensitive identifiers and do not publish
+them in issues.
+
+## Actions
+
+The integration registers actions during Home Assistant setup:
+
+```yaml
+action: household_tasks.create
+data:
+  task_id: laundry
+```
+
+```yaml
+action: household_tasks.scan_now
+```
+
+`household_tasks.create` creates an occurrence from an active definition.
+`household_tasks.scan_now` immediately evaluates schedules and escalations.
+
+Temporary handovers are also automation-friendly:
+
+```yaml
+action: household_tasks.set_handover
+data:
+  from_person: person_a
+  to_person: person_b
+  until: "2026-08-14T18:00:00+02:00"
+  reason: Vacation
+```
+
+Use `household_tasks.clear_handover` with `from_person` to end it early.
+
+Generic resource monitors turn numeric thresholds or state values into tasks.
+Typical sources include consumable levels, filter life, batteries, water
+storage, salt, toner, and pet-food containers. A recovered sensor can
+automatically resolve its occurrence.
+
+## Backup, export, and restore
+
+Use **Settings → Export** in the panel before larger changes. Exports contain
+people mappings, task definitions, automation rules, and identifiers, so store
+them like a Home Assistant backup.
+
+Import validates the schema before replacing configuration. Take a Home
+Assistant backup as well; import is a configuration migration tool, not a
+replacement for instance backups.
+
+## Diagnostics and privacy
+
+All processing is local. The integration does not transmit telemetry or
+household data. Home Assistant diagnostics redact user, person, device, entity,
+tag, and to-do identifiers. Free-text task titles and descriptions can still
+be sensitive; review any log or exported configuration before sharing it.
+
+Download diagnostics from **Settings → Devices & services → Household Tasks →
+three-dot menu → Download diagnostics**. Version, entry count, people count,
+and task-definition count are also available under Home Assistant System
+Health.
+
+## Troubleshooting
+
+- **Panel is missing:** restart Home Assistant and hard-refresh the browser.
+- **No push notification:** verify the person's `notify.mobile_app_*` service
+  and mobile-app permissions.
+- **NFC does nothing:** scan once under **Settings → Tags**, copy the exact ID,
+  ensure the definition is active, and confirm that the ID is not reused.
+- **State task does not run:** check the exact entity state in Developer Tools;
+  display labels often differ from raw state values.
+- **Duplicate task:** enable duplicate suppression for state schedules and
+  inspect the configured cooldown.
+
+Enable debug logging temporarily:
+
+```yaml
+logger:
+  logs:
+    custom_components.household_tasks: debug
+```
+
+Never post unredacted storage files or configuration exports.
+
+## Known limitations
+
+- One Household Tasks config entry is supported per Home Assistant instance.
+- The management panel currently ships in German and English.
+- NFC identifies a tag and sometimes the scanner; it is not an authentication
+  mechanism.
+- Completion performed directly in another to-do client may not include user
+  context. In that case, credit falls back to the assigned person.
+- The integration provides actions and an NFC event, but no custom Home
+  Assistant trigger, condition, or blueprint platform.
+- Browser-level automated tests for the custom panel are not yet included.
+
+## Updating and removal
+
+Export configuration and create a Home Assistant backup before a major-version
+upgrade. Update through HACS and restart Home Assistant.
+
+To remove the integration, delete its config entry under **Settings → Devices &
+services**, restart Home Assistant, and uninstall it in HACS. Existing native
+to-do items are intentionally not deleted automatically. Remove them manually
+if no longer required.
+
+## Development
+
+```bash
+python -m pip install -e ".[dev]"
+pre-commit install
+pytest
+ruff check .
+ruff format --check .
+```
+
+For an end-to-end test, copy or symlink
+`custom_components/household_tasks` into a dedicated Home Assistant development
+instance. CI runs unit tests, coverage reporting, Ruff, Home Assistant hassfest,
+and HACS repository validation. The deterministic domain layer has an enforced
+80% branch-aware coverage floor; the current local run is at 92%. SonarQube
+receives a separate full-runtime report that includes lifecycle, engine,
+configuration, diagnostics, and WebSocket code so untested orchestration paths
+remain visible instead of being excluded from the quality gate. The current
+full-runtime baseline is 39% and is enforced as a non-regression floor; it
+should be raised as engine scenarios are moved into focused modules and tests.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
+[RELEASING.md](RELEASING.md) for release procedure. Repository owners should
+also complete the one-time [maintainer setup](docs/maintainer-setup.md) for
+branch protection, SonarQube, security scanning, and release provenance.
+
+### Quality and security gates
+
+- Unit and Home Assistant config-flow tests on supported Python versions
+- Ruff linting and deterministic-domain coverage threshold
+- hassfest and HACS repository validation
+- SonarQube Server or SonarQube Cloud quality-gate analysis
+- CodeQL for Python and JavaScript
+- Gitleaks secret scanning and pull-request dependency review
+- OpenSSF Scorecard supply-chain analysis
+- SHA-pinned GitHub Actions and Dependabot updates
+- Reproducible release archive with SHA-256 checksum and build provenance
+
+## Project status
+
+Version 3.0.0 is a community beta. The public configuration schema is versioned
+and imports are validated, but production households should still keep regular
+Home Assistant backups. See the
+[immutable GitHub releases](https://github.com/domschmidt/ha-household-tasks/releases)
+and the open issues for known work. `CHANGELOG.md` on the development branch is
+the baseline; every release tag contains its generated, cumulative changelog.
+
+## License
+
+[MIT](LICENSE)
+
+## Trademark notice
+
+Home Assistant is a trademark of its respective owner. This project is an
+independent community integration and is not affiliated with or endorsed by
+the Home Assistant project.

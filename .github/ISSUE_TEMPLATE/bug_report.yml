@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a reproducible problem with Household Tasks
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Household Tasks. Search existing issues first
+        and remove personal data from logs and diagnostics.
+  - type: input
+    id: version
+    attributes:
+      label: Integration version
+      placeholder: "3.0.0"
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.7.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options: [HACS, Manual]
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the expected and actual result.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open ...
+        2. Configure ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics and logs
+      description: Never post secrets, tag IDs, user IDs, or unredacted exports.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched for existing issues.
+          required: true
+        - label: I removed personal and security-sensitive data.
+          required: true

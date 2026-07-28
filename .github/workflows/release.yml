@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  pull-requests: read
+
+jobs:
+  release:
+    name: Release merged pull request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact merge
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Resolve the merged pull request
+        id: pull-request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/commits/$MERGE_SHA/pulls" \
+            > "$RUNNER_TEMP/associated-pulls.json"
+          jq \
+            --arg merge_sha "$MERGE_SHA" \
+            '[.[] | select(.merged_at != null and .merge_commit_sha == $merge_sha)] | last // empty' \
+            "$RUNNER_TEMP/associated-pulls.json" \
+            > "$RUNNER_TEMP/release-pr.json"
+
+          if [[ -s "$RUNNER_TEMP/release-pr.json" ]]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "number=$(jq -r '.number' "$RUNNER_TEMP/release-pr.json")" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Commit is not associated with a merged pull request."
+          fi
+
+      - name: Set up Python
+        if: ${{ steps.pull-request.outputs.release == 'true' }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Allocate version and push immutable release tag
+        if: ${{ steps.pull-request.outputs.release == 'true' }}
+        id: release
+        shell: bash
+        env:
+          MERGE_SHA: ${{ github.sha }}
+          PR_FILE: ${{ runner.temp }}/release-pr.json
+          PR_NUMBER: ${{ steps.pull-request.outputs.number }}
+        run: |
+          git config user.name "household-tasks-release[bot]"
+          git config user.email "household-tasks-release[bot]@users.noreply.github.com"
+
+          RELEASE_TAG=""
+          for attempt in {1..100}; do
+            git fetch --tags origin
+            git switch --detach --discard-changes "$MERGE_SHA"
+
+            read -r RELEASE_TAG EXISTING_RELEASE < <(
+              python scripts/prepare_release.py \
+                --pull-request-file "$PR_FILE"
+            )
+
+            if [[ "$EXISTING_RELEASE" == "true" ]]; then
+              git switch --detach "$RELEASE_TAG"
+              break
+            fi
+
+            python tests/test_project_contract.py
+            python scripts/build_release.py --tag "$RELEASE_TAG"
+            git add \
+              CHANGELOG.md \
+              pyproject.toml \
+              custom_components/household_tasks/const.py \
+              custom_components/household_tasks/manifest.json
+            git commit -m "chore(release): $RELEASE_TAG for PR #$PR_NUMBER [skip ci]"
+            git tag -a "$RELEASE_TAG" \
+              -m "Household Tasks $RELEASE_TAG" \
+              -m "household-tasks-pr:$PR_NUMBER"
+
+            if git push origin "refs/tags/$RELEASE_TAG"; then
+              break
+            fi
+
+            git tag --delete "$RELEASE_TAG"
+            RELEASE_TAG=""
+          done
+
+          if [[ -z "$RELEASE_TAG" ]]; then
+            echo "::error::Could not allocate a unique release version after 100 attempts."
+            exit 1
+          fi
+
+          python tests/test_project_contract.py
+          python scripts/build_release.py --tag "$RELEASE_TAG"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Attest archive provenance
+        if: ${{ steps.pull-request.outputs.release == 'true' }}
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: dist/household_tasks.zip
+
+      - name: Create GitHub release and upload files
+        if: ${{ steps.pull-request.outputs.release == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            if ! gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --notes-file dist/release-notes.md; then
+              gh release view "$RELEASE_TAG" >/dev/null
+            fi
+          fi
+          gh release upload "$RELEASE_TAG" \
+            dist/household_tasks.zip \
+            dist/household_tasks.zip.sha256 \
+            --clobber

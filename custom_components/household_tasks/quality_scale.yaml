@@ -1,0 +1,95 @@
+rules:
+  action_setup: done
+  appropriate_polling:
+    status: exempt
+    comment: The integration is event-driven and uses one scheduled orchestration scan.
+  brands: done
+  common_modules: done
+  config_flow_test_coverage: done
+  config_flow: done
+  reconfiguration_flow: done
+  dependency_transparency:
+    status: exempt
+    comment: The integration has no third-party runtime dependencies.
+  docs_actions: done
+  docs_triggers:
+    status: exempt
+    comment: The integration does not provide Home Assistant automation triggers.
+  docs_conditions:
+    status: exempt
+    comment: The integration does not provide Home Assistant automation conditions.
+  docs_high_level_description: done
+  docs_installation_instructions: done
+  docs_removal_instructions: done
+  entity_event_setup: done
+  entity_unique_id:
+    status: exempt
+    comment: The integration does not create entities.
+  has_entity_name:
+    status: exempt
+    comment: The integration does not create entities.
+  runtime_data: done
+  test_before_configure:
+    status: exempt
+    comment: This local helper integration does not connect to a device or service.
+  test_before_setup: done
+  unique_config_entry: done
+  action_exceptions: done
+  config_entry_unloading: done
+  docs_configuration_parameters: done
+  docs_installation_parameters: done
+  entity_unavailable:
+    status: exempt
+    comment: The integration does not create entities.
+  integration_owner: done
+  log_when_unavailable:
+    status: exempt
+    comment: The integration has no external connection.
+  parallel_updates:
+    status: exempt
+    comment: The integration does not create entity platforms.
+  reauthentication_flow:
+    status: exempt
+    comment: The integration does not authenticate to an external service.
+  diagnostics: done
+  discovery_update_info:
+    status: exempt
+    comment: The integration has no discoverable network endpoint.
+  discovery:
+    status: exempt
+    comment: The integration has no discoverable device or service.
+  docs_data_update: done
+  docs_supported_devices:
+    status: exempt
+    comment: The integration does not connect to a specific device family.
+  docs_supported_functions: done
+  docs_troubleshooting: done
+  docs_use_cases: done
+  dynamic_devices:
+    status: exempt
+    comment: The integration does not create devices.
+  entity_category:
+    status: exempt
+    comment: The integration does not create entities.
+  entity_device_class:
+    status: exempt
+    comment: The integration does not create entities.
+  entity_disabled_by_default:
+    status: exempt
+    comment: The integration does not create entities.
+  entity_translations:
+    status: exempt
+    comment: The integration does not create entities.
+  exception_translations: done
+  icon_translations:
+    status: exempt
+    comment: The integration does not create entities.
+  stale_devices:
+    status: exempt
+    comment: The integration does not create devices.
+  async_dependency:
+    status: exempt
+    comment: The integration has no third-party runtime dependency.
+  inject_websession:
+    status: exempt
+    comment: The integration has no third-party runtime dependency or HTTP client.

@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a focused enhancement or use case
+title: "[Feature]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: Describe the household problem, not only the proposed UI.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: This proposal remains local-first or clearly explains external data flows.
+          required: true

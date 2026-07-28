@@ -1,0 +1,10 @@
+[run]
+branch = True
+source = custom_components.household_tasks
+
+[report]
+show_missing = True
+fail_under = 39
+
+[xml]
+output = coverage-full.xml

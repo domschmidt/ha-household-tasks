@@ -1,0 +1,93 @@
+{
+  "config": {
+    "abort": {
+      "single_instance_allowed": "Household Tasks is already configured."
+    },
+    "step": {
+      "user": {
+        "title": "Set up Household Tasks",
+        "description": "Select the native Home Assistant to-do list used for household tasks.",
+        "data": {
+          "todo_entity": "To-do list"
+        }
+      },
+      "reconfigure": {
+        "title": "Change to-do list",
+        "description": "Select the native Home Assistant to-do list Household Tasks should use.",
+        "data": {
+          "todo_entity": "To-do list"
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "Household Tasks is not loaded. Set up the integration before using this action."
+    },
+    "invalid_task": {
+      "message": "Task {task_id} does not exist or is disabled."
+    },
+    "todo_unavailable": {
+      "message": "The configured to-do entity {entity_id} is not available."
+    },
+    "admin_required": {
+      "message": "Only a Home Assistant administrator may change household handovers."
+    }
+  },
+  "system_health": {
+    "info": {
+      "version": "Version",
+      "configured_entries": "Configured entries",
+      "people": "People",
+      "task_definitions": "Task definitions"
+    }
+  },
+  "services": {
+    "create": {
+      "name": "Create task",
+      "description": "Immediately creates one configured task.",
+      "fields": {
+        "task_id": {
+          "name": "Task ID",
+          "description": "Internal template ID from the task UI."
+        }
+      }
+    },
+    "scan_now": {
+      "name": "Scan now",
+      "description": "Immediately checks schedules, calendars, and escalations."
+    },
+    "set_handover": {
+      "name": "Set household handover",
+      "description": "Temporarily transfers current and future tasks to another person.",
+      "fields": {
+        "from_person": {
+          "name": "From person",
+          "description": "Internal ID of the person whose responsibilities are transferred."
+        },
+        "to_person": {
+          "name": "To person",
+          "description": "Internal ID of the person taking over."
+        },
+        "until": {
+          "name": "Until",
+          "description": "Optional ISO date-time at which the handover expires."
+        },
+        "reason": {
+          "name": "Reason",
+          "description": "Optional audit note such as vacation or illness."
+        }
+      }
+    },
+    "clear_handover": {
+      "name": "Clear household handover",
+      "description": "Stops a temporary responsibility handover.",
+      "fields": {
+        "from_person": {
+          "name": "From person",
+          "description": "Internal ID whose handover should end."
+        }
+      }
+    }
+  }
+}

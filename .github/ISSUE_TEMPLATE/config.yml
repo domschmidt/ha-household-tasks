@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/domschmidt/ha-household-tasks/discussions
+    about: Use GitHub Discussions for setup questions and open-ended ideas.
+  - name: Security vulnerability
+    url: https://github.com/domschmidt/ha-household-tasks/security/advisories/new
+    about: Privately report security vulnerabilities.

@@ -1,0 +1,31 @@
+name: Validate integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hassfest:
+    name: Home Assistant hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: home-assistant/actions/hassfest@e3fb68ebda13d88a0d695082f471ba2c83d025fb # master
+
+  hacs:
+    name: HACS repository validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
+        with:
+          category: integration

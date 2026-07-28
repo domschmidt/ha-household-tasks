@@ -1,0 +1,93 @@
+{
+  "config": {
+    "abort": {
+      "single_instance_allowed": "Haushaltsaufgaben ist bereits eingerichtet."
+    },
+    "step": {
+      "user": {
+        "title": "Haushaltsaufgaben einrichten",
+        "description": "Wähle die native Home-Assistant-To-do-Liste für alle Haushaltsaufgaben.",
+        "data": {
+          "todo_entity": "To-do-Liste"
+        }
+      },
+      "reconfigure": {
+        "title": "To-do-Liste ändern",
+        "description": "Wähle die native Home-Assistant-To-do-Liste, die Haushaltsaufgaben verwenden soll.",
+        "data": {
+          "todo_entity": "To-do-Liste"
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "Haushaltsaufgaben ist nicht geladen. Richte die Integration ein, bevor du diese Aktion verwendest."
+    },
+    "invalid_task": {
+      "message": "Die Aufgabe {task_id} existiert nicht oder ist deaktiviert."
+    },
+    "todo_unavailable": {
+      "message": "Die konfigurierte To-do-Entität {entity_id} ist nicht verfügbar."
+    },
+    "admin_required": {
+      "message": "Nur ein Home-Assistant-Administrator darf Haushaltsübergaben ändern."
+    }
+  },
+  "system_health": {
+    "info": {
+      "version": "Version",
+      "configured_entries": "Konfigurierte Einträge",
+      "people": "Personen",
+      "task_definitions": "Aufgabendefinitionen"
+    }
+  },
+  "services": {
+    "create": {
+      "name": "Aufgabe erzeugen",
+      "description": "Erzeugt eine konfigurierte Aufgabe sofort.",
+      "fields": {
+        "task_id": {
+          "name": "Aufgaben-ID",
+          "description": "Interne ID der Aufgabenvorlage aus der Aufgaben-UI."
+        }
+      }
+    },
+    "scan_now": {
+      "name": "Jetzt prüfen",
+      "description": "Prüft Zeitpläne, Kalender und Eskalationen sofort."
+    },
+    "set_handover": {
+      "name": "Haushaltsübergabe setzen",
+      "description": "Überträgt aktuelle und zukünftige Aufgaben vorübergehend an eine andere Person.",
+      "fields": {
+        "from_person": {
+          "name": "Abgebende Person",
+          "description": "Interne ID der Person, deren Zuständigkeiten übertragen werden."
+        },
+        "to_person": {
+          "name": "Vertretung",
+          "description": "Interne ID der übernehmenden Person."
+        },
+        "until": {
+          "name": "Bis",
+          "description": "Optionaler ISO-Zeitpunkt, zu dem die Übergabe endet."
+        },
+        "reason": {
+          "name": "Grund",
+          "description": "Optionale Audit-Notiz wie Urlaub oder Krankheit."
+        }
+      }
+    },
+    "clear_handover": {
+      "name": "Haushaltsübergabe beenden",
+      "description": "Beendet eine vorübergehende Zuständigkeitsübergabe.",
+      "fields": {
+        "from_person": {
+          "name": "Abgebende Person",
+          "description": "Interne ID, deren Übergabe beendet werden soll."
+        }
+      }
+    }
+  }
+}

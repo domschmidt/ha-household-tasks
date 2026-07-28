@@ -1,0 +1,73 @@
+name: SonarQube
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sonarqube-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+      SONAR_ROOT_CERT: ${{ secrets.SONAR_ROOT_CERT }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install -e ".[test]"
+      - name: Generate coverage report
+        run: >-
+          pytest
+          --override-ini=addopts=
+          --cov=custom_components.household_tasks
+          --cov-config=.coveragerc.full
+          --cov-report=term-missing
+          --cov-report=xml:coverage-full.xml
+      - name: Require SonarQube configuration on the protected branch
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (env.SONAR_TOKEN == '' || env.SONAR_PROJECT_KEY == '' || (env.SONAR_HOST_URL == '' && env.SONAR_ORGANIZATION == ''))
+        run: |
+          echo "::error::Configure SONAR_TOKEN, SONAR_PROJECT_KEY, and either SONAR_HOST_URL or SONAR_ORGANIZATION."
+          exit 1
+      - name: Explain skipped fork scan
+        if: github.event_name == 'pull_request' && (env.SONAR_TOKEN == '' || env.SONAR_PROJECT_KEY == '' || (env.SONAR_HOST_URL == '' && env.SONAR_ORGANIZATION == ''))
+        run: echo "::notice::SonarQube scan skipped because protected credentials are unavailable to this pull request."
+      - name: Scan SonarQube Server
+        if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_HOST_URL != '' && env.SONAR_ORGANIZATION == ''
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_ROOT_CERT: ${{ secrets.SONAR_ROOT_CERT }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+      - name: Scan SonarQube Cloud
+        if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != ''
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ROOT_CERT: ${{ secrets.SONAR_ROOT_CERT }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}

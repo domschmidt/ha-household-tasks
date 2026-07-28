@@ -1,0 +1,53 @@
+create:
+  name: Create task
+  description: Immediately creates one configured task.
+  fields:
+    task_id:
+      name: Task ID
+      description: Internal template ID from the task UI.
+      required: true
+      example: laundry
+      selector:
+        text:
+
+scan_now:
+  name: Scan now
+  description: Immediately checks schedules, calendars, and escalations.
+
+set_handover:
+  name: Set household handover
+  description: Temporarily transfers current and future tasks to another person.
+  fields:
+    from_person:
+      name: From person
+      description: Internal ID of the person whose responsibilities are transferred.
+      required: true
+      selector:
+        text:
+    to_person:
+      name: To person
+      description: Internal ID of the person taking over.
+      required: true
+      selector:
+        text:
+    until:
+      name: Until
+      description: Optional ISO date-time at which the handover expires.
+      selector:
+        text:
+    reason:
+      name: Reason
+      description: Optional audit note such as vacation or illness.
+      selector:
+        text:
+
+clear_handover:
+  name: Clear household handover
+  description: Stops a temporary responsibility handover.
+  fields:
+    from_person:
+      name: From person
+      description: Internal ID whose handover should end.
+      required: true
+      selector:
+        text:
