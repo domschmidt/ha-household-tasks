@@ -1,9 +1,12 @@
 """Tests for the Household Tasks config flow."""
 
+import pytest
 from homeassistant import config_entries, data_entry_flow
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.household_tasks.const import DOMAIN
+
+pytestmark = pytest.mark.usefixtures("mock_frontend_loaded")
 
 
 async def test_create_config_entry(hass):

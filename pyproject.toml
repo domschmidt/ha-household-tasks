@@ -19,12 +19,16 @@ classifiers = [
 [project.optional-dependencies]
 test = [
   "homeassistant>=2024.10.0",
+  # pycares 4.10+ starts a process-wide shutdown thread on client cleanup, which
+  # pytest-homeassistant-custom-component currently reports as a leaked thread.
+  "pycares>=4,<4.10",
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "pytest-homeassistant-custom-component>=0.13.190",
 ]
 dev = [
   "homeassistant>=2024.10.0",
+  "pycares>=4,<4.10",
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "pytest-homeassistant-custom-component>=0.13.190",
@@ -39,6 +43,8 @@ packages = []
 [tool.pytest.ini_options]
 addopts = "--strict-markers --strict-config --cov=custom_components.household_tasks --cov-report=term-missing --cov-report=xml"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.coverage.run]
