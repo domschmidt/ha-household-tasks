@@ -43,6 +43,49 @@ class ProjectContractTests(unittest.TestCase):
         self.assertTrue((brand / "icon.png").is_file())
         self.assertTrue((brand / "icon@2x.png").is_file())
 
+    def test_frontend_uses_guided_reference_selectors(self):
+        panel = (INTEGRATION / "frontend" / "household-tasks-panel.js").read_text(
+            "utf-8"
+        )
+
+        for helper in (
+            "_entityInput(",
+            "_notifyInput(",
+            "_userInput(",
+            "_deviceInput(",
+            "_tagInput(",
+            "_bindTagCreator(",
+            "_followUpRows(",
+            "_triggerRows(",
+            "_resourceRows(",
+            "_escalationRows(",
+            "_bindInlineTaskCreates(",
+            'type: "household_tasks/preview_task"',
+            'type: "household_tasks/test_notification"',
+        ):
+            with self.subTest(helper=helper):
+                self.assertIn(helper, panel)
+
+        self.assertNotIn('name="follow_ups"', panel)
+        self.assertNotIn('name="triggers"', panel)
+        self.assertIn('name="trigger_entity_id"', panel)
+        self.assertIn('name="follow_up_task_id"', panel)
+        self.assertIn("_enhanceAccessibility(", panel)
+        self.assertIn('setAttribute("aria-describedby"', panel)
+        self.assertIn('setAttribute("aria-modal", "true")', panel)
+        self.assertIn('setAttribute("aria-live"', panel)
+        self.assertIn('event.key === "Escape"', panel)
+        self.assertIn("new URL(import.meta.url)", panel)
+        self.assertIn("encodeURIComponent(frontendVersion)", panel)
+        self.assertIn('type: "tag/create"', panel)
+        self.assertIn('type: "tag/write"', panel)
+        self.assertIn("data-toggle-tag-creator", panel)
+        self.assertNotIn(".weekdays input{display:none}", panel)
+
+        engine = (INTEGRATION / "engine.py").read_text("utf-8")
+        self.assertIn("def _frontend_version()", engine)
+        self.assertIn("cache_headers=False", engine)
+
     def test_runtime_and_personal_workspace_files_are_absent(self):
         for relative in (
             "config",
