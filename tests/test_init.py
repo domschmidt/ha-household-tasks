@@ -63,6 +63,7 @@ async def test_real_runtime_service_persistence_panel_and_unload(
 ):
     """Exercise the complete critical path against a running HA instance."""
     items = []
+    notifications = []
 
     async def get_items(call):
         return {"todo.household": {"items": list(items)}}
@@ -84,6 +85,35 @@ async def test_real_runtime_service_persistence_panel_and_unload(
         supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register("todo", "add_item", add_item)
+    hass.services.async_register(
+        "notify",
+        "mobile_app_alex",
+        lambda call: notifications.append(dict(call.data)),
+    )
+    calendar_start = datetime.now(UTC) + timedelta(days=2)
+
+    async def get_events(call):
+        return {
+            "calendar.waste": {
+                "events": [
+                    {
+                        "summary": "Restmüll",
+                        "start": calendar_start.isoformat(),
+                    },
+                    {
+                        "summary": "Papier",
+                        "start": (calendar_start + timedelta(days=1)).isoformat(),
+                    },
+                ]
+            }
+        }
+
+    hass.services.async_register(
+        "calendar",
+        "get_events",
+        get_events,
+        supports_response=SupportsResponse.ONLY,
+    )
     hass.states.async_set("todo.household", "0")
 
     assert await async_setup_component(
@@ -135,6 +165,58 @@ async def test_real_runtime_service_persistence_panel_and_unload(
             "schedule": {"type": "manual"},
         },
     )
+
+    hass.states.async_set("binary_sensor.washer", "on")
+    weekly_preview = await engine.async_preview_task(
+        {
+            "schedule": {
+                "type": "weekly",
+                "weekdays": ["mon"],
+                "time": "18:00:00",
+            }
+        }
+    )
+    assert weekly_preview["next_due"] is not None
+    state_preview = await engine.async_preview_task(
+        {
+            "schedule": {
+                "type": "state_trigger",
+                "triggers": [
+                    {
+                        "entity_id": "binary_sensor.washer",
+                        "to": "on",
+                    }
+                ],
+            }
+        }
+    )
+    assert state_preview["state_triggers"][0]["matches"]
+    calendar_preview = await engine.async_preview_task(
+        {
+            "schedule": {
+                "type": "calendar",
+                "entity_id": "calendar.waste",
+                "match": "rest",
+                "offset": "-12:00:00",
+            }
+        }
+    )
+    assert len(calendar_preview["calendar_events"]) == 1
+    assert calendar_preview["calendar_events"][0]["summary"] == "Restmüll"
+    assert calendar_preview["next_due"] is not None
+    await engine.async_test_notification("alex")
+    assert notifications[-1]["data"]["tag"] == "household_tasks_test"
+
+    await websocket.send_json(
+        {
+            "id": 2,
+            "type": f"{DOMAIN}/preview_task",
+            "task": {"schedule": {"type": "manual"}},
+        }
+    )
+    message = await websocket.receive_json()
+    assert message["success"]
+    assert message["result"]["schedule_type"] == "manual"
 
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(

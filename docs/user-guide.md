@@ -40,6 +40,10 @@ Das Seitenleisten-Panel enthält:
 Alle Benutzer mit Steuerberechtigung für die ausgewählte To-do-Entität können
 Aufgaben erledigen, Schnellaufgaben hinzufügen und aktive Vorlagen sofort
 auslösen. Nur Administratoren dürfen Personen, Vorlagen und Regeln verändern.
+Jedes Konfigurationsfeld besitzt einen direkt zugeordneten Hilfetext. Entitäten,
+Benutzer, Geräte, Benachrichtigungsaktionen, Kalender und NFC-Tags werden aus
+Home Assistant vorgeschlagen, damit keine technischen IDs blind eingegeben
+werden müssen.
 
 ## Zeitpläne
 
@@ -64,16 +68,9 @@ werden. So lassen sich beispielsweise diese Ketten abbilden:
 
 `Waschmaschine starten` → `Wäsche aufhängen` → `Wäsche abnehmen`
 
-Die im Aufgabeneditor verwendete JSON-Struktur lautet beispielsweise:
-
-```json
-[
-  {
-    "task_id": "waesche_abnehmen",
-    "delay": "02:00:00"
-  }
-]
-```
+Vorhandene Vorlagen werden im Editor ausgewählt. Fehlt die gewünschte
+Folgevorlage, kann sie dort direkt angelegt und ausgewählt werden, ohne den
+aktuellen Entwurf zu verlassen.
 
 ### Zustandsbasierte Aufgaben
 
@@ -183,9 +180,28 @@ Die Standardregeln sind:
    zugestellten Nachricht;
 3. nach 24 Stunden Hinweis an alle.
 
-Jede Stufe kann erinnern, an die nächste Person delegieren oder die Aufgabe zur
-freien Übernahme öffnen. Jede Aufgabenvorlage und jede Schnellaufgabe kann die
-globalen Regeln überschreiben.
+Die Oberfläche ist nicht auf drei Stufen begrenzt. Jede Stufe besitzt Dauer,
+Bezugspunkt, Empfänger, Anwesenheitsregel und Aktion und kann erinnern, an die
+nächste Person delegieren oder die Aufgabe zur freien Übernahme öffnen. Jede
+Aufgabenvorlage und jede Schnellaufgabe kann die globalen Regeln überschreiben.
+
+## Vorschau und Tests
+
+Administratoren können Konfigurationen prüfen, bevor sie produktiv wirken:
+
+- Aufgabenregeln zeigen die nächste berechnete Fälligkeit, passende
+  Kalendertermine oder aktuelle Zustände der Auslöser.
+- Kalenderregeln führen in drei Schritten durch Kalender, Suchmuster und
+  zeitlichen Versatz.
+- Ressourcenregeln vergleichen den aktuellen Sensorwert mit dem Grenzwert,
+  ohne eine Aufgabe zu erzeugen.
+- Personen zeigen den aktuellen Anwesenheitszustand und können eine ausdrücklich
+  ausgelöste Testbenachrichtigung erhalten.
+- NFC-Zuordnungen zeigen, ob der Tag in Home Assistant registriert ist und wann
+  er zuletzt gescannt wurde.
+
+Diese Vorschauen verändern weder To-dos noch Verlauf oder Punktestand. Nur die
+Testbenachrichtigung sendet bewusst eine Nachricht.
 
 ## Punktestand
 
@@ -272,25 +288,10 @@ bewusst keine Störung.
 ## Ressourcen und Verbrauch
 
 Unter **Einstellungen > Ressourcen und Verbrauch** lassen sich generische
-Sensorregeln als JSON konfigurieren. Jede Regel besitzt mindestens
-`entity_id`, `condition`, `threshold`, `task_name` und `assignee`.
-
-```json
-{
-  "softener_salt": {
-    "enabled": true,
-    "entity_id": "sensor.softener_salt_percent",
-    "condition": "below",
-    "threshold": 20,
-    "task_name": "Salz der Enthärtungsanlage auffüllen",
-    "description": "Aktueller Füllstand: {state} {unit}",
-    "assignee": "person_a",
-    "due_after": "24:00:00",
-    "cooldown": "168:00:00",
-    "auto_resolve": true
-  }
-}
-```
+Sensorregeln über einen visuellen Editor konfigurieren. Sensor, Vergleich,
+Grenzwert, Aufgabe, Zuständigkeit, Fälligkeit, Cooldown und automatische
+Erholung sind eigene, erklärte Felder. Der Button **Aktuellen Wert prüfen**
+zeigt sofort, ob die Regel mit dem aktuellen Sensorzustand auslösen würde.
 
 Unterstützte Bedingungen sind `below`, `at_most`, `above`, `at_least`,
 `equals` und `not_equals`. `{state}` und `{unit}` können in Name und

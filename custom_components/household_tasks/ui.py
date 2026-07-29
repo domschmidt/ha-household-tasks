@@ -141,6 +141,42 @@ async def websocket_save_monitors(
 @websocket_api.async_response
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): f"{DOMAIN}/preview_task",
+        vol.Required("task"): dict,
+    }
+)
+async def websocket_preview_task(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Preview a task rule without persisting it."""
+    result = await _engine(hass).async_preview_task(msg["task"])
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/test_notification",
+        vol.Required("person_id"): SLUG,
+    }
+)
+async def websocket_test_notification(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Send an explicit test notification to a configured person."""
+    await _engine(hass).async_test_notification(msg["person_id"])
+    connection.send_result(msg["id"], {"sent": True})
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): f"{DOMAIN}/set_handover",
         vol.Required("from_person"): SLUG,
         vol.Required("to_person"): SLUG,
@@ -344,6 +380,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
         websocket_save_person,
         websocket_save_defaults,
         websocket_save_monitors,
+        websocket_preview_task,
+        websocket_test_notification,
         websocket_set_handover,
         websocket_clear_handover,
         websocket_delete_person,

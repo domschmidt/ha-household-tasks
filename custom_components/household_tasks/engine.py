@@ -94,6 +94,18 @@ def get_loaded_engine(hass: HomeAssistant) -> HouseholdTaskEngine | None:
     return None
 
 
+def _frontend_version() -> str:
+    """Return a deterministic cache key for the shipped frontend assets."""
+    frontend = Path(__file__).parent / "frontend"
+    digest = hashlib.sha256()
+    for filename in (
+        "household-tasks-panel.js",
+        "household-tasks-translations.js",
+    ):
+        digest.update((frontend / filename).read_bytes())
+    return f"{INTEGRATION_VERSION}-{digest.hexdigest()[:12]}"
+
+
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up the integration package."""
     from .ui import async_register_websocket_commands
@@ -104,7 +116,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             StaticPathConfig(
                 FRONTEND_PATH,
                 str(Path(__file__).parent / "frontend"),
-                True,
+                cache_headers=False,
             )
         ]
     )
@@ -213,6 +225,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await engine.async_setup()
     entry.runtime_data = engine
     if "haushaltsaufgaben" not in hass.data.get("frontend_panels", {}):
+        frontend_version = await hass.async_add_executor_job(_frontend_version)
         async_register_built_in_panel(
             hass,
             component_name="custom",
@@ -225,8 +238,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "embed_iframe": False,
                     "trust_external": False,
                     "module_url": (
-                        f"{FRONTEND_PATH}/household-tasks-panel.js"
-                        f"?v={INTEGRATION_VERSION}"
+                        f"{FRONTEND_PATH}/household-tasks-panel.js?v={frontend_version}"
                     ),
                 }
             },
@@ -967,6 +979,122 @@ class HouseholdTaskEngine:
                 now=dt_util.now(),
             ),
         }
+
+    async def async_preview_task(self, task: dict[str, Any]) -> dict[str, Any]:
+        """Preview a task without creating an occurrence or changing state."""
+        schedule = task.get("schedule", {})
+        schedule_type = schedule.get("type", "manual")
+        now = dt_util.now().replace(microsecond=0)
+        result: dict[str, Any] = {
+            "schedule_type": schedule_type,
+            "next_due": None,
+            "calendar_events": [],
+            "state_triggers": [],
+        }
+
+        if schedule_type in {
+            "weekly",
+            "monthly",
+            "yearly",
+            "interval_months",
+        }:
+            end = now + timedelta(days=400)
+            result["next_due"] = next(
+                (
+                    due.isoformat()
+                    for due in self._scheduled_times(
+                        schedule, now - timedelta(microseconds=1), end
+                    )
+                ),
+                None,
+            )
+        elif schedule_type == "after_completion":
+            start = dt_util.parse_datetime(str(schedule.get("start", "")))
+            if start is not None and start.tzinfo is None:
+                start = start.replace(tzinfo=ZoneInfo(self.hass.config.time_zone))
+            if start is not None and start > now:
+                result["next_due"] = start.isoformat()
+        elif schedule_type == "calendar":
+            result["calendar_events"] = await self._preview_calendar_events(
+                schedule, now
+            )
+            if result["calendar_events"]:
+                result["next_due"] = result["calendar_events"][0]["due"]
+
+        if schedule_type in {"state_trigger", "daily_after_state"}:
+            for trigger in schedule.get("triggers", []):
+                entity_id = str(trigger.get("entity_id", ""))
+                state = self.hass.states.get(entity_id)
+                current = state.state if state is not None else None
+                wanted = str(trigger.get("to", ""))
+                result["state_triggers"].append(
+                    {
+                        "entity_id": entity_id,
+                        "current": current,
+                        "wanted": wanted,
+                        "matches": current == wanted,
+                        "available": state is not None
+                        and current not in {"unknown", "unavailable"},
+                    }
+                )
+        return result
+
+    async def _preview_calendar_events(
+        self, schedule: dict[str, Any], now: datetime
+    ) -> list[dict[str, str]]:
+        """Return matching calendar events for the preview window."""
+        offset = self._parse_duration(schedule.get("offset", "00:00:00"))
+        query_end = now + timedelta(days=90) - offset
+        entity_id = str(schedule.get("entity_id", ""))
+        response = await self.hass.services.async_call(
+            "calendar",
+            "get_events",
+            {
+                "entity_id": entity_id,
+                "start_date_time": (now - offset).isoformat(),
+                "end_date_time": query_end.isoformat(),
+            },
+            blocking=True,
+            return_response=True,
+        )
+        pattern = schedule.get("match")
+        matches: list[dict[str, str]] = []
+        for calendar_event in (response or {}).get(entity_id, {}).get("events", []):
+            summary = str(calendar_event.get("summary", ""))
+            if pattern and re.search(str(pattern), summary, re.IGNORECASE) is None:
+                continue
+            event_start = self._parse_calendar_datetime(calendar_event.get("start"))
+            if event_start is None:
+                continue
+            due = event_start + offset
+            if due < now:
+                continue
+            matches.append(
+                {
+                    "summary": summary,
+                    "start": event_start.isoformat(),
+                    "due": due.isoformat(),
+                }
+            )
+        matches.sort(key=lambda item: item["due"])
+        return matches[:10]
+
+    async def async_test_notification(self, person_id: str) -> None:
+        """Send an explicit, harmless test notification to one person."""
+        person = self.people.get(person_id)
+        if person is None:
+            raise vol.Invalid(f"Unknown person_id: {person_id}")
+        service = str(person["notify"]).removeprefix("notify.")
+        await self.hass.services.async_call(
+            "notify",
+            service,
+            {
+                "title": "Household Tasks",
+                "message": "Testbenachrichtigung erfolgreich zugestellt.",
+                "data": {"tag": "household_tasks_test", "url": "/haushaltsaufgaben"},
+            },
+            blocking=True,
+        )
 
     async def async_create_manual(
         self, task_id: str, context: Context | None = None
@@ -1818,6 +1946,8 @@ class HouseholdTaskEngine:
         await self.hass.services.async_call("todo", "update_item", data, blocking=True)
 
     async def _handle_stop(self, event: Event) -> None:
+        # A one-shot listener removes itself before invoking the callback.
+        self.remove_stop_listener = None
         await self.async_shutdown()
 
     async def async_shutdown(self) -> None:

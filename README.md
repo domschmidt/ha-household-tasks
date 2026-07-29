@@ -27,6 +27,8 @@ push escalation, and a multilingual management panel.
 - Dependent follow-up tasks, including delayed chains.
 - NFC create/complete flows with visible, configurable scan feedback.
 - Escalations, snoozing, help requests, takeover, and actionable notifications.
+- Visual resource rules and unlimited, structured escalation stages.
+- Guided entity selection, inline creation, and side-effect-free rule previews.
 - Weekly household review and 90-day analytics.
 - Import/export with schema validation and an explicit replace workflow.
 - German and English panel localization.
