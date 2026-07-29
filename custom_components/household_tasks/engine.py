@@ -72,6 +72,7 @@ from .workflows import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_PANEL_PATH = f"/{PANEL_URL}"
 
 WEEKDAYS = {
     "mon": 0,
@@ -998,22 +999,9 @@ class HouseholdTaskEngine:
             "yearly",
             "interval_months",
         }:
-            end = now + timedelta(days=400)
-            result["next_due"] = next(
-                (
-                    due.isoformat()
-                    for due in self._scheduled_times(
-                        schedule, now - timedelta(microseconds=1), end
-                    )
-                ),
-                None,
-            )
+            result["next_due"] = self._preview_scheduled_due(schedule, now)
         elif schedule_type == "after_completion":
-            start = dt_util.parse_datetime(str(schedule.get("start", "")))
-            if start is not None and start.tzinfo is None:
-                start = start.replace(tzinfo=ZoneInfo(self.hass.config.time_zone))
-            if start is not None and start > now:
-                result["next_due"] = start.isoformat()
+            result["next_due"] = self._preview_after_completion_due(schedule, now)
         elif schedule_type == "calendar":
             result["calendar_events"] = await self._preview_calendar_events(
                 schedule, now
@@ -1022,21 +1010,51 @@ class HouseholdTaskEngine:
                 result["next_due"] = result["calendar_events"][0]["due"]
 
         if schedule_type in {"state_trigger", "daily_after_state"}:
-            for trigger in schedule.get("triggers", []):
-                entity_id = str(trigger.get("entity_id", ""))
-                state = self.hass.states.get(entity_id)
-                current = state.state if state is not None else None
-                wanted = str(trigger.get("to", ""))
-                result["state_triggers"].append(
-                    {
-                        "entity_id": entity_id,
-                        "current": current,
-                        "wanted": wanted,
-                        "matches": current == wanted,
-                        "available": state is not None
-                        and current not in {"unknown", "unavailable"},
-                    }
+            result["state_triggers"] = self._preview_state_triggers(schedule)
+        return result
+
+    def _preview_scheduled_due(
+        self, schedule: dict[str, Any], now: datetime
+    ) -> str | None:
+        """Return the next generated due time for a calendar-independent schedule."""
+        end = now + timedelta(days=400)
+        return next(
+            (
+                due.isoformat()
+                for due in self._scheduled_times(
+                    schedule, now - timedelta(microseconds=1), end
                 )
+            ),
+            None,
+        )
+
+    def _preview_after_completion_due(
+        self, schedule: dict[str, Any], now: datetime
+    ) -> str | None:
+        """Return the initial due time for an after-completion schedule."""
+        start = dt_util.parse_datetime(str(schedule.get("start", "")))
+        if start is not None and start.tzinfo is None:
+            start = start.replace(tzinfo=ZoneInfo(self.hass.config.time_zone))
+        return start.isoformat() if start is not None and start > now else None
+
+    def _preview_state_triggers(self, schedule: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return current match information for each configured state trigger."""
+        result = []
+        for trigger in schedule.get("triggers", []):
+            entity_id = str(trigger.get("entity_id", ""))
+            state = self.hass.states.get(entity_id)
+            current = state.state if state is not None else None
+            wanted = str(trigger.get("to", ""))
+            result.append(
+                {
+                    "entity_id": entity_id,
+                    "current": current,
+                    "wanted": wanted,
+                    "matches": current == wanted,
+                    "available": state is not None
+                    and current not in {"unknown", "unavailable"},
+                }
+            )
         return result
 
     async def _preview_calendar_events(
@@ -1091,7 +1109,7 @@ class HouseholdTaskEngine:
             {
                 "title": "Household Tasks",
                 "message": "Testbenachrichtigung erfolgreich zugestellt.",
-                "data": {"tag": "household_tasks_test", "url": "/haushaltsaufgaben"},
+                "data": {"tag": "household_tasks_test", "url": _PANEL_PATH},
             },
             blocking=True,
         )
@@ -1386,7 +1404,7 @@ class HouseholdTaskEngine:
                         "message": messages[result],
                         "data": {
                             "tag": f"household_tasks_nfc_{tag_id}",
-                            "url": "/haushaltsaufgaben",
+                            "url": _PANEL_PATH,
                         },
                     },
                     blocking=True,
@@ -2322,7 +2340,7 @@ class HouseholdTaskEngine:
                         "message": message,
                         "data": {
                             "tag": f"household_tasks_weekly_{summary_id}",
-                            "url": "/haushaltsaufgaben",
+                            "url": _PANEL_PATH,
                         },
                     },
                     blocking=True,
