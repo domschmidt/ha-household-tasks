@@ -61,7 +61,9 @@ class HouseholdTasksPanel extends HTMLElement {
     try {
       await this._call("get");
       await this._loadReferences();
-    } catch (_) { /* message is already visible */ }
+    } catch (error) {
+      console.debug("Household Tasks could not refresh its panel data.", error);
+    }
   }
 
   async _loadReferences() {
@@ -139,14 +141,18 @@ class HouseholdTasksPanel extends HTMLElement {
     pattern = "",
   } = {}) {
     const listId = `ht-${name}-suggestions`;
-    const options = suggestions.map((item) =>
-      `<option value="${this._e(item.value)}">${this._e(item.label)}${item.detail ? ` · ${this._e(item.detail)}` : ""}</option>`
-    ).join("");
+    const options = suggestions.map((item) => {
+      const detail = item.detail ? ` · ${this._e(item.detail)}` : "";
+      return `<option value="${this._e(item.value)}">${this._e(item.label)}${detail}</option>`;
+    }).join("");
+    const requiredAttribute = required ? "required" : "";
+    const patternAttribute = pattern ? `pattern="${this._e(pattern)}"` : "";
+    const hintMarkup = hint ? `<span class="hint">${this._e(hint)}</span>` : "";
     return `<input name="${this._e(name)}" list="${listId}" value="${this._e(value || "")}"
-      ${required ? "required" : ""} ${pattern ? `pattern="${this._e(pattern)}"` : ""}
+      ${requiredAttribute} ${patternAttribute}
       placeholder="${this._e(placeholder)}" autocomplete="off">
       <datalist id="${listId}">${options}</datalist>
-      ${hint ? `<span class="hint">${this._e(hint)}</span>` : ""}`;
+      ${hintMarkup}`;
   }
 
   _entityInput(name, value, domains, options = {}) {
@@ -167,7 +173,7 @@ class HouseholdTasksPanel extends HTMLElement {
       .sort((a, b) => a.label.localeCompare(b.label, this._locale()));
     return this._suggestionInput("notify", value, suggestions, {
       required: true,
-      pattern: "notify\\..+",
+      pattern: String.raw`notify\..+`,
       placeholder: "notify.mobile_app_iphone",
       hint: "Wähle eine vorhandene notify-Aktion. Mobile-App-Ziele erscheinen nach der Anmeldung des Geräts.",
     });
@@ -310,7 +316,12 @@ class HouseholdTasksPanel extends HTMLElement {
       const tag = this._references.tags.find((item) => (item.tag_id || item.id) === tagId);
       if (!tagId) output.textContent = "Noch kein Tag ausgewählt.";
       else if (!tag) output.textContent = "Tag-ID ist eingetragen, aber nicht in Home Assistant registriert.";
-      else output.textContent = `Registriert als „${tag.name || tagId}“${tag.last_scanned ? ` · zuletzt ${new Date(tag.last_scanned).toLocaleString(this._locale())}` : ""}.`;
+      else {
+        const lastScanned = tag.last_scanned
+          ? ` · zuletzt ${new Date(tag.last_scanned).toLocaleString(this._locale())}`
+          : "";
+        output.textContent = `Registriert als „${tag.name || tagId}“${lastScanned}.`;
+      }
     });
   }
 
@@ -624,7 +635,7 @@ class HouseholdTasksPanel extends HTMLElement {
           helper.className = `hint field-help${group ? " group-help" : ""}`;
           if (group) helper.dataset.helpFor = fieldName;
           helper.textContent = this._t(this._fieldHelp(formId, fieldName));
-          if (group) group.insertAdjacentElement("afterend", helper);
+          if (group) group.after(helper);
           else label.append(helper);
         }
         if (!helper.id) helper.id = `${control.id}-help`;
@@ -1330,7 +1341,11 @@ class HouseholdTasksPanel extends HTMLElement {
             at_least: left >= right, equals: left === right, not_equals: left !== right,
           }[condition] === true;
           const unit = state.attributes?.unit_of_measurement || "";
-          output.textContent = `${state.state}${unit ? ` ${unit}` : ""} – Regel ${matches ? "trifft zu; Aufgabe würde erzeugt" : "trifft nicht zu"}.`;
+          const formattedUnit = unit ? ` ${unit}` : "";
+          const resultText = matches
+            ? "trifft zu; Aufgabe würde erzeugt"
+            : "trifft nicht zu";
+          output.textContent = `${state.state}${formattedUnit} – Regel ${resultText}.`;
           output.className = `preview-result ${matches ? "match" : ""}`;
         };
       });
@@ -1624,14 +1639,19 @@ class HouseholdTasksPanel extends HTMLElement {
     const options = entities.map((item) =>
       `<option value="${this._e(item.value)}">${this._e(item.label)} · ${this._e(item.detail)}</option>`
     ).join("");
-    return `${triggers.map((trigger, index) => `<div class="repeatable-row trigger-row">
-      <label>Entität<input name="trigger_entity_id" list="ht-trigger-entities" required value="${this._e(trigger.entity_id || "")}" placeholder="Entität suchen"></label>
-      <label>Von<input name="trigger_from" value="${this._e(trigger.from || "")}" placeholder="optional"></label>
-      <label>Nach<input name="trigger_to" required value="${this._e(trigger.to || "")}" placeholder="z. B. on"></label>
-      <label>Für (HH:MM:SS)<input name="trigger_for" value="${this._e(trigger.for || "")}" pattern="[0-9]+:[0-5][0-9]:[0-5][0-9]" placeholder="optional"></label>
-      <button type="button" class="remove-row" title="Auslöser entfernen" aria-label="Auslöser entfernen">×</button>
-      ${index === 0 ? `<datalist id="ht-trigger-entities">${options}</datalist>` : ""}
-    </div>`).join("")}`;
+    return triggers.map((trigger, index) => {
+      const datalist = index === 0
+        ? `<datalist id="ht-trigger-entities">${options}</datalist>`
+        : "";
+      return `<div class="repeatable-row trigger-row">
+        <label>Entität<input name="trigger_entity_id" list="ht-trigger-entities" required value="${this._e(trigger.entity_id || "")}" placeholder="Entität suchen"></label>
+        <label>Von<input name="trigger_from" value="${this._e(trigger.from || "")}" placeholder="optional"></label>
+        <label>Nach<input name="trigger_to" required value="${this._e(trigger.to || "")}" placeholder="z. B. on"></label>
+        <label>Für (HH:MM:SS)<input name="trigger_for" value="${this._e(trigger.for || "")}" pattern="[0-9]+:[0-5][0-9]:[0-5][0-9]" placeholder="optional"></label>
+        <button type="button" class="remove-row" title="Auslöser entfernen" aria-label="Auslöser entfernen">×</button>
+        ${datalist}
+      </div>`;
+    }).join("");
   }
 
   _createFollowUpRow(followUp = {}, currentTaskId = null) {
@@ -1962,7 +1982,8 @@ class HouseholdTasksPanel extends HTMLElement {
     const followUpIds = f.getAll("follow_up_task_id");
     const followUpDelays = f.getAll("follow_up_delay");
     if (followUpIds.length) {
-      value.follow_ups = followUpIds.map((taskId, index) => {
+      value.follow_ups = followUpIds.map((taskIdValue, index) => {
+        const taskId = String(taskIdValue);
         if (!this._data.tasks[taskId]) throw new Error(`Die Folgeaufgabe „${taskId}“ existiert nicht.`);
         return { task_id: taskId, delay: followUpDelays[index] || "00:00:00" };
       });
@@ -2049,9 +2070,14 @@ class HouseholdTasksPanel extends HTMLElement {
       const entityId = modal.querySelector("[name=presence]").value.trim();
       const output = modal.querySelector(".test-actions output");
       const state = this._hass.states[entityId];
-      output.textContent = !entityId ? "Keine Anwesenheits-Entität ausgewählt."
-        : state ? `Aktueller Zustand: „${state.state}“${state.state === "home" ? " – anwesend" : ""}.`
-        : "Entität wurde nicht gefunden.";
+      if (!entityId) {
+        output.textContent = "Keine Anwesenheits-Entität ausgewählt.";
+      } else if (state) {
+        const presence = state.state === "home" ? " – anwesend" : "";
+        output.textContent = `Aktueller Zustand: „${state.state}“${presence}.`;
+      } else {
+        output.textContent = "Entität wurde nicht gefunden.";
+      }
     };
     modal.querySelector("[data-test-notification]").onclick = async () => {
       const output = modal.querySelector(".test-actions output");
