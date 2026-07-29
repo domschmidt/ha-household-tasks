@@ -287,9 +287,12 @@ class HouseholdTasksPanel extends HTMLElement {
         const tagInput = modal.querySelector("[name=nfc_tag_id]");
         tagInput.value = tagId;
         const list = modal.querySelector(`#${tagInput.getAttribute("list")}`);
-        if (list) list.innerHTML = this._references.tags.map((tag) =>
-          `<option value="${this._e(tag.tag_id || tag.id)}">${this._e(tag.name || tag.tag_id || tag.id)}</option>`
-        ).join("");
+        if (list) {
+          list.replaceChildren(...this._references.tags.map((tag) => {
+            const id = tag.tag_id || tag.id;
+            return new Option(tag.name || id, id);
+          }));
+        }
         setOpen(false);
         const writing = this._writeTagWithCompanion(tagId, name);
         this._toast(writing
@@ -348,26 +351,111 @@ class HouseholdTasksPanel extends HTMLElement {
     });
   }
 
+  _emptyRepeatableRow(message) {
+    const empty = document.createElement("p");
+    empty.className = "empty-row";
+    empty.textContent = this._t(message);
+    return empty;
+  }
+
+  _removeRepeatableEmptyState(list) {
+    list.querySelectorAll(".empty-row").forEach((empty) => empty.remove());
+  }
+
+  _labeledControl(text, control) {
+    const label = document.createElement("label");
+    label.append(document.createTextNode(text), control);
+    return label;
+  }
+
+  _selectControl(name, options, selectedValue) {
+    const select = document.createElement("select");
+    select.name = name;
+    for (const [value, text] of options) {
+      const option = new Option(text, value);
+      option.selected = value === selectedValue;
+      select.add(option);
+    }
+    return select;
+  }
+
+  _removeRowButton(label) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "remove-row";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.textContent = "×";
+    return button;
+  }
+
+  _createEscalationRow(stage = {}) {
+    const row = document.createElement("div");
+    row.className = "repeatable-row escalation-row";
+
+    const after = document.createElement("input");
+    after.name = "escalation_after";
+    after.required = true;
+    after.value = stage.after || "00:00:00";
+    after.pattern = "[0-9]+:[0-5][0-9]:[0-5][0-9]";
+
+    const relativeTo = this._selectControl("escalation_relative_to", [
+      ["due", "Fälligkeit"],
+      ["first_notification", "Erste Benachrichtigung"],
+    ], stage.relative_to === "first_notification" ? "first_notification" : "due");
+    const recipients = this._selectControl("escalation_recipients", [
+      ["assignee", "Zuständige Person"],
+      ["all", "Alle Personen"],
+    ], stage.recipients === "all" ? "all" : "assignee");
+    const action = this._selectControl("escalation_action", [
+      ["notify", "Benachrichtigen"],
+      ["delegate", "Weitergeben"],
+      ["open", "Zur Übernahme öffnen"],
+    ], stage.action || "notify");
+
+    const presenceLabel = document.createElement("label");
+    presenceLabel.className = "checkbox";
+    const presence = document.createElement("input");
+    presence.name = "escalation_presence";
+    presence.type = "checkbox";
+    presence.checked = Boolean(stage.presence_required);
+    presenceLabel.append(presence, document.createTextNode(" Nur bei Anwesenheit"));
+
+    row.append(
+      this._labeledControl("Nach (HH:MM:SS)", after),
+      this._labeledControl("Bezug", relativeTo),
+      this._labeledControl("Empfänger", recipients),
+      this._labeledControl("Aktion", action),
+      presenceLabel,
+      this._removeRowButton("Eskalationsstufe entfernen"),
+    );
+    return row;
+  }
+
   _bindEscalationEditor(root) {
     root.querySelectorAll(".escalation-editor").forEach((editor) => {
       const list = editor.querySelector(".repeatable-list");
       const bindRemovers = () => editor.querySelectorAll(".remove-row").forEach((button) => {
         button.onclick = () => {
           button.closest(".escalation-row").remove();
-          if (!editor.querySelector(".escalation-row")) list.innerHTML = this._escalationRows([]);
+          if (!editor.querySelector(".escalation-row")) {
+            list.replaceChildren(this._emptyRepeatableRow("Noch keine Eskalationsstufe angelegt."));
+          }
         };
       });
       editor.querySelector("[data-add-escalation]").onclick = () => {
-        const stages = this._readEscalation(editor);
-        list.innerHTML = this._escalationRows([...stages, {
-          after: stages.length ? "02:00:00" : "00:00:00",
+        const hasStages = Boolean(editor.querySelector(".escalation-row"));
+        this._removeRepeatableEmptyState(list);
+        const row = this._createEscalationRow({
+          after: hasStages ? "02:00:00" : "00:00:00",
           recipients: "assignee",
-          relative_to: stages.length ? "first_notification" : "due",
-        }]);
-        this._localize(list);
+          relative_to: hasStages ? "first_notification" : "due",
+        });
+        list.append(row);
+        this._localize(row);
         this._enhanceAccessibility(editor);
         bindRemovers();
-        list.querySelector(".escalation-row:last-of-type input")?.focus();
+        row.querySelector("input")?.focus();
       };
       bindRemovers();
     });
@@ -1546,6 +1634,83 @@ class HouseholdTasksPanel extends HTMLElement {
     </div>`).join("")}`;
   }
 
+  _createFollowUpRow(followUp = {}, currentTaskId = null) {
+    const row = document.createElement("div");
+    row.className = "repeatable-row follow-up-row";
+
+    const taskSelect = document.createElement("select");
+    taskSelect.name = "follow_up_task_id";
+    taskSelect.required = true;
+    taskSelect.add(new Option("Bitte auswählen", ""));
+    for (const [taskId, task] of Object.entries(this._data?.tasks || {})) {
+      if (taskId === currentTaskId) continue;
+      const option = new Option(`${task.name} · ${taskId}`, taskId);
+      option.selected = taskId === followUp.task_id;
+      taskSelect.add(option);
+    }
+
+    const delay = document.createElement("input");
+    delay.name = "follow_up_delay";
+    delay.required = true;
+    delay.value = followUp.delay || "00:00:00";
+    delay.pattern = "-?[0-9]+:[0-5][0-9]:[0-5][0-9]";
+
+    row.append(
+      this._labeledControl("Vorlage", taskSelect),
+      this._labeledControl("Verzögerung (HH:MM:SS)", delay),
+      this._removeRowButton("Folgeaufgabe entfernen"),
+    );
+    return row;
+  }
+
+  _createTriggerRow(trigger = {}) {
+    const row = document.createElement("div");
+    row.className = "repeatable-row trigger-row";
+
+    const entity = document.createElement("input");
+    entity.name = "trigger_entity_id";
+    entity.setAttribute("list", "ht-trigger-entities");
+    entity.required = true;
+    entity.value = trigger.entity_id || "";
+    entity.placeholder = "Entität suchen";
+
+    const from = document.createElement("input");
+    from.name = "trigger_from";
+    from.value = trigger.from || "";
+    from.placeholder = "optional";
+
+    const to = document.createElement("input");
+    to.name = "trigger_to";
+    to.required = true;
+    to.value = trigger.to || "";
+    to.placeholder = "z. B. on";
+
+    const duration = document.createElement("input");
+    duration.name = "trigger_for";
+    duration.value = trigger.for || "";
+    duration.pattern = "[0-9]+:[0-5][0-9]:[0-5][0-9]";
+    duration.placeholder = "optional";
+
+    row.append(
+      this._labeledControl("Entität", entity),
+      this._labeledControl("Von", from),
+      this._labeledControl("Nach", to),
+      this._labeledControl("Für (HH:MM:SS)", duration),
+      this._removeRowButton("Auslöser entfernen"),
+    );
+    return row;
+  }
+
+  _ensureTriggerDatalist(list) {
+    if (list.querySelector("#ht-trigger-entities")) return;
+    const datalist = document.createElement("datalist");
+    datalist.id = "ht-trigger-entities";
+    for (const item of this._entitySuggestions()) {
+      datalist.append(new Option(`${item.label} · ${item.detail}`, item.value));
+    }
+    list.append(datalist);
+  }
+
   _bindTriggerEditor(modal) {
     const editor = modal.querySelector(".trigger-editor");
     if (!editor) return;
@@ -1554,25 +1719,27 @@ class HouseholdTasksPanel extends HTMLElement {
         button.onclick = () => {
           button.closest(".trigger-row").remove();
           if (!editor.querySelector(".trigger-row")) {
-            editor.querySelector(".repeatable-list").innerHTML = `<p class="empty-row">${this._t("Noch kein Auslöser ausgewählt.")}</p>`;
+            editor.querySelector(".repeatable-list").replaceChildren(
+              this._emptyRepeatableRow("Noch kein Auslöser ausgewählt."),
+            );
+          } else {
+            this._ensureTriggerDatalist(editor.querySelector(".repeatable-list"));
           }
         };
       });
     };
     editor.querySelector("[data-add-trigger]").onclick = () => {
       const list = editor.querySelector(".repeatable-list");
-      const existing = [...list.querySelectorAll(".trigger-row")].map((row) => ({
-        entity_id: row.querySelector("[name=trigger_entity_id]").value,
-        from: row.querySelector("[name=trigger_from]").value,
-        to: row.querySelector("[name=trigger_to]").value,
-        for: row.querySelector("[name=trigger_for]").value,
-      }));
-      list.innerHTML = this._triggerRows([...existing, { entity_id: "", from: "", to: "", for: "" }]);
-      this._localize(list);
+      this._removeRepeatableEmptyState(list);
+      const row = this._createTriggerRow();
+      list.append(row);
+      this._ensureTriggerDatalist(list);
+      this._localize(row);
       this._enhanceAccessibility(modal);
       bindRemovers();
-      list.querySelector(".trigger-row:last-of-type [name=trigger_entity_id]")?.focus();
+      row.querySelector("[name=trigger_entity_id]")?.focus();
     };
+    this._ensureTriggerDatalist(editor.querySelector(".repeatable-list"));
     bindRemovers();
   }
 
@@ -1583,22 +1750,22 @@ class HouseholdTasksPanel extends HTMLElement {
         button.onclick = () => {
           button.closest(".follow-up-row").remove();
           if (!editor.querySelector(".follow-up-row")) {
-            editor.querySelector(".repeatable-list").innerHTML = `<p class="empty-row">${this._t("Noch keine Folgeaufgabe ausgewählt.")}</p>`;
+            editor.querySelector(".repeatable-list").replaceChildren(
+              this._emptyRepeatableRow("Noch keine Folgeaufgabe ausgewählt."),
+            );
           }
         };
       });
     };
     editor.querySelector("[data-add-follow-up]").onclick = () => {
       const list = editor.querySelector(".repeatable-list");
-      const existing = [...list.querySelectorAll(".follow-up-row")].map((row) => ({
-        task_id: row.querySelector("[name=follow_up_task_id]").value,
-        delay: row.querySelector("[name=follow_up_delay]").value,
-      }));
-      list.innerHTML = this._followUpRows([...existing, { task_id: "", delay: "00:00:00" }], currentTaskId);
-      this._localize(list);
+      this._removeRepeatableEmptyState(list);
+      const row = this._createFollowUpRow({}, currentTaskId);
+      list.append(row);
+      this._localize(row);
       this._enhanceAccessibility(modal);
       bindRemovers();
-      list.querySelector(".follow-up-row:last-of-type select")?.focus();
+      row.querySelector("select")?.focus();
     };
     bindRemovers();
     this._bindTriggerEditor(modal);
@@ -1638,11 +1805,20 @@ class HouseholdTasksPanel extends HTMLElement {
         const result = await this._hass.callWS({ type: "household_tasks/save_person", person_id: personId, person });
         this._data = result;
         const fixed = modal.querySelector("[name=assignee]");
-        fixed.insertAdjacentHTML("beforeend", `<option value="${this._e(personId)}" selected>${this._e(name)}</option>`);
-        modal.querySelector(".candidate-grid").insertAdjacentHTML("beforeend",
-          `<label class="checkbox"><input type="checkbox" name="assignment_person" value="${this._e(personId)}" checked> ${this._e(name)}</label>`);
-        modal.querySelector("[name=inline_follow_up_assignee]")?.insertAdjacentHTML("beforeend",
-          `<option value="${this._e(personId)}">${this._e(name)}</option>`);
+        fixed.add(new Option(name, personId, true, true));
+
+        const candidate = document.createElement("label");
+        candidate.className = "checkbox";
+        const candidateInput = document.createElement("input");
+        candidateInput.type = "checkbox";
+        candidateInput.name = "assignment_person";
+        candidateInput.value = personId;
+        candidateInput.checked = true;
+        candidate.append(candidateInput, document.createTextNode(` ${name}`));
+        modal.querySelector(".candidate-grid").append(candidate);
+
+        const followUpAssignee = modal.querySelector("[name=inline_follow_up_assignee]");
+        followUpAssignee?.add(new Option(name, personId));
         personPanel.classList.add("hidden");
         this._toast("Person angelegt und ausgewählt.");
       } catch (error) {
@@ -1675,13 +1851,16 @@ class HouseholdTasksPanel extends HTMLElement {
         });
         this._data = result;
         const editor = modal.querySelector(".follow-up-editor");
-        const existing = [...editor.querySelectorAll(".follow-up-row")].map((row) => ({
-          task_id: row.querySelector("[name=follow_up_task_id]").value,
-          delay: row.querySelector("[name=follow_up_delay]").value,
-        }));
-        editor.querySelector(".repeatable-list").innerHTML = this._followUpRows(
-          [...existing, { task_id: taskId, delay: "00:00:00" }], currentTaskId
-        );
+        for (const select of editor.querySelectorAll("[name=follow_up_task_id]")) {
+          if (![...select.options].some((option) => option.value === taskId)) {
+            select.add(new Option(`${name} · ${taskId}`, taskId));
+          }
+        }
+        const list = editor.querySelector(".repeatable-list");
+        this._removeRepeatableEmptyState(list);
+        const row = this._createFollowUpRow({ task_id: taskId, delay: "00:00:00" }, currentTaskId);
+        list.append(row);
+        this._localize(row);
         this._bindRepeatableEditors(modal, currentTaskId);
         followUpPanel.classList.add("hidden");
         this._toast("Vorlage angelegt und als Folgeaufgabe ausgewählt.");
