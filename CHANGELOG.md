@@ -3,6 +3,48 @@
 All notable changes are documented here. The project follows Semantic
 Versioning.
 
+## 3.2.1 - 2026-07-30
+
+### Fixed
+
+- fix(ui): ignore hidden inline form controls ([#13](https://github.com/domschmidt/ha-household-tasks/pull/13))
+
+## 3.2.0 - 2026-07-30
+
+### Added
+
+- feat: add advanced household automation and forecast planning ([#12](https://github.com/domschmidt/ha-household-tasks/pull/12))
+
+## 3.1.1 - 2026-07-30
+
+### Changed
+
+- perf(dev): parallelize local quality checks ([#11](https://github.com/domschmidt/ha-household-tasks/pull/11))
+
+## 3.1.0 - 2026-07-30
+
+### Added
+
+- feat(panel): add guided resource setup ([#10](https://github.com/domschmidt/ha-household-tasks/pull/10))
+
+## 3.0.3 - 2026-07-29
+
+### Fixed
+
+- fix(ci): use valid CodeQL action commit ([#9](https://github.com/domschmidt/ha-household-tasks/pull/9))
+
+## 3.0.2 - 2026-07-28
+
+### Fixed
+
+- fix(ci): repair Scorecard and SonarCloud scans ([#8](https://github.com/domschmidt/ha-household-tasks/pull/8))
+
+## 3.0.1 - 2026-07-28
+
+### Fixed
+
+- fix(ci): make pytest imports and HA lifecycle deterministic ([#6](https://github.com/domschmidt/ha-household-tasks/pull/6))
+
 ## 3.0.0 - 2026-07-27
 
 ### Added
