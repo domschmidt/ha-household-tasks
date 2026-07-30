@@ -17,6 +17,61 @@ WEATHER_OPERATORS = {
 WEATHER_LOGIC = {"all", "any"}
 
 
+def _state_value(
+    state: dict[str, Any] | None,
+    attribute: str,
+) -> Any:
+    """Read either one state attribute or the native state value."""
+    if state is None:
+        return None
+    if attribute:
+        return state.get("attributes", {}).get(attribute)
+    return state.get("state")
+
+
+def _condition_result(
+    condition: dict[str, Any],
+    states: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Evaluate one condition without coupling it to aggregation logic."""
+    entity_id = str(condition.get("entity_id", ""))
+    attribute = str(condition.get("attribute", "")).strip()
+    raw_value = _state_value(states.get(entity_id), attribute)
+    available = raw_value is not None and str(raw_value) not in {
+        "unknown",
+        "unavailable",
+    }
+    matches = available and resource_condition_matches(
+        raw_value,
+        condition.get("condition", "below"),
+        condition.get("threshold"),
+    )
+    return {
+        "entity_id": entity_id,
+        "attribute": attribute or None,
+        "current": raw_value,
+        "threshold": condition.get("threshold"),
+        "condition": condition.get("condition", "below"),
+        "available": available,
+        "matches": bool(matches),
+    }
+
+
+def _decision_text(allowed: bool, unavailable: bool) -> tuple[str, str]:
+    """Return the stable status code and localized explanation."""
+    if allowed:
+        return "weather_condition_met", "Die kombinierte Wetterbedingung ist erfüllt."
+    if unavailable:
+        return (
+            "weather_entity_unavailable",
+            "Mindestens eine Wetterentität ist nicht verfügbar.",
+        )
+    return (
+        "weather_condition_not_met",
+        "Die kombinierte Wetterbedingung ist derzeit nicht erfüllt.",
+    )
+
+
 def weather_decision(
     weather: dict[str, Any] | None,
     states: dict[str, dict[str, Any]],
@@ -30,60 +85,18 @@ def weather_decision(
             "conditions": [],
         }
     logic = weather.get("logic", "all")
-    results = []
-    for condition in weather.get("conditions", []):
-        entity_id = str(condition.get("entity_id", ""))
-        state = states.get(entity_id)
-        attribute = str(condition.get("attribute", "")).strip()
-        raw_value = (
-            state.get("attributes", {}).get(attribute)
-            if state is not None and attribute
-            else state.get("state")
-            if state is not None
-            else None
-        )
-        available = raw_value is not None and str(raw_value) not in {
-            "unknown",
-            "unavailable",
-        }
-        matches = available and resource_condition_matches(
-            raw_value,
-            condition.get("condition", "below"),
-            condition.get("threshold"),
-        )
-        results.append(
-            {
-                "entity_id": entity_id,
-                "attribute": attribute or None,
-                "current": raw_value,
-                "threshold": condition.get("threshold"),
-                "condition": condition.get("condition", "below"),
-                "available": available,
-                "matches": bool(matches),
-            }
-        )
-    allowed = bool(results) and (
-        all(item["matches"] for item in results)
-        if logic == "all"
-        else any(item["matches"] for item in results)
-    )
+    results = [
+        _condition_result(condition, states)
+        for condition in weather.get("conditions", [])
+    ]
+    matcher = all if logic == "all" else any
+    allowed = bool(results) and matcher(item["matches"] for item in results)
     unavailable = [item for item in results if not item["available"]]
+    code, message = _decision_text(allowed, bool(unavailable))
     return {
         "allowed": allowed,
-        "code": (
-            "weather_condition_met"
-            if allowed
-            else "weather_entity_unavailable"
-            if unavailable
-            else "weather_condition_not_met"
-        ),
-        "message": (
-            "Die kombinierte Wetterbedingung ist erfüllt."
-            if allowed
-            else "Mindestens eine Wetterentität ist nicht verfügbar."
-            if unavailable
-            else "Die kombinierte Wetterbedingung ist derzeit nicht erfüllt."
-        ),
+        "code": code,
+        "message": message,
         "logic": logic,
         "conditions": results,
     }

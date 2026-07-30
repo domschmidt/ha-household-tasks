@@ -41,7 +41,7 @@ class HouseholdTasksPanel extends HTMLElement {
   connectedCallback() {
     // HA can assign properties before a cache-fresh custom element is upgraded.
     // Re-apply an own property so the prototype setter receives the value.
-    if (!this._hass && Object.prototype.hasOwnProperty.call(this, "hass")) {
+    if (!this._hass && Object.hasOwn(this, "hass")) {
       const value = this.hass;
       delete this.hass;
       this.hass = value;
@@ -861,7 +861,8 @@ class HouseholdTasksPanel extends HTMLElement {
     try {
       await navigator.clipboard.writeText(value);
       this._toast(`„${value}“ kopiert.`);
-    } catch (_) {
+    } catch (error) {
+      console.debug("Household Tasks could not copy a reference.", error);
       this._toast(value);
     }
   }
@@ -919,6 +920,7 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _render() {
     const data = this._data;
+    const modeBadge = this._modeBadge(data);
     this.shadowRoot.innerHTML = `
       <style>${this._styles()}</style>
       <main>
@@ -929,7 +931,7 @@ class HouseholdTasksPanel extends HTMLElement {
           </div>
           <div class="header-actions">
             ${!navigator.onLine ? `<span class="mode-badge">Offline</span>` : ""}
-            ${data?.household_mode?.mode && data.household_mode.mode !== "normal" ? `<span class="mode-badge">${data.household_mode.mode === "vacation" ? "Urlaub" : "Gäste"}</span>` : ""}
+            ${modeBadge}
             ${data?.is_admin && data.undo?.length ? `<button class="undo-button" title="${this._e(data.undo[0].label)}">↶ Rückgängig</button>` : ""}
             <button class="search-button" title="Globale Suche (Strg/⌘ + K)">⌕ Suchen</button>
             <button class="icon-button refresh" title="Aktualisieren" ${this._busy ? "disabled" : ""}>↻</button>
@@ -955,6 +957,13 @@ class HouseholdTasksPanel extends HTMLElement {
     this._bind();
     this._localize();
     this._enhanceAccessibility();
+  }
+
+  _modeBadge(data) {
+    const mode = data?.household_mode?.mode;
+    if (!mode || mode === "normal") return "";
+    const label = mode === "vacation" ? "Urlaub" : "Gäste";
+    return `<span class="mode-badge">${label}</span>`;
   }
 
   _navButton(id, label) {
@@ -999,12 +1008,32 @@ class HouseholdTasksPanel extends HTMLElement {
     );
     const favorites = (this._data.favorites?.[personId] || [])
       .map((id) => [id, this._data.tasks[id]]).filter(([, task]) => task);
+    const favoriteStrip = this._favoriteStrip(favorites);
+    const occurrenceList = this._selectableOccurrenceList(mine);
     return `<div class="toolbar"><div><div class="eyebrow">PERSÖNLICH</div><h2>Meine Aufgaben</h2><p>Zugewiesen, unterstützt oder zur Übernahme verfügbar.</p></div>
       <button class="primary" id="smart-quick-task">+ Smart erfassen</button></div>
-      ${favorites.length ? `<section class="favorite-strip"><strong>Favoriten</strong>${favorites.map(([id, task]) => `<button data-create="${this._e(id)}">+ ${this._e(task.name)}</button>`).join("")}</section>` : ""}
+      ${favoriteStrip}
       ${this._renderBulkToolbar(mine)}
-      ${mine.length ? `<div class="occurrences selectable">${mine.map((item) => `<div class="selectable-task"><input type="checkbox" data-select-occurrence="${this._e(item.id)}" aria-label="${this._e(this._plainTitle(item.title))} auswählen">${this._occurrenceCard(item)}</div>`).join("")}</div>`
-        : `<div class="empty card"><div class="big-icon">✓</div><h2>Nichts offen</h2><p>Für dich ist aktuell keine Aufgabe offen.</p></div>`}`;
+      ${occurrenceList}`;
+  }
+
+  _favoriteStrip(favorites) {
+    if (!favorites.length) return "";
+    const buttons = favorites.map(([id, task]) =>
+      `<button data-create="${this._e(id)}">+ ${this._e(task.name)}</button>`
+    ).join("");
+    return `<section class="favorite-strip"><strong>Favoriten</strong>${buttons}</section>`;
+  }
+
+  _selectableOccurrenceList(items) {
+    if (!items.length) {
+      return `<div class="empty card"><div class="big-icon">✓</div><h2>Nichts offen</h2><p>Für dich ist aktuell keine Aufgabe offen.</p></div>`;
+    }
+    const cards = items.map((item) => {
+      const title = this._e(this._plainTitle(item.title));
+      return `<div class="selectable-task"><input type="checkbox" data-select-occurrence="${this._e(item.id)}" aria-label="${title} auswählen">${this._occurrenceCard(item)}</div>`;
+    }).join("");
+    return `<div class="occurrences selectable">${cards}</div>`;
   }
 
   _renderWeek() {
@@ -1018,12 +1047,27 @@ class HouseholdTasksPanel extends HTMLElement {
       return { date, key, items: open.filter((item) => new Date(item.due).toLocaleDateString("sv-SE") === key) };
     });
     const visible = days.flatMap((day) => day.items);
+    const dayMarkup = days.map((day) => this._weekDayMarkup(day)).join("");
     return `<div class="toolbar"><div><div class="eyebrow">PLANUNG</div><h2>Die nächsten sieben Tage</h2><p>Arbeitslast und Fälligkeiten auf einen Blick.</p></div><button id="smart-quick-task" class="primary">+ Aufgabe</button></div>
       ${this._renderBulkToolbar(visible)}
-      <div class="week-board">${days.map((day) => `<section class="week-day" data-drop-date="${day.key}">
-        <header><strong>${day.date.toLocaleDateString(this._locale(), { weekday: "short" })}</strong><span>${day.date.toLocaleDateString(this._locale(), { day: "2-digit", month: "2-digit" })}</span><b>${day.items.length}</b></header>
-        ${day.items.length ? day.items.map((item) => `<article draggable="true" data-drag-occurrence="${this._e(item.id)}"><input type="checkbox" data-select-occurrence="${this._e(item.id)}"><div><strong>${this._e(this._plainTitle(item.title))}</strong><small>${new Date(item.due).toLocaleTimeString(this._locale(), { hour: "2-digit", minute: "2-digit" })} · ${this._e(this._data.people[item.assignee]?.name || "Offen")}</small></div></article>`).join("") : `<p>Hierher ziehen</p>`}
-      </section>`).join("")}</div>`;
+      <div class="week-board">${dayMarkup}</div>`;
+  }
+
+  _weekDayMarkup(day) {
+    const weekday = day.date.toLocaleDateString(this._locale(), { weekday: "short" });
+    const date = day.date.toLocaleDateString(this._locale(), { day: "2-digit", month: "2-digit" });
+    let contents = "<p>Hierher ziehen</p>";
+    if (day.items.length) {
+      contents = day.items.map((item) => {
+        const time = new Date(item.due).toLocaleTimeString(this._locale(), { hour: "2-digit", minute: "2-digit" });
+        const assignee = this._e(this._data.people[item.assignee]?.name || "Offen");
+        return `<article draggable="true" data-drag-occurrence="${this._e(item.id)}"><input type="checkbox" data-select-occurrence="${this._e(item.id)}"><div><strong>${this._e(this._plainTitle(item.title))}</strong><small>${time} · ${assignee}</small></div></article>`;
+      }).join("");
+    }
+    return `<section class="week-day" data-drop-date="${day.key}">
+      <header><strong>${weekday}</strong><span>${date}</span><b>${day.items.length}</b></header>
+      ${contents}
+    </section>`;
   }
 
   _openOccurrences() {
@@ -1164,22 +1208,24 @@ class HouseholdTasksPanel extends HTMLElement {
     const dueWindow = item.due_window
       ? `<p class="due-window">Flexibel: ${this._formatDue(new Date(item.due_window.earliest))} bis ${this._formatDue(new Date(item.due_window.latest))}</p>`
       : "";
+    const reminder = this._reminderText(item);
+    const marketBadges = this._marketBadges(marketBits);
+    const attachmentCount = this._attachmentCount(attachments);
+    const primaryAction = this._occurrencePrimaryAction(item, canClaim);
     return `<article class="task-card ${overdue ? "overdue" : ""}" data-card-occurrence="${this._e(item.id)}">
       <div class="avatar">${this._e(person.name).slice(0, 1)}</div>
       <div class="task-main">
         <h3>${this._e(this._plainTitle(item.title))}</h3>
-        <p>${this._e(person.name)} · ${this._formatDue(due)}${item.sent_steps?.length ? (householdTasksLocale(this._hass) === "de" ? ` · ${item.sent_steps.length}. Hinweis gesendet` : ` · reminder ${item.sent_steps.length} sent`) : ""}</p>
-        ${marketBits.length ? `<div class="market-badges">${marketBits.map((bit) => `<span>${this._e(bit)}</span>`).join("")}</div>` : ""}
+        <p>${this._e(person.name)} · ${this._formatDue(due)}${reminder}</p>
+        ${marketBadges}
         ${item.assignment_reason ? `<details class="assignment-explanation"><summary>Warum wurde mir das zugewiesen?</summary><p>${this._e(this._assignmentReason(item.assignment_reason))}</p></details>` : ""}
         ${item.help_status === "requested" ? `<p class="help-status">Hilfe wurde im Haushalt angefragt.</p>` : ""}
         ${item.waiting_for ? `<p class="help-status">Wartet auf Anwesenheit.</p>` : ""}
         ${dueWindow}
-        ${attachments.length ? `<p class="attachment-count">📎 ${attachments.length} Anhang${attachments.length === 1 ? "" : "e"}</p>` : ""}
+        ${attachmentCount}
       </div>
       <div class="occurrence-actions">
-        ${item.assignee
-          ? `<button class="complete" data-complete="${this._e(item.id)}">Erledigt</button>`
-          : `<button class="complete" data-claim="${this._e(item.id)}" ${canClaim ? "" : "disabled"}>Übernehmen</button>`}
+        ${primaryAction}
         <details class="more-actions"><summary aria-label="Weitere Aktionen">•••</summary><div>
           <button data-snooze="${this._e(item.id)}" data-choice="evening">Heute Abend</button>
           <button data-snooze="${this._e(item.id)}" data-choice="tomorrow">Morgen</button>
@@ -1191,6 +1237,35 @@ class HouseholdTasksPanel extends HTMLElement {
         </div></details>
       </div>
     </article>`;
+  }
+
+  _reminderText(item) {
+    if (!item.sent_steps?.length) return "";
+    if (householdTasksLocale(this._hass) === "de") {
+      return ` · ${item.sent_steps.length}. Hinweis gesendet`;
+    }
+    return ` · reminder ${item.sent_steps.length} sent`;
+  }
+
+  _marketBadges(bits) {
+    if (!bits.length) return "";
+    const badges = bits.map((bit) => `<span>${this._e(bit)}</span>`).join("");
+    return `<div class="market-badges">${badges}</div>`;
+  }
+
+  _attachmentCount(attachments) {
+    if (!attachments.length) return "";
+    const suffix = attachments.length === 1 ? "" : "e";
+    return `<p class="attachment-count">📎 ${attachments.length} Anhang${suffix}</p>`;
+  }
+
+  _occurrencePrimaryAction(item, canClaim) {
+    const id = this._e(item.id);
+    if (item.assignee) {
+      return `<button class="complete" data-complete="${id}">Erledigt</button>`;
+    }
+    const disabled = canClaim ? "" : "disabled";
+    return `<button class="complete" data-claim="${id}" ${disabled}>Übernehmen</button>`;
   }
 
   _currentPersonId() {
@@ -1249,32 +1324,79 @@ class HouseholdTasksPanel extends HTMLElement {
   _renderTasks() {
     const tasks = Object.entries(this._data.tasks).sort((a, b) => a[1].name.localeCompare(b[1].name, this._locale()));
     const gallery = this._data.template_gallery || [];
+    const subtitle = householdTasksLocale(this._hass) === "de"
+      ? `${tasks.length} Regeln für euren Haushalt`
+      : `${tasks.length} household rules`;
+    const toolbarActions = this._data.is_admin
+      ? '<div class="toolbar-actions"><button id="manage-stacks">Aufgabenstapel</button><button id="open-gallery">Vorlagengalerie</button><button id="add-calendar-task">+ Kalenderregel</button><button class="primary" id="add-task">+ Aufgabe</button></div>'
+      : "";
+    const galleryStrip = this._galleryStrip(gallery);
+    const emptyState = tasks.length
+      ? ""
+      : '<div class="empty card"><h2>Noch keine Vorlagen</h2><p>Lege eine wiederkehrende Aufgabe an oder nutze eine Schnellaufgabe.</p></div>';
+    const taskCards = tasks.map(([id, task]) => this._taskCard(id, task)).join("");
     return `
-      <div class="toolbar"><div><h2>Aufgabenvorlagen</h2><p>${householdTasksLocale(this._hass) === "de" ? `${tasks.length} Regeln für euren Haushalt` : `${tasks.length} household rules`}</p></div>
-      ${this._data.is_admin ? `<div class="toolbar-actions"><button id="manage-stacks">Aufgabenstapel</button><button id="open-gallery">Vorlagengalerie</button><button id="add-calendar-task">+ Kalenderregel</button><button class="primary" id="add-task">+ Aufgabe</button></div>` : ""}</div>
-      ${gallery.length ? `<section class="gallery-strip" aria-label="Vorlagengalerie">
-        ${gallery.slice(0, 3).map((entry) => `<article><span>${this._e(entry.category)}</span><strong>${this._e(entry.name)}</strong><p>${this._e(entry.description)}</p><button data-gallery="${this._e(entry.id)}">Einrichten</button></article>`).join("")}
-      </section>` : ""}
-      ${!tasks.length ? `<div class="empty card"><h2>Noch keine Vorlagen</h2><p>Lege eine wiederkehrende Aufgabe an oder nutze eine Schnellaufgabe.</p></div>` : ""}
-      <div class="cards">${tasks.map(([id, task]) => {
-        const assignment = this._assignmentLabel(task);
-        const isFavorite = (this._data.favorites?.[this._currentPersonId()] || []).includes(id);
-        return `<article class="config-card ${task.enabled === false ? "disabled" : ""}">
-          <div class="card-top"><span class="avatar">${this._e(assignment.icon)}</span>
-          <div><h3>${this._e(task.name)}</h3><p>${this._e(assignment.label)} · ${this._e(this._scheduleLabel(task.schedule))}${task.nfc?.tag_id ? " · NFC" : ""}</p></div>
-          <span class="status">${task.enabled === false ? "Pausiert" : "Aktiv"}</span></div>
-          ${task.description ? `<p class="description">${this._e(task.description)}</p>` : ""}
-          ${this._data.habits?.[id] ? `<p class="habit-tip">✨ Gelernt aus ${this._data.habits[id].samples} Erledigungen: meist ${this._e(this._data.people[this._data.habits[id].assignee]?.name || "unbekannt")} gegen ${this._data.habits[id].hour}:00 Uhr. ${this._data.is_admin ? `<button data-apply-habit="${this._e(id)}">Vorschlag übernehmen</button>` : ""}</p>` : ""}
-          ${task.market ? `<div class="market-badges"><span>${this._e(task.market.priority || "normal")}</span><span>${Number(task.market.points || 0)} Punkte</span>${task.market.reward ? `<span>${this._e(task.market.reward)}</span>` : ""}</div>` : ""}
-          <div class="actions">
-            ${this._currentPersonId() ? `<button data-favorite="${this._e(id)}" aria-pressed="${isFavorite}" title="Favorit umschalten">${isFavorite ? "★ Favorit" : "☆ Favorit"}</button>` : ""}
-            <button data-create="${this._e(id)}" ${task.enabled === false ? "disabled title=\"Aufgabe ist pausiert\"" : ""}>Jetzt erzeugen</button>
-            <button data-explain-task="${this._e(id)}">Warum nicht?</button>
-            ${this._data.is_admin ? `<button data-edit-task="${this._e(id)}">Bearbeiten</button>
-            <button class="danger-button" data-delete-task="${this._e(id)}">Löschen</button>` : ""}
-          </div>
-        </article>`;
-      }).join("")}</div>`;
+      <div class="toolbar"><div><h2>Aufgabenvorlagen</h2><p>${subtitle}</p></div>${toolbarActions}</div>
+      ${galleryStrip}
+      ${emptyState}
+      <div class="cards">${taskCards}</div>`;
+  }
+
+  _galleryStrip(gallery) {
+    if (!gallery.length) return "";
+    const entries = gallery.slice(0, 3).map((entry) =>
+      `<article><span>${this._e(entry.category)}</span><strong>${this._e(entry.name)}</strong><p>${this._e(entry.description)}</p><button data-gallery="${this._e(entry.id)}">Einrichten</button></article>`
+    ).join("");
+    return `<section class="gallery-strip" aria-label="Vorlagengalerie">${entries}</section>`;
+  }
+
+  _taskCard(id, task) {
+    const assignment = this._assignmentLabel(task);
+    const isFavorite = (this._data.favorites?.[this._currentPersonId()] || []).includes(id);
+    const disabledClass = task.enabled === false ? "disabled" : "";
+    const nfcLabel = task.nfc?.tag_id ? " · NFC" : "";
+    const status = task.enabled === false ? "Pausiert" : "Aktiv";
+    const description = task.description ? `<p class="description">${this._e(task.description)}</p>` : "";
+    const habit = this._taskHabit(id);
+    const market = this._taskMarket(task.market);
+    const favorite = this._taskFavoriteButton(id, isFavorite);
+    const createDisabled = task.enabled === false ? 'disabled title="Aufgabe ist pausiert"' : "";
+    const adminActions = this._data.is_admin
+      ? `<button data-edit-task="${this._e(id)}">Bearbeiten</button><button class="danger-button" data-delete-task="${this._e(id)}">Löschen</button>`
+      : "";
+    return `<article class="config-card ${disabledClass}">
+      <div class="card-top"><span class="avatar">${this._e(assignment.icon)}</span>
+      <div><h3>${this._e(task.name)}</h3><p>${this._e(assignment.label)} · ${this._e(this._scheduleLabel(task.schedule))}${nfcLabel}</p></div>
+      <span class="status">${status}</span></div>
+      ${description}${habit}${market}
+      <div class="actions">${favorite}
+        <button data-create="${this._e(id)}" ${createDisabled}>Jetzt erzeugen</button>
+        <button data-explain-task="${this._e(id)}">Warum nicht?</button>
+        ${adminActions}
+      </div>
+    </article>`;
+  }
+
+  _taskHabit(id) {
+    const habit = this._data.habits?.[id];
+    if (!habit) return "";
+    const assignee = this._e(this._data.people[habit.assignee]?.name || "unbekannt");
+    const applyButton = this._data.is_admin
+      ? `<button data-apply-habit="${this._e(id)}">Vorschlag übernehmen</button>`
+      : "";
+    return `<p class="habit-tip">✨ Gelernt aus ${habit.samples} Erledigungen: meist ${assignee} gegen ${habit.hour}:00 Uhr. ${applyButton}</p>`;
+  }
+
+  _taskMarket(market) {
+    if (!market) return "";
+    const reward = market.reward ? `<span>${this._e(market.reward)}</span>` : "";
+    return `<div class="market-badges"><span>${this._e(market.priority || "normal")}</span><span>${Number(market.points || 0)} Punkte</span>${reward}</div>`;
+  }
+
+  _taskFavoriteButton(id, favorite) {
+    if (!this._currentPersonId()) return "";
+    const label = favorite ? "★ Favorit" : "☆ Favorit";
+    return `<button data-favorite="${this._e(id)}" aria-pressed="${favorite}" title="Favorit umschalten">${label}</button>`;
   }
 
   _assignmentLabel(task) {
@@ -1404,37 +1526,24 @@ class HouseholdTasksPanel extends HTMLElement {
       }
       if (health.status === "ok" && health.findings.some((item) => item.severity === "warning")) health.status = "warning";
     }
+    const modeControls = this._modeControls(householdMode);
+    const healthMarkup = this._healthMarkup(health);
+    const discoveryMarkup = this._discoveryMarkup(suggestions);
     return `<div class="toolbar"><div><h2>Einstellungen</h2><p>Globale Regeln und Datenquelle</p></div></div>
       <article class="settings-card mode-card">
         <h3>Urlaubs- und Gastmodus</h3>
         <p>Steuert zentral, ob automatische Aufgaben normal laufen, reduziert, pausiert oder an eine Vertretung gegeben werden.</p>
-        ${this._data.is_admin ? `<form id="household-mode-form" class="form-grid">
-          <label>Betriebsmodus<select name="mode">
-            <option value="normal" ${householdMode.mode === "normal" ? "selected" : ""}>Normal</option>
-            <option value="vacation" ${householdMode.mode === "vacation" ? "selected" : ""}>Urlaub</option>
-            <option value="guest" ${householdMode.mode === "guest" ? "selected" : ""}>Gäste</option>
-          </select><span class="hint">Im Gastmodus können eigene Gastaufgaben aktiv und private Routinen ausgeschaltet werden.</span></label>
-          <label>Urlaubsstrategie<select name="policy">
-            <option value="pause" ${householdMode.policy === "pause" ? "selected" : ""}>Automatik pausieren</option>
-            <option value="reduce" ${householdMode.policy === "reduce" ? "selected" : ""}>Nur hohe Prioritäten</option>
-            <option value="delegate" ${householdMode.policy === "delegate" ? "selected" : ""}>An Vertretung übergeben</option>
-          </select><span class="hint">Einzelne Vorlagen können diese Strategie überschreiben.</span></label>
-          <label>Vertretung<select name="delegate_to"><option value="">Keine</option>${Object.entries(this._data.people).map(([id, person]) => `<option value="${this._e(id)}" ${householdMode.delegate_to === id ? "selected" : ""}>${this._e(person.name)}</option>`).join("")}</select></label>
-          <label>Automatisch beenden<input type="datetime-local" name="until" value="${householdMode.until ? this._localDateTimeValue(new Date(householdMode.until)) : ""}"></label>
-          <label class="full">Notiz<input name="note" value="${this._e(householdMode.note || "")}" placeholder="Sommerurlaub, Besuch am Wochenende …"></label>
-          <div class="full"><button class="primary" type="submit">Modus anwenden</button></div>
-        </form>` : `<div class="info-row"><span>Aktiv</span><strong>${this._e(householdMode.mode)}</strong></div>`}
+        ${modeControls}
       </article>
       <article class="settings-card health-card">
         <div class="settings-heading"><div><h3>Konfigurations-Gesundheit</h3><p>Prüft Entitäten, Benachrichtigungsdienste, NFC-Zuordnungen und Abhängigkeiten.</p></div>
         ${this._data.is_admin ? `<button id="refresh-health">Neu prüfen</button>` : ""}</div>
-        <div class="health-summary ${this._e(health.status)}">${health.status === "ok" ? "Keine Probleme erkannt" : `${health.findings.length} Hinweise gefunden`}</div>
-        ${health.findings.length ? `<div class="health-list">${health.findings.map((finding, index) => `<div class="${this._e(finding.severity)}"><strong>${this._e(finding.severity)}</strong><span>${this._e(finding.message)}</span>${finding.action ? `<button data-health-fix="${index}">Beheben</button>` : ""}</div>`).join("")}</div>` : ""}
+        ${healthMarkup}
       </article>
       <article class="settings-card">
         <h3>Home-Assistant-Autodiscovery</h3>
         <p>Lokale Entitäten werden auf mögliche Geräte-, Kalender-, Batterie- und Wartungsregeln geprüft. Es werden keine Daten übertragen.</p>
-        ${suggestions.length ? `<div class="discovery-list">${suggestions.slice(0, 12).map((item) => `<div><span><strong>${this._e(item.name)}</strong><small>${this._e(item.entity_id)} · ${this._e(item.reason)}</small></span>${this._data.is_admin ? `<button data-install-discovery="${this._e(item.id)}">Einrichten</button>` : ""}</div>`).join("")}</div>` : `<p class="positive">Keine neuen passenden Entitäten erkannt.</p>`}
+        ${discoveryMarkup}
       </article>
       <article class="settings-card">
         <h3>Intelligente Benachrichtigungsbündelung</h3>
@@ -1523,6 +1632,61 @@ class HouseholdTasksPanel extends HTMLElement {
           <input id="import-file" class="hidden" type="file" accept="application/json,.json"></div></div>` : ""}
         ${this._data.is_admin ? `<button id="reset-config" class="danger-button">Auf Ausgangswerte zurücksetzen</button>` : ""}
       </article>`;
+  }
+
+  _selected(actual, expected) {
+    return actual === expected ? "selected" : "";
+  }
+
+  _modeControls(mode) {
+    if (!this._data.is_admin) {
+      return `<div class="info-row"><span>Aktiv</span><strong>${this._e(mode.mode)}</strong></div>`;
+    }
+    const delegates = Object.entries(this._data.people).map(([id, person]) =>
+      `<option value="${this._e(id)}" ${this._selected(mode.delegate_to, id)}>${this._e(person.name)}</option>`
+    ).join("");
+    const until = mode.until ? this._localDateTimeValue(new Date(mode.until)) : "";
+    return `<form id="household-mode-form" class="form-grid">
+      <label>Betriebsmodus<select name="mode">
+        <option value="normal" ${this._selected(mode.mode, "normal")}>Normal</option>
+        <option value="vacation" ${this._selected(mode.mode, "vacation")}>Urlaub</option>
+        <option value="guest" ${this._selected(mode.mode, "guest")}>Gäste</option>
+      </select><span class="hint">Im Gastmodus können eigene Gastaufgaben aktiv und private Routinen ausgeschaltet werden.</span></label>
+      <label>Urlaubsstrategie<select name="policy">
+        <option value="pause" ${this._selected(mode.policy, "pause")}>Automatik pausieren</option>
+        <option value="reduce" ${this._selected(mode.policy, "reduce")}>Nur hohe Prioritäten</option>
+        <option value="delegate" ${this._selected(mode.policy, "delegate")}>An Vertretung übergeben</option>
+      </select><span class="hint">Einzelne Vorlagen können diese Strategie überschreiben.</span></label>
+      <label>Vertretung<select name="delegate_to"><option value="">Keine</option>${delegates}</select></label>
+      <label>Automatisch beenden<input type="datetime-local" name="until" value="${until}"></label>
+      <label class="full">Notiz<input name="note" value="${this._e(mode.note || "")}" placeholder="Sommerurlaub, Besuch am Wochenende …"></label>
+      <div class="full"><button class="primary" type="submit">Modus anwenden</button></div>
+    </form>`;
+  }
+
+  _healthMarkup(health) {
+    const summary = health.status === "ok"
+      ? "Keine Probleme erkannt"
+      : `${health.findings.length} Hinweise gefunden`;
+    if (!health.findings.length) {
+      return `<div class="health-summary ${this._e(health.status)}">${summary}</div>`;
+    }
+    const findings = health.findings.map((finding, index) => {
+      const action = finding.action ? `<button data-health-fix="${index}">Beheben</button>` : "";
+      return `<div class="${this._e(finding.severity)}"><strong>${this._e(finding.severity)}</strong><span>${this._e(finding.message)}</span>${action}</div>`;
+    }).join("");
+    return `<div class="health-summary ${this._e(health.status)}">${summary}</div><div class="health-list">${findings}</div>`;
+  }
+
+  _discoveryMarkup(suggestions) {
+    if (!suggestions.length) return '<p class="positive">Keine neuen passenden Entitäten erkannt.</p>';
+    const entries = suggestions.slice(0, 12).map((item) => {
+      const action = this._data.is_admin
+        ? `<button data-install-discovery="${this._e(item.id)}">Einrichten</button>`
+        : "";
+      return `<div><span><strong>${this._e(item.name)}</strong><small>${this._e(item.entity_id)} · ${this._e(item.reason)}</small></span>${action}</div>`;
+    }).join("");
+    return `<div class="discovery-list">${entries}</div>`;
   }
 
   _escalationSummary(stages) {
@@ -1732,7 +1896,8 @@ class HouseholdTasksPanel extends HTMLElement {
       const result = await this._call("bulk", { occurrence_ids: ids, action: button.dataset.bulkAction });
       const completed = result.bulk_result?.completed?.length || 0;
       const failed = Object.keys(result.bulk_result?.failed || {}).length;
-      this._toast(`${completed} Aufgaben verarbeitet${failed ? `, ${failed} fehlgeschlagen` : ""}`);
+      const failedSuffix = failed ? `, ${failed} fehlgeschlagen` : "";
+      this._toast(`${completed} Aufgaben verarbeitet${failedSuffix}`);
     });
   }
 
@@ -1815,7 +1980,8 @@ class HouseholdTasksPanel extends HTMLElement {
       const form = new FormData(event.target);
       let changed = 0;
       for (const item of open) {
-        const value = form.get(item.id);
+        const formValue = form.get(item.id);
+        const value = typeof formValue === "string" ? formValue : "";
         if (!value || new Date(value).getTime() === new Date(item.due).getTime()) continue;
         await this._hass.callWS({
           type: "household_tasks/move_occurrence",
@@ -1882,7 +2048,10 @@ class HouseholdTasksPanel extends HTMLElement {
       if (file.size > 750000) return this._toast("Datei ist größer als 750 KB.", true);
       const content = await new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.onload = () => {
+          const result = typeof reader.result === "string" ? reader.result : "";
+          resolve(result.split(",")[1]);
+        };
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
@@ -2088,7 +2257,8 @@ class HouseholdTasksPanel extends HTMLElement {
     form.onsubmit = async (event) => {
       event.preventDefault();
       const data = new FormData(form);
-      const notify = String(data.get("notify") || "").trim();
+      const notifyValue = data.get("notify");
+      const notify = (typeof notifyValue === "string" ? notifyValue : "").trim();
       const service = notify.removeprefix?.("notify.") || notify.replace(/^notify\./, "");
       if (!service || !this._hass.services.notify?.[service]) {
         this._toast("Bitte wähle eine vorhandene Push-Aktion aus.", true);
@@ -2173,15 +2343,19 @@ class HouseholdTasksPanel extends HTMLElement {
       const modal = this.shadowRoot.querySelector("#modal");
       const returnFocus = this.shadowRoot.activeElement;
       const excluded = explanation.excluded_candidates || [];
+      const negation = explanation.mode.allowed && explanation.season.allowed ? "" : "nicht ";
+      const forecast = this._whyNotForecast(explanation.forecast_trace);
+      const excludedMarkup = this._whyNotExcluded(excluded);
+      const recent = this._whyNotRecent(explanation.recent_decisions);
       modal.innerHTML = `<div class="backdrop"><div class="modal-card small">
-        <div class="modal-head"><div><div class="eyebrow">ENTSCHEIDUNGSHILFE</div><h2>Warum wird die Aufgabe ${explanation.mode.allowed && explanation.season.allowed ? "" : "nicht "}erzeugt?</h2></div><button class="icon-button close" aria-label="Schließen">×</button></div>
+        <div class="modal-head"><div><div class="eyebrow">ENTSCHEIDUNGSHILFE</div><h2>Warum wird die Aufgabe ${negation}erzeugt?</h2></div><button class="icon-button close" aria-label="Schließen">×</button></div>
         <div class="decision-line ${explanation.mode.allowed ? "ok" : "blocked"}"><strong>Haushaltsmodus</strong><span>${this._e(explanation.mode.message)}</span></div>
         <div class="decision-line ${explanation.season.allowed ? "ok" : "blocked"}"><strong>Saison</strong><span>${this._e(explanation.season.message)}</span></div>
-        ${explanation.forecast_trace ? `<div class="decision-line ${explanation.forecast_trace.allowed ? "ok" : "blocked"}"><strong>Wettervorhersage</strong><span>${this._e(explanation.forecast_trace.message)}${explanation.forecast_trace.activation_at ? ` · Aktivierung ${new Date(explanation.forecast_trace.activation_at).toLocaleString(this._locale())}` : ""}</span></div>` : ""}
+        ${forecast}
         <h3>Berücksichtigte Personen</h3>
         <p>${(explanation.eligible_candidates || []).map((id) => this._e(this._data.people[id]?.name || id)).join(", ") || "Keine geeignete Person"}</p>
-        ${excluded.length ? `<h3>Nicht berücksichtigt</h3><ul>${excluded.map((item) => `<li>${this._e(this._data.people[item.person_id]?.name || item.person_id)}: ${this._e(item.reason)}</li>`).join("")}</ul>` : ""}
-        ${explanation.recent_decisions?.length ? `<details><summary>Letzte ausgelassene Erzeugungen</summary><ul>${explanation.recent_decisions.map((item) => `<li>${new Date(item.checked_at).toLocaleString(this._locale())}: ${this._e(item.message)}</li>`).join("")}</ul></details>` : ""}
+        ${excludedMarkup}
+        ${recent}
       </div></div>`;
       const close = () => { modal.replaceChildren(); returnFocus?.focus(); };
       modal.querySelector(".close").onclick = close;
@@ -2189,6 +2363,31 @@ class HouseholdTasksPanel extends HTMLElement {
     } catch (error) {
       this._toast(this._errorText(error), true);
     }
+  }
+
+  _whyNotForecast(trace) {
+    if (!trace) return "";
+    const status = trace.allowed ? "ok" : "blocked";
+    const activation = trace.activation_at
+      ? ` · Aktivierung ${new Date(trace.activation_at).toLocaleString(this._locale())}`
+      : "";
+    return `<div class="decision-line ${status}"><strong>Wettervorhersage</strong><span>${this._e(trace.message)}${activation}</span></div>`;
+  }
+
+  _whyNotExcluded(excluded) {
+    if (!excluded.length) return "";
+    const items = excluded.map((item) =>
+      `<li>${this._e(this._data.people[item.person_id]?.name || item.person_id)}: ${this._e(item.reason)}</li>`
+    ).join("");
+    return `<h3>Nicht berücksichtigt</h3><ul>${items}</ul>`;
+  }
+
+  _whyNotRecent(decisions) {
+    if (!decisions?.length) return "";
+    const items = decisions.map((item) =>
+      `<li>${new Date(item.checked_at).toLocaleString(this._locale())}: ${this._e(item.message)}</li>`
+    ).join("");
+    return `<details><summary>Letzte ausgelassene Erzeugungen</summary><ul>${items}</ul></details>`;
   }
 
   async _exportConfig() {
@@ -2399,13 +2598,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _showTaskEditor(id = null, options = {}) {
-    const task = id ? structuredClone(this._data.tasks[id]) : {
-      enabled: true, name: "", assignee: Object.keys(this._data.people)[0] || "",
-      assignment: { type: "fixed", people: [] },
-      description: "", schedule: options.scheduleType === "calendar"
-        ? { type: "calendar", entity_id: "", match: "", offset: "-12:00:00" }
-        : { type: "weekly", weekdays: ["mon"], time: "18:00:00" },
-    };
+    const task = this._editorTask(id, options);
     const s = task.schedule || { type: "manual" };
     const esc = task.escalation;
     const nfc = task.nfc || {};
@@ -2533,64 +2726,12 @@ class HouseholdTasksPanel extends HTMLElement {
     this._bindEscalationEditor(modal);
     this._bindTagCreator(modal);
     this._bindInlineTaskCreates(modal, id);
-    modal.querySelector("[data-preview-task]").onclick = async () => {
-      const output = modal.querySelector(".task-preview .preview-result");
-      try {
-        const { value } = this._readTaskForm(modal.querySelector("#task-form"));
-        const scenarioValues = [...modal.querySelectorAll("[name=weather_scenario]")]
-          .map((input) => input.value.trim());
-        const scenario = scenarioValues.some((item) => item !== "") ? {
-          values: scenarioValues,
-          date: modal.querySelector("[name=scenario_date]")?.value || undefined,
-        } : null;
-        const [preview, projection] = await Promise.all([
-          this._hass.callWS({ type: "household_tasks/preview_task", task: value, ...(id ? { task_id: id } : {}), ...(scenario ? { scenario } : {}) }),
-          this._hass.callWS({ type: "household_tasks/task_projection", task: value }),
-        ]);
-        const parts = [];
-        parts.push(projection.message);
-        if (projection.risk === "high") parts.push("Warnung: Diese Regel könnte ungewöhnlich viele Aufgaben erzeugen.");
-        if (preview.next_due) parts.push(`Nächste Fälligkeit: ${new Date(preview.next_due).toLocaleString(this._locale())}`);
-        if (preview.calendar_events?.length) parts.push(`${preview.calendar_events.length} passende Kalendertermine in den nächsten 90 Tagen`);
-        if (preview.state_triggers?.length) parts.push(preview.state_triggers.map((item) =>
-          `${item.entity_id}: aktuell „${item.current ?? "nicht verfügbar"}“, erwartet „${item.wanted}“${item.matches ? " ✓" : ""}`
-        ).join(" · "));
-        if (preview.mode?.message) parts.push(preview.mode.message);
-        if (preview.season?.message) parts.push(preview.season.message);
-        if (preview.weather?.conditions?.length) {
-          parts.push(preview.weather.message);
-          parts.push(preview.weather.conditions.map((item) =>
-            `${item.entity_id}${item.attribute ? `.${item.attribute}` : ""}: ${item.current ?? "nicht verfügbar"} ${item.matches ? "✓" : "✗"}`
-          ).join(" · "));
-        }
-        if (preview.forecast?.matched_period) {
-          parts.push(`Erster passender Vorhersagetag: ${new Date(preview.forecast.matched_period.datetime).toLocaleDateString(this._locale())}`);
-        }
-        if (preview.forecast?.scenario) parts.push("Testszenario – es wurden keine Live-Vorhersagedaten verwendet.");
-        if (preview.planned_occurrences?.length) {
-          parts.push(preview.planned_occurrences.map((item) =>
-            `${item.target_name} → ${item.assignee_name}: ${item.would_create ? "würde erzeugt" : item.repetition.message}`
-          ).join(" · "));
-        }
-        if (preview.trace?.length) {
-          parts.push(preview.trace.map((step) => `${step.passed ? "✓" : "✕"} ${step.message}`).join(" · "));
-        }
-        if (preview.would_create === false) parts.push("Diese Regel würde aktuell keine Aufgabe erzeugen.");
-        if (preview.would_create === true) parts.push("Diese Regel würde aktuell eine Aufgabe erzeugen.");
-        if (!parts.length) parts.push(preview.schedule_type === "manual"
-          ? "Manuelle Regeln haben keine automatisch berechnete Fälligkeit."
-          : "Im Vorschauzeitraum wurde keine Fälligkeit gefunden.");
-        output.textContent = parts.join(" — ");
-      } catch (error) {
-        output.textContent = this._errorText(error);
-        output.className = "preview-result error";
-      }
-    };
+    this._bindTaskPreview(modal, id);
     modal.querySelector("#task-form").onsubmit = async (event) => {
       event.preventDefault();
       try {
         const { taskId, value } = this._readTaskForm(event.target);
-        if (task.device) value.device = task.device;
+        this._preserveTaskDevice(value, task);
         const projection = await this._hass.callWS({ type: "household_tasks/task_projection", task: value });
         if (projection.risk === "high" && !await this._confirm(`${projection.message} Trotzdem speichern?`)) return;
         await this._call("save_task", { task_id: taskId, task: value });
@@ -2599,6 +2740,126 @@ class HouseholdTasksPanel extends HTMLElement {
         if (!error?.message?.includes("household_tasks")) this._toast(this._errorText(error), true);
       }
     };
+  }
+
+  _preserveTaskDevice(value, task) {
+    if (task.device) value.device = task.device;
+  }
+
+  _editorTask(id, options) {
+    if (id) return structuredClone(this._data.tasks[id]);
+    return this._newTask(options);
+  }
+
+  _newTask(options) {
+    let schedule = { type: "weekly", weekdays: ["mon"], time: "18:00:00" };
+    if (options.scheduleType === "calendar") {
+      schedule = { type: "calendar", entity_id: "", match: "", offset: "-12:00:00" };
+    }
+    return {
+      enabled: true,
+      name: "",
+      assignee: Object.keys(this._data.people)[0] || "",
+      assignment: { type: "fixed", people: [] },
+      description: "",
+      schedule,
+    };
+  }
+
+  _bindTaskPreview(modal, taskId) {
+    modal.querySelector("[data-preview-task]").onclick = async () => {
+      const output = modal.querySelector(".task-preview .preview-result");
+      try {
+        const { value } = this._readTaskForm(modal.querySelector("#task-form"));
+        const scenarioValues = [...modal.querySelectorAll("[name=weather_scenario]")]
+          .map((input) => input.value.trim());
+        const scenario = this._previewScenario(modal, scenarioValues);
+        const previewPayload = { type: "household_tasks/preview_task", task: value };
+        if (taskId) previewPayload.task_id = taskId;
+        if (scenario) previewPayload.scenario = scenario;
+        const [preview, projection] = await Promise.all([
+          this._hass.callWS(previewPayload),
+          this._hass.callWS({ type: "household_tasks/task_projection", task: value }),
+        ]);
+        output.textContent = this._taskPreviewParts(preview, projection).join(" — ");
+        output.className = "preview-result";
+      } catch (error) {
+        output.textContent = this._errorText(error);
+        output.className = "preview-result error";
+      }
+    };
+  }
+
+  _previewScenario(modal, values) {
+    if (!values.some((item) => item !== "")) return null;
+    return {
+      values,
+      date: modal.querySelector("[name=scenario_date]")?.value || undefined,
+    };
+  }
+
+  _taskPreviewParts(preview, projection) {
+    const parts = [projection.message];
+    const optionalParts = [
+      projection.risk === "high" ? "Warnung: Diese Regel könnte ungewöhnlich viele Aufgaben erzeugen." : null,
+      preview.next_due ? `Nächste Fälligkeit: ${new Date(preview.next_due).toLocaleString(this._locale())}` : null,
+      preview.calendar_events?.length ? `${preview.calendar_events.length} passende Kalendertermine in den nächsten 90 Tagen` : null,
+      this._stateTriggerPreview(preview.state_triggers),
+      preview.mode?.message,
+      preview.season?.message,
+      this._weatherPreview(preview.weather),
+      preview.forecast?.matched_period
+        ? `Erster passender Vorhersagetag: ${new Date(preview.forecast.matched_period.datetime).toLocaleDateString(this._locale())}`
+        : null,
+      preview.forecast?.scenario ? "Testszenario – es wurden keine Live-Vorhersagedaten verwendet." : null,
+      this._plannedOccurrencePreview(preview.planned_occurrences),
+      this._tracePreview(preview.trace),
+      this._creationPreview(preview.would_create),
+    ].filter(Boolean);
+    parts.push(...optionalParts);
+    if (parts.length === 1 && !parts[0]) {
+      return [preview.schedule_type === "manual"
+        ? "Manuelle Regeln haben keine automatisch berechnete Fälligkeit."
+        : "Im Vorschauzeitraum wurde keine Fälligkeit gefunden."];
+    }
+    return parts.filter(Boolean);
+  }
+
+  _stateTriggerPreview(triggers) {
+    if (!triggers?.length) return null;
+    return triggers.map((item) => {
+      const match = item.matches ? " ✓" : "";
+      return `${item.entity_id}: aktuell „${item.current ?? "nicht verfügbar"}“, erwartet „${item.wanted}“${match}`;
+    }).join(" · ");
+  }
+
+  _weatherPreview(weather) {
+    if (!weather?.conditions?.length) return null;
+    const conditions = weather.conditions.map((item) => {
+      const attribute = item.attribute ? `.${item.attribute}` : "";
+      const match = item.matches ? "✓" : "✗";
+      return `${item.entity_id}${attribute}: ${item.current ?? "nicht verfügbar"} ${match}`;
+    }).join(" · ");
+    return `${weather.message} · ${conditions}`;
+  }
+
+  _plannedOccurrencePreview(occurrences) {
+    if (!occurrences?.length) return null;
+    return occurrences.map((item) => {
+      const result = item.would_create ? "würde erzeugt" : item.repetition.message;
+      return `${item.target_name} → ${item.assignee_name}: ${result}`;
+    }).join(" · ");
+  }
+
+  _tracePreview(trace) {
+    if (!trace?.length) return null;
+    return trace.map((step) => `${step.passed ? "✓" : "✕"} ${step.message}`).join(" · ");
+  }
+
+  _creationPreview(wouldCreate) {
+    if (wouldCreate === false) return "Diese Regel würde aktuell keine Aufgabe erzeugen.";
+    if (wouldCreate === true) return "Diese Regel würde aktuell eine Aufgabe erzeugen.";
+    return null;
   }
 
   _showQuickTask(smart = false) {
@@ -3021,64 +3282,139 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _scheduleFields(s, weather = {}) {
-    const time = this._e(s.time || "18:00:00");
-    if (s.type === "manual") return `<p class="hint">Diese Vorlage wird nur über „Jetzt erzeugen“ oder eine Automation angelegt.</p>`;
-    if (s.type === "weekly") return `<div class="weekdays">${this._weekdays().map(([v,l]) => `<label><input type="checkbox" name="weekday" value="${v}" ${(s.weekdays || []).includes(v) ? "checked" : ""}><span>${l}</span></label>`).join("")}</div><label>Uhrzeit<input name="time" type="time" step="1" value="${time}"></label>`;
-    if (s.type === "monthly") return `<div class="form-grid"><label>Tag (1–31 oder last)<input name="day" value="${this._e(s.day || 1)}"></label><label>Uhrzeit<input name="time" type="time" step="1" value="${time}"></label></div>`;
-    if (s.type === "yearly") return `<div class="form-grid"><label>Monat<input name="month" type="number" min="1" max="12" value="${this._e(s.month || 1)}"></label><label>Tag<input name="day" value="${this._e(s.day || 1)}"></label><label>Uhrzeit<input name="time" type="time" step="1" value="${time}"></label></div>`;
-    if (s.type === "interval_months") return `<div class="form-grid"><label>Intervall in Monaten<input name="months" type="number" min="1" value="${this._e(s.months || 6)}"></label><label>Startdatum<input name="start" type="date" value="${this._e(s.start || new Date().toISOString().slice(0,10))}"></label><label>Uhrzeit<input name="time" type="time" step="1" value="${time}"></label></div>`;
-    if (s.type === "calendar") return `<div class="calendar-guide">
+    const renderers = {
+      manual: () => '<p class="hint">Diese Vorlage wird nur über „Jetzt erzeugen“ oder eine Automation angelegt.</p>',
+      weekly: () => this._weeklyScheduleFields(s),
+      monthly: () => this._monthlyScheduleFields(s),
+      yearly: () => this._yearlyScheduleFields(s),
+      interval_months: () => this._intervalScheduleFields(s),
+      calendar: () => this._calendarScheduleFields(s),
+      after_completion: () => this._afterCompletionFields(s),
+      flexible_after_completion: () => this._flexibleCompletionFields(s),
+      weather_trigger: () => this._weatherTriggerFields(s, weather),
+      forecast_trigger: () => this._forecastTriggerFields(s, weather),
+      state_trigger: () => this._stateTriggerFields(s),
+      daily_after_state: () => this._dailyStateFields(s),
+    };
+    return (renderers[s.type] || renderers.daily_after_state)();
+  }
+
+  _scheduleTime(schedule) {
+    return this._e(schedule.time || "18:00:00");
+  }
+
+  _weeklyScheduleFields(s) {
+    const weekdays = this._weekdays().map(([value, label]) => {
+      const checked = (s.weekdays || []).includes(value) ? "checked" : "";
+      return `<label><input type="checkbox" name="weekday" value="${value}" ${checked}><span>${label}</span></label>`;
+    }).join("");
+    return `<div class="weekdays">${weekdays}</div><label>Uhrzeit<input name="time" type="time" step="1" value="${this._scheduleTime(s)}"></label>`;
+  }
+
+  _monthlyScheduleFields(s) {
+    return `<div class="form-grid"><label>Tag (1–31 oder last)<input name="day" value="${this._e(s.day || 1)}"></label><label>Uhrzeit<input name="time" type="time" step="1" value="${this._scheduleTime(s)}"></label></div>`;
+  }
+
+  _yearlyScheduleFields(s) {
+    return `<div class="form-grid"><label>Monat<input name="month" type="number" min="1" max="12" value="${this._e(s.month || 1)}"></label><label>Tag<input name="day" value="${this._e(s.day || 1)}"></label><label>Uhrzeit<input name="time" type="time" step="1" value="${this._scheduleTime(s)}"></label></div>`;
+  }
+
+  _intervalScheduleFields(s) {
+    const start = this._e(s.start || new Date().toISOString().slice(0, 10));
+    return `<div class="form-grid"><label>Intervall in Monaten<input name="months" type="number" min="1" value="${this._e(s.months || 6)}"></label><label>Startdatum<input name="start" type="date" value="${start}"></label><label>Uhrzeit<input name="time" type="time" step="1" value="${this._scheduleTime(s)}"></label></div>`;
+  }
+
+  _calendarScheduleFields(s) {
+    const entity = this._entityInput("entity_id", s.entity_id || "", ["calendar"], { required: true, placeholder: "Kalender suchen", hint: "Wähle eine vorhandene Kalender-Entität aus Home Assistant." });
+    return `<div class="calendar-guide">
       <p class="hint"><strong>1. Kalender wählen</strong> · <strong>2. Termine filtern</strong> · <strong>3. Fälligkeit relativ zum Termin festlegen</strong> · anschließend unten die Regel testen.</p>
-      <div class="form-grid"><label>1 · Kalender-Entität${this._entityInput("entity_id", s.entity_id || "", ["calendar"], { required: true, placeholder: "Kalender suchen", hint: "Wähle eine vorhandene Kalender-Entität aus Home Assistant." })}</label>
+      <div class="form-grid"><label>1 · Kalender-Entität${entity}</label>
       <label>2 · Suchmuster<input name="match" value="${this._e(s.match || "")}" placeholder="Restmüll"><span class="hint">Leer berücksichtigt alle Termine. Groß-/Kleinschreibung spielt keine Rolle.</span></label>
       <label>3 · Versatz HH:MM:SS<input name="offset" value="${this._e(s.offset || "-12:00:00")}"><span class="hint">Negativ bedeutet vor dem Termin, z. B. −12 Stunden.</span></label></div></div>`;
-    if (s.type === "after_completion") return `<div class="form-grid">
-      <label>Erstmals fällig<input name="start" type="datetime-local" required value="${this._localDateTimeValue(s.start ? new Date(s.start) : new Date())}"></label>
+  }
+
+  _completionStart(s) {
+    return this._localDateTimeValue(s.start ? new Date(s.start) : new Date());
+  }
+
+  _afterCompletionFields(s) {
+    return `<div class="form-grid">
+      <label>Erstmals fällig<input name="start" type="datetime-local" required value="${this._completionStart(s)}"></label>
       <label>Intervall nach Erledigung (HH:MM:SS)<input name="interval" required value="${this._e(s.interval || "168:00:00")}"></label>
       </div>`;
-    if (s.type === "flexible_after_completion") return `<div class="form-grid">
-      <label class="full">Erstmals fällig<input name="start" type="datetime-local" required value="${this._localDateTimeValue(s.start ? new Date(s.start) : new Date())}"></label>
+  }
+
+  _flexibleCompletionFields(s) {
+    return `<div class="form-grid">
+      <label class="full">Erstmals fällig<input name="start" type="datetime-local" required value="${this._completionStart(s)}"></label>
       <label>Frühestens danach<input name="earliest_interval" required value="${this._e(s.earliest_interval || "120:00:00")}"><span class="hint">HH:MM:SS</span></label>
       <label>Bevorzugt danach<input name="preferred_interval" required value="${this._e(s.preferred_interval || "168:00:00")}"><span class="hint">HH:MM:SS</span></label>
       <label>Spätestens danach<input name="latest_interval" required value="${this._e(s.latest_interval || "240:00:00")}"><span class="hint">HH:MM:SS</span></label>
       <p class="hint full">Die Aufgabe wird zum bevorzugten Zeitpunkt fällig; frühestes und spätestes Fenster bleiben sichtbar.</p>
       </div>`;
-    if (s.type === "weather_trigger") return `<div class="form-grid">
-      <label>Verknüpfung<select name="weather_logic"><option value="all" ${weather.logic !== "any" ? "selected" : ""}>Alle Bedingungen (UND)</option><option value="any" ${weather.logic === "any" ? "selected" : ""}>Mindestens eine (ODER)</option></select></label>
+  }
+
+  _weatherLogicOptions(weather) {
+    const all = weather.logic !== "any" ? "selected" : "";
+    const any = weather.logic === "any" ? "selected" : "";
+    return `<option value="all" ${all}>Alle Bedingungen (UND)</option><option value="any" ${any}>Mindestens eine (ODER)</option>`;
+  }
+
+  _weatherTriggerFields(s, weather) {
+    const rows = this._weatherRows(weather.conditions || [{}]);
+    const checked = s.skip_if_open !== false ? "checked" : "";
+    return `<div class="form-grid">
+      <label>Verknüpfung<select name="weather_logic">${this._weatherLogicOptions(weather)}</select></label>
       <label>Fällig nach (HH:MM:SS)<input name="due_after" value="${this._e(s.due_after || "00:00:00")}"></label>
       <label>Cooldown (HH:MM:SS)<input name="cooldown" value="${this._e(s.cooldown || "24:00:00")}"></label>
-      <label class="checkbox"><input name="skip_if_open" type="checkbox" ${s.skip_if_open !== false ? "checked" : ""}> Nicht erneut erzeugen, solange offen</label>
+      <label class="checkbox"><input name="skip_if_open" type="checkbox" ${checked}> Nicht erneut erzeugen, solange offen</label>
       <div class="full repeatable-editor weather-editor"><span class="field-label">Wetterbedingungen</span>
-        <div class="repeatable-list">${this._weatherRows(weather.conditions || [{}])}</div>
+        <div class="repeatable-list">${rows}</div>
         <button type="button" class="add-row" data-add-weather>+ Wetterbedingung</button>
         <p class="hint">Sensorzustände funktionieren ohne Attribut. Bei weather.* können beispielsweise temperature, humidity, wind_speed oder precipitation_probability verwendet werden.</p>
       </div></div>`;
-    if (s.type === "forecast_trigger") return `<div class="form-grid">
-      <label>Vorhersagetyp<select name="forecast_type"><option value="daily" ${s.forecast_type !== "hourly" ? "selected" : ""}>Täglich</option><option value="hourly" ${s.forecast_type === "hourly" ? "selected" : ""}>Stündlich</option></select></label>
+  }
+
+  _forecastTriggerFields(s, weather) {
+    const rows = this._weatherRows(weather.conditions || [{ attribute: "templow", condition: "below", threshold: 0 }]);
+    const daily = s.forecast_type !== "hourly" ? "selected" : "";
+    const hourly = s.forecast_type === "hourly" ? "selected" : "";
+    const checked = s.skip_if_open !== false ? "checked" : "";
+    return `<div class="form-grid">
+      <label>Vorhersagetyp<select name="forecast_type"><option value="daily" ${daily}>Täglich</option><option value="hourly" ${hourly}>Stündlich</option></select></label>
       <label>Prüfzeitraum in Stunden<input name="horizon_hours" type="number" min="1" max="240" value="${Number(s.horizon_hours || 48)}"><span class="hint">Wie weit die Home-Assistant-Vorhersage voraus geprüft wird.</span></label>
       <label>Tage Vorlauf<input name="lead_days" type="number" min="0" max="7" value="${Number(s.lead_days ?? 1)}"><span class="hint">1 bedeutet: Aufgabe am Vortag bereitstellen.</span></label>
-      <label>Bereitstellen um<input name="time" type="time" step="1" value="${time}"></label>
-      <label>Verknüpfung<select name="weather_logic"><option value="all" ${weather.logic !== "any" ? "selected" : ""}>Alle Bedingungen (UND)</option><option value="any" ${weather.logic === "any" ? "selected" : ""}>Mindestens eine (ODER)</option></select></label>
+      <label>Bereitstellen um<input name="time" type="time" step="1" value="${this._scheduleTime(s)}"></label>
+      <label>Verknüpfung<select name="weather_logic">${this._weatherLogicOptions(weather)}</select></label>
       <label>Cooldown (HH:MM:SS)<input name="cooldown" value="${this._e(s.cooldown || "24:00:00")}"></label>
-      <label class="checkbox full"><input name="skip_if_open" type="checkbox" ${s.skip_if_open !== false ? "checked" : ""}> Nicht erneut für eine Person erzeugen, solange ihre Aufgabe offen ist</label>
+      <label class="checkbox full"><input name="skip_if_open" type="checkbox" ${checked}> Nicht erneut für eine Person erzeugen, solange ihre Aufgabe offen ist</label>
       <label class="full">Testdatum (optional)<input name="scenario_date" type="date"><span class="hint">Zusammen mit den Testwerten kannst du ein hypothetisches Szenario prüfen, ohne Aufgaben anzulegen.</span></label>
       <div class="full repeatable-editor weather-editor"><span class="field-label">Vorhersagebedingungen</span>
-        <div class="repeatable-list">${this._weatherRows(weather.conditions || [{ attribute: "templow", condition: "below", threshold: 0 }])}</div>
+        <div class="repeatable-list">${rows}</div>
         <button type="button" class="add-row" data-add-weather>+ Vorhersagebedingung</button>
         <p class="hint">Wähle eine weather.*-Entität. Typische tägliche Werte sind templow, temperature, precipitation_probability und wind_speed.</p>
       </div></div>`;
-    if (s.type === "state_trigger") return `<div class="form-grid">
+  }
+
+  _stateTriggerFields(s) {
+    const rows = this._triggerRows(s.triggers || [{ entity_id: "", from: "off", to: "on" }]);
+    const checked = s.skip_if_open !== false ? "checked" : "";
+    return `<div class="form-grid">
       <label>Fällig nach (HH:MM:SS)<input name="due_after" value="${this._e(s.due_after || "00:00:00")}"></label>
       <label>Cooldown (HH:MM:SS)<input name="cooldown" value="${this._e(s.cooldown || "00:00:00")}"></label>
-      <label class="checkbox full"><input name="skip_if_open" type="checkbox" ${s.skip_if_open !== false ? "checked" : ""}> Nicht erneut erzeugen, solange die Aufgabe offen ist</label>
+      <label class="checkbox full"><input name="skip_if_open" type="checkbox" ${checked}> Nicht erneut erzeugen, solange die Aufgabe offen ist</label>
       <div class="full repeatable-editor trigger-editor"><span class="field-label">Auslöser</span>
-        <div class="repeatable-list">${this._triggerRows(s.triggers || [{ entity_id: "", from: "off", to: "on" }])}</div>
+        <div class="repeatable-list">${rows}</div>
         <button type="button" class="add-row" data-add-trigger>+ Auslöser</button>
         <p class="hint">Entität auswählen und Zielzustand angeben; Ausgangszustand und Dauer sind optional.</p>
       </div></div>`;
-    return `<div class="form-grid"><label>Fälligkeit<input name="time" type="time" step="1" value="${time}"></label>
+  }
+
+  _dailyStateFields(s) {
+    const rows = this._triggerRows(s.triggers || [{ entity_id: "", from: "on", to: "off" }]);
+    return `<div class="form-grid"><label>Fälligkeit<input name="time" type="time" step="1" value="${this._scheduleTime(s)}"></label>
       <div class="full repeatable-editor trigger-editor"><span class="field-label">Auslöser</span>
-        <div class="repeatable-list">${this._triggerRows(s.triggers || [{ entity_id: "", from: "on", to: "off" }])}</div>
+        <div class="repeatable-list">${rows}</div>
         <button type="button" class="add-row" data-add-trigger>+ Auslöser</button>
         <p class="hint">Entität auswählen und Zielzustand angeben; Ausgangszustand und Dauer sind optional.</p>
       </div></div>`;
@@ -3200,7 +3536,8 @@ class HouseholdTasksPanel extends HTMLElement {
     if (f.get("guest_only") === "on") value.modes.guest_only = true;
     if (f.get("skip_in_guest") === "on") value.modes.skip_in_guest = true;
     if (f.get("season_enabled") === "on") {
-      const months = String(f.get("season_months") || "")
+      const seasonMonths = f.get("season_months");
+      const months = (typeof seasonMonths === "string" ? seasonMonths : "")
         .split(",").map((month) => Number(month.trim())).filter(Boolean);
       if (months.some((month) => month < 1 || month > 12)) throw new Error("Saisonmonate müssen zwischen 1 und 12 liegen.");
       value.season = { months };

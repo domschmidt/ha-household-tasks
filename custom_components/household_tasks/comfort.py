@@ -21,16 +21,14 @@ _PRIORITY_WORDS = {
 }
 
 
-def parse_smart_task(
-    text: str,
-    people: dict[str, dict[str, Any]],
+def _due_parts(
+    source: str,
+    lowered: str,
     now: datetime,
-) -> dict[str, Any]:
-    """Parse a short German task phrase into an editable preview."""
-    source = " ".join(str(text).strip().split())
-    lowered = source.casefold()
+) -> tuple[Any, time, re.Match[str] | None, list[str]]:
+    """Parse the due day and clock while retaining removable tokens."""
     due_day = now.date()
-    matched_tokens: list[str] = []
+    matched_tokens = []
     if "übermorgen" in lowered:
         due_day += timedelta(days=2)
         matched_tokens.append("übermorgen")
@@ -51,35 +49,61 @@ def parse_smart_task(
     elif "abend" in lowered:
         due_time = time(19, 0)
         matched_tokens.append("Abend")
+    return due_day, due_time, time_match, matched_tokens
 
-    assignee = None
-    person_label = None
+
+def _matched_person(
+    source: str,
+    people: dict[str, dict[str, Any]],
+) -> tuple[str | None, str | None, str | None]:
+    """Return the first explicitly addressed configured person."""
     for person_id, person in people.items():
         name = str(person.get("name", person_id))
         match = re.search(rf"\b(?:an|für)\s+{re.escape(name)}\b", source, re.I)
         if match:
-            assignee = person_id
-            person_label = name
-            matched_tokens.append(match.group(0))
-            break
+            return person_id, name, match.group(0)
+    return None, None, None
+
+
+def _matched_priority(source: str) -> tuple[str, str | None]:
+    """Return a normalized priority and its matched source token."""
+    for word, value in _PRIORITY_WORDS.items():
+        match = re.search(rf"\b{word}\b", source, re.I)
+        if match:
+            return value, match.group(0)
+    return "normal", None
+
+
+def _clean_title(source: str, matched_tokens: list[str]) -> str:
+    """Remove parsed metadata from a smart-task title."""
+    title = source
+    for token in sorted(matched_tokens, key=len, reverse=True):
+        title = re.sub(re.escape(token), " ", title, flags=re.I)
+    return re.sub(r"\s+", " ", title).strip(" ,.-")
+
+
+def parse_smart_task(
+    text: str,
+    people: dict[str, dict[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    """Parse a short German task phrase into an editable preview."""
+    source = " ".join(str(text).strip().split())
+    lowered = source.casefold()
+    due_day, due_time, time_match, matched_tokens = _due_parts(source, lowered, now)
+    assignee, person_label, person_token = _matched_person(source, people)
+    if person_token:
+        matched_tokens.append(person_token)
 
     points_match = _POINTS_PATTERN.search(source)
     points = int(points_match.group(1)) if points_match else 1
     if points_match:
         matched_tokens.append(points_match.group(0))
 
-    priority = "normal"
-    for word, value in _PRIORITY_WORDS.items():
-        match = re.search(rf"\b{word}\b", source, re.I)
-        if match:
-            priority = value
-            matched_tokens.append(match.group(0))
-            break
-
-    title = source
-    for token in sorted(matched_tokens, key=len, reverse=True):
-        title = re.sub(re.escape(token), " ", title, flags=re.I)
-    title = re.sub(r"\s+", " ", title).strip(" ,.-")
+    priority, priority_token = _matched_priority(source)
+    if priority_token:
+        matched_tokens.append(priority_token)
+    title = _clean_title(source, matched_tokens)
     due = datetime.combine(due_day, due_time, tzinfo=now.tzinfo)
     if due <= now and due_day == now.date() and not time_match:
         due = now + timedelta(hours=1)
@@ -116,74 +140,95 @@ def discovery_suggestions(
         attributes = entity.get("attributes", {})
         name = str(attributes.get("friendly_name") or entity_id)
         haystack = f"{entity_id} {name} {attributes.get('device_class', '')}".casefold()
-        suggestion: dict[str, Any] | None = None
-        if domain == "sensor" and (
-            attributes.get("device_class") == "battery" or "battery" in haystack
-        ):
-            suggestion = _state_suggestion(
-                entity_id,
-                f"Batterie prüfen: {name}",
-                "below",
-                "20",
-                "high",
-            )
-        elif domain == "calendar" and any(
-            word in haystack for word in ("müll", "abfall", "waste", "trash")
-        ):
-            suggestion = {
-                "kind": "calendar",
-                "entity_id": entity_id,
-                "name": f"{name} bereitstellen",
-                "reason": "Ein Abfallkalender wurde erkannt.",
-                "task": {
-                    "enabled": True,
-                    "name": f"{name} bereitstellen",
-                    "assignment": {"type": "open"},
-                    "schedule": {
-                        "type": "calendar",
-                        "entity_id": entity_id,
-                        "match": "",
-                        "offset": "-12:00:00",
-                    },
-                    "market": {"priority": "normal", "points": 1},
-                },
-            }
-        elif any(
-            word in haystack
-            for word in ("washer", "washing_machine", "waschmaschine", "dishwasher")
-        ):
-            suggestion = {
-                "kind": "appliance",
-                "entity_id": entity_id,
-                "name": f"{name} ausräumen",
-                "reason": "Ein Haushaltsgerät mit Status wurde erkannt.",
-                "task": {
-                    "enabled": True,
-                    "name": f"{name} ausräumen",
-                    "assignment": {"type": "open"},
-                    "schedule": {
-                        "type": "state_trigger",
-                        "triggers": [{"entity_id": entity_id, "to": "on"}],
-                        "skip_if_open": True,
-                        "due_after": "00:00:00",
-                    },
-                    "market": {"priority": "normal", "points": 1},
-                },
-            }
-        elif domain == "sensor" and any(
-            word in haystack for word in ("filter", "salt", "toner", "füllstand")
-        ):
-            suggestion = _state_suggestion(
-                entity_id,
-                f"{name} prüfen",
-                "below",
-                "20",
-                "normal",
-            )
+        suggestion = _entity_suggestion(entity_id, domain, attributes, name, haystack)
         if suggestion is not None:
             suggestion["id"] = f"{suggestion['kind']}:{entity_id}"
             suggestions.append(suggestion)
     return suggestions[:30]
+
+
+def _entity_suggestion(
+    entity_id: str,
+    domain: str,
+    attributes: dict[str, Any],
+    name: str,
+    haystack: str,
+) -> dict[str, Any] | None:
+    """Build the applicable suggestion for one entity."""
+    if domain == "sensor" and (
+        attributes.get("device_class") == "battery" or "battery" in haystack
+    ):
+        return _state_suggestion(
+            entity_id,
+            f"Batterie prüfen: {name}",
+            "below",
+            "20",
+            "high",
+        )
+    if domain == "calendar" and any(
+        word in haystack for word in ("müll", "abfall", "waste", "trash")
+    ):
+        return _calendar_suggestion(entity_id, name)
+    if any(
+        word in haystack
+        for word in ("washer", "washing_machine", "waschmaschine", "dishwasher")
+    ):
+        return _appliance_suggestion(entity_id, name)
+    if domain == "sensor" and any(
+        word in haystack for word in ("filter", "salt", "toner", "füllstand")
+    ):
+        return _state_suggestion(
+            entity_id,
+            f"{name} prüfen",
+            "below",
+            "20",
+            "normal",
+        )
+    return None
+
+
+def _calendar_suggestion(entity_id: str, name: str) -> dict[str, Any]:
+    """Build one waste-calendar suggestion."""
+    return {
+        "kind": "calendar",
+        "entity_id": entity_id,
+        "name": f"{name} bereitstellen",
+        "reason": "Ein Abfallkalender wurde erkannt.",
+        "task": {
+            "enabled": True,
+            "name": f"{name} bereitstellen",
+            "assignment": {"type": "open"},
+            "schedule": {
+                "type": "calendar",
+                "entity_id": entity_id,
+                "match": "",
+                "offset": "-12:00:00",
+            },
+            "market": {"priority": "normal", "points": 1},
+        },
+    }
+
+
+def _appliance_suggestion(entity_id: str, name: str) -> dict[str, Any]:
+    """Build one appliance-state suggestion."""
+    return {
+        "kind": "appliance",
+        "entity_id": entity_id,
+        "name": f"{name} ausräumen",
+        "reason": "Ein Haushaltsgerät mit Status wurde erkannt.",
+        "task": {
+            "enabled": True,
+            "name": f"{name} ausräumen",
+            "assignment": {"type": "open"},
+            "schedule": {
+                "type": "state_trigger",
+                "triggers": [{"entity_id": entity_id, "to": "on"}],
+                "skip_if_open": True,
+                "due_after": "00:00:00",
+            },
+            "market": {"priority": "normal", "points": 1},
+        },
+    }
 
 
 def _state_suggestion(

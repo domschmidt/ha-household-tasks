@@ -105,6 +105,9 @@ from .workflows import (
 
 _LOGGER = logging.getLogger(__name__)
 _PANEL_PATH = f"/{PANEL_URL}"
+_TASK_NOT_OPEN = "Die Aufgabe ist nicht mehr offen."
+_HELP_NEEDED = "Hilfe benötigt"
+_OPEN_TASK = "Aufgabe öffnen"
 
 WEEKDAYS = {
     "mon": 0,
@@ -1318,119 +1321,142 @@ class HouseholdTaskEngine:
                 }
             )
         for person_id, person in self.people.items():
-            presence = person.get("presence")
-            if presence and self.hass.states.get(presence) is None:
-                findings.append(
-                    {
-                        "severity": "warning",
-                        "code": "presence_missing",
-                        "person_id": person_id,
-                        "message": f"Anwesenheits-Entität {presence} fehlt.",
-                        "action": {"type": "edit_person", "person_id": person_id},
-                    }
-                )
-            notify = str(person.get("notify", "")).removeprefix("notify.")
-            if notify and not self.hass.services.has_service("notify", notify):
-                findings.append(
-                    {
-                        "severity": "critical",
-                        "code": "notify_missing",
-                        "person_id": person_id,
-                        "message": f"Benachrichtigungsdienst notify.{notify} fehlt.",
-                        "action": {"type": "edit_person", "person_id": person_id},
-                    }
-                )
+            findings.extend(self._person_health_findings(person_id, person))
         for task_id, task in self.tasks.items():
-            if task.get("schedule", {}).get(
-                "type"
-            ) == "forecast_trigger" and not self.hass.services.has_service(
-                "weather", "get_forecasts"
-            ):
-                findings.append(
-                    {
-                        "severity": "critical",
-                        "code": "forecast_service_missing",
-                        "task_id": task_id,
-                        "message": (
-                            "Der Home-Assistant-Dienst weather.get_forecasts "
-                            "ist nicht verfügbar."
-                        ),
-                        "action": {"type": "edit_task", "task_id": task_id},
-                    }
-                )
-            for condition in task.get("weather", {}).get("conditions", []):
-                weather_entity = condition.get("entity_id")
-                if weather_entity and self.hass.states.get(weather_entity) is None:
-                    findings.append(
-                        {
-                            "severity": "warning",
-                            "code": "weather_entity_missing",
-                            "task_id": task_id,
-                            "message": f"Wetter-Entität {weather_entity} fehlt.",
-                            "action": {"type": "edit_task", "task_id": task_id},
-                        }
-                    )
-            device_entity = task.get("device", {}).get("entity_id")
-            if device_entity and self.hass.states.get(device_entity) is None:
-                findings.append(
-                    {
-                        "severity": "warning",
-                        "code": "device_entity_missing",
-                        "task_id": task_id,
-                        "message": f"Geräteakten-Entität {device_entity} fehlt.",
-                        "action": {"type": "edit_task", "task_id": task_id},
-                    }
-                )
-            season_entity = task.get("season", {}).get("entity_id")
-            if season_entity and self.hass.states.get(season_entity) is None:
-                findings.append(
-                    {
-                        "severity": "warning",
-                        "code": "season_entity_missing",
-                        "task_id": task_id,
-                        "message": f"Saisonale Entität {season_entity} fehlt.",
-                        "action": {"type": "edit_task", "task_id": task_id},
-                    }
-                )
-            tag_id = task.get("nfc", {}).get("tag_id")
-            if tag_id:
-                findings.append(
-                    {
-                        "severity": "info",
-                        "code": "nfc_verify",
-                        "task_id": task_id,
-                        "tag_id": tag_id,
-                        "message": "NFC-Tag im Panel gegen die Home-Assistant-Registry prüfen.",
-                        "action": {"type": "edit_task", "task_id": task_id},
-                    }
-                )
-        for cycle in dependency_cycles(self.tasks):
+            findings.extend(self._task_health_findings(task_id, task))
+        findings.extend(self._dependency_health_findings())
+        return {
+            "status": self._health_status(findings),
+            "findings": findings,
+            "checked_at": dt_util.utcnow().isoformat(),
+        }
+
+    def _person_health_findings(
+        self,
+        person_id: str,
+        person: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return actionable findings for one configured person."""
+        findings = []
+        presence = person.get("presence")
+        if presence and self.hass.states.get(presence) is None:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "code": "presence_missing",
+                    "person_id": person_id,
+                    "message": f"Anwesenheits-Entität {presence} fehlt.",
+                    "action": {"type": "edit_person", "person_id": person_id},
+                }
+            )
+        notify = str(person.get("notify", "")).removeprefix("notify.")
+        if notify and not self.hass.services.has_service("notify", notify):
             findings.append(
                 {
                     "severity": "critical",
-                    "code": "dependency_cycle",
-                    "task_ids": cycle,
-                    "message": f"Zyklische Folgeaufgaben: {' → '.join(cycle)}",
-                    "action": {"type": "edit_task", "task_id": cycle[0]},
+                    "code": "notify_missing",
+                    "person_id": person_id,
+                    "message": f"Benachrichtigungsdienst notify.{notify} fehlt.",
+                    "action": {"type": "edit_person", "person_id": person_id},
                 }
             )
-        for finding in configuration_conflicts(self.tasks):
-            finding = deepcopy(finding)
+        return findings
+
+    def _task_health_findings(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return actionable findings for one task template."""
+        findings = []
+        edit_action = {"type": "edit_task", "task_id": task_id}
+        if task.get("schedule", {}).get(
+            "type"
+        ) == "forecast_trigger" and not self.hass.services.has_service(
+            "weather", "get_forecasts"
+        ):
+            findings.append(
+                {
+                    "severity": "critical",
+                    "code": "forecast_service_missing",
+                    "task_id": task_id,
+                    "message": (
+                        "Der Home-Assistant-Dienst weather.get_forecasts "
+                        "ist nicht verfügbar."
+                    ),
+                    "action": edit_action,
+                }
+            )
+        for condition in task.get("weather", {}).get("conditions", []):
+            weather_entity = condition.get("entity_id")
+            if weather_entity and self.hass.states.get(weather_entity) is None:
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": "weather_entity_missing",
+                        "task_id": task_id,
+                        "message": f"Wetter-Entität {weather_entity} fehlt.",
+                        "action": edit_action,
+                    }
+                )
+        for entity_type, entity_id in (
+            ("device", task.get("device", {}).get("entity_id")),
+            ("season", task.get("season", {}).get("entity_id")),
+        ):
+            if entity_id and self.hass.states.get(entity_id) is None:
+                label = "Geräteakten" if entity_type == "device" else "Saisonale"
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": f"{entity_type}_entity_missing",
+                        "task_id": task_id,
+                        "message": f"{label} Entität {entity_id} fehlt.",
+                        "action": edit_action,
+                    }
+                )
+        tag_id = task.get("nfc", {}).get("tag_id")
+        if tag_id:
+            findings.append(
+                {
+                    "severity": "info",
+                    "code": "nfc_verify",
+                    "task_id": task_id,
+                    "tag_id": tag_id,
+                    "message": "NFC-Tag im Panel gegen die Home-Assistant-Registry prüfen.",
+                    "action": edit_action,
+                }
+            )
+        return findings
+
+    def _dependency_health_findings(self) -> list[dict[str, Any]]:
+        """Return cycle and conflict findings with direct edit actions."""
+        findings = [
+            {
+                "severity": "critical",
+                "code": "dependency_cycle",
+                "task_ids": cycle,
+                "message": f"Zyklische Folgeaufgaben: {' → '.join(cycle)}",
+                "action": {"type": "edit_task", "task_id": cycle[0]},
+            }
+            for cycle in dependency_cycles(self.tasks)
+        ]
+        for source in configuration_conflicts(self.tasks):
+            finding = deepcopy(source)
             task_ids = finding.get("task_ids", [])
             if task_ids:
                 finding["action"] = {"type": "edit_task", "task_id": task_ids[-1]}
             findings.append(finding)
-        return {
-            "status": (
-                "critical"
-                if any(item["severity"] == "critical" for item in findings)
-                else "warning"
-                if any(item["severity"] == "warning" for item in findings)
-                else "ok"
-            ),
-            "findings": findings,
-            "checked_at": dt_util.utcnow().isoformat(),
-        }
+        return findings
+
+    @staticmethod
+    def _health_status(findings: list[dict[str, Any]]) -> str:
+        """Return the highest health severity without nested conditions."""
+        severities = {finding["severity"] for finding in findings}
+        if "critical" in severities:
+            return "critical"
+        if "warning" in severities:
+            return "warning"
+        return "ok"
 
     def discovery_suggestions(self) -> list[dict[str, Any]]:
         """Return installable suggestions derived from local HA entity metadata."""
@@ -1557,7 +1583,7 @@ class HouseholdTaskEngine:
         async with self.lock:
             occurrence = self.state["occurrences"].get(occurrence_id)
             if not occurrence or occurrence.get("resolved"):
-                raise vol.Invalid("Die Aufgabe ist nicht mehr offen.")
+                raise vol.Invalid(_TASK_NOT_OPEN)
             try:
                 move = parse_natural_move(instruction, dt_util.now(), self.people)
             except ValueError as err:
@@ -1837,6 +1863,59 @@ class HouseholdTaskEngine:
             }
             await self._save()
 
+    def _apply_gallery_assignment(
+        self,
+        task: dict[str, Any],
+        assignee: str | None,
+        people: list[str] | None,
+    ) -> None:
+        """Apply a validated household-specific gallery assignment."""
+        assignment_type = task.get("assignment", {}).get("type", "fixed")
+        if assignment_type == "fixed":
+            if assignee not in self.people:
+                raise vol.Invalid("Template needs a configured assignee")
+            task["assignee"] = assignee
+            return
+        if assignment_type == "per_person":
+            candidates = people or ([assignee] if assignee else [])
+            selected = list(
+                dict.fromkeys(person for person in candidates if person in self.people)
+            )
+            if not selected:
+                raise vol.Invalid(
+                    "Template needs at least one configured target person"
+                )
+            task["assignment"]["people"] = selected
+            return
+        if assignee in self.people:
+            task["assignment"]["people"] = [assignee]
+
+    def _apply_gallery_entities(
+        self,
+        task: dict[str, Any],
+        entity_id: str | None,
+    ) -> None:
+        """Fill required trigger and weather entities in a gallery copy."""
+        entity_available = bool(
+            entity_id and self.hass.states.get(entity_id) is not None
+        )
+        triggers = task.get("schedule", {}).get("triggers", [])
+        if triggers and not triggers[0].get("entity_id"):
+            if not entity_available:
+                raise vol.Invalid("Template needs an available trigger entity")
+            triggers[0]["entity_id"] = entity_id
+        missing_weather = [
+            condition
+            for condition in task.get("weather", {}).get("conditions", [])
+            if not condition.get("entity_id")
+        ]
+        if not missing_weather:
+            return
+        if not entity_available:
+            raise vol.Invalid("Template needs an available weather entity")
+        for condition in missing_weather:
+            condition["entity_id"] = entity_id
+
     async def async_install_gallery_template(
         self,
         template_id: str,
@@ -1853,40 +1932,8 @@ class HouseholdTaskEngine:
         if entry is None:
             raise vol.Invalid("Unknown gallery template")
         task = deepcopy(entry["task"])
-        assignment_type = task.get("assignment", {}).get("type", "fixed")
-        if assignment_type == "fixed":
-            if assignee not in self.people:
-                raise vol.Invalid("Template needs a configured assignee")
-            task["assignee"] = assignee
-        elif assignment_type == "per_person":
-            selected = list(
-                dict.fromkeys(
-                    person
-                    for person in (people or ([assignee] if assignee else []))
-                    if person in self.people
-                )
-            )
-            if not selected:
-                raise vol.Invalid(
-                    "Template needs at least one configured target person"
-                )
-            task["assignment"]["people"] = selected
-        elif assignee in self.people:
-            task["assignment"]["people"] = [assignee]
-        triggers = task.get("schedule", {}).get("triggers", [])
-        if triggers and not triggers[0].get("entity_id"):
-            if not entity_id or self.hass.states.get(entity_id) is None:
-                raise vol.Invalid("Template needs an available trigger entity")
-            triggers[0]["entity_id"] = entity_id
-        weather_conditions = task.get("weather", {}).get("conditions", [])
-        if weather_conditions and any(
-            not condition.get("entity_id") for condition in weather_conditions
-        ):
-            if not entity_id or self.hass.states.get(entity_id) is None:
-                raise vol.Invalid("Template needs an available weather entity")
-            for condition in weather_conditions:
-                if not condition.get("entity_id"):
-                    condition["entity_id"] = entity_id
+        self._apply_gallery_assignment(task, assignee, people)
+        self._apply_gallery_entities(task, entity_id)
         await self.async_save_task(task_id, task)
 
     async def async_undo_last(self) -> str:
@@ -1896,59 +1943,66 @@ class HouseholdTaskEngine:
             if not stack:
                 raise vol.Invalid("Keine Aktion zum Rückgängigmachen vorhanden.")
             entry = stack.pop()
-            kind = entry["kind"]
-            payload = entry["payload"]
-            if kind == "config":
-                self._apply_editable_config(payload["config"])
-                self.state["ui_config"] = self._editable_config()
-                self._validate_config()
-                self._refresh_state_listener()
-            elif kind == "handovers":
-                self.state["handovers"] = deepcopy(payload["handovers"])
-            elif kind == "household_mode":
-                self.state["household_mode"] = deepcopy(payload["mode"])
-            elif kind == "complete":
-                occurrence_id = payload["occurrence_id"]
-                occurrence = deepcopy(payload["occurrence"])
-                self.state["occurrences"][occurrence_id] = occurrence
-                person_id = payload.get("completed_by")
-                points = int(payload.get("points", 0))
-                if person_id in self.people and points:
-                    scores = self.state.setdefault("scores", {})
-                    scores[person_id] = max(0, int(scores.get(person_id, 0)) - points)
-                uid = occurrence.get("uid")
-                if uid:
-                    await self.hass.services.async_call(
-                        "todo",
-                        "update_item",
-                        {
-                            "entity_id": self.todo_entity,
-                            "item": uid,
-                            "status": "needs_action",
-                        },
-                        blocking=True,
-                    )
-                for created_id in payload.get("created_occurrences", []):
-                    created = self.state["occurrences"].pop(created_id, None)
-                    if created and created.get("uid"):
-                        await self.hass.services.async_call(
-                            "todo",
-                            "update_item",
-                            {
-                                "entity_id": self.todo_entity,
-                                "item": created["uid"],
-                                "status": "completed",
-                            },
-                            blocking=True,
-                        )
-            elif kind == "seasonal_executions":
-                self.state.setdefault("seasonal_executions", {}).update(
-                    deepcopy(payload["entries"])
-                )
-            else:
-                raise vol.Invalid("Diese Aktion kann nicht rückgängig gemacht werden.")
+            await self._apply_undo_entry(entry)
             await self._save()
             return str(entry["label"])
+
+    async def _apply_undo_entry(self, entry: dict[str, Any]) -> None:
+        """Apply one validated undo record."""
+        kind = entry["kind"]
+        payload = entry["payload"]
+        if kind == "config":
+            self._apply_editable_config(payload["config"])
+            self.state["ui_config"] = self._editable_config()
+            self._validate_config()
+            self._refresh_state_listener()
+            return
+        if kind == "handovers":
+            self.state["handovers"] = deepcopy(payload["handovers"])
+            return
+        if kind == "household_mode":
+            self.state["household_mode"] = deepcopy(payload["mode"])
+            return
+        if kind == "complete":
+            await self._undo_completion(payload)
+            return
+        if kind == "seasonal_executions":
+            self.state.setdefault("seasonal_executions", {}).update(
+                deepcopy(payload["entries"])
+            )
+            return
+        raise vol.Invalid("Diese Aktion kann nicht rückgängig gemacht werden.")
+
+    async def _undo_completion(self, payload: dict[str, Any]) -> None:
+        """Restore a completed occurrence, score, and native to-do state."""
+        occurrence_id = payload["occurrence_id"]
+        occurrence = deepcopy(payload["occurrence"])
+        self.state["occurrences"][occurrence_id] = occurrence
+        person_id = payload.get("completed_by")
+        points = int(payload.get("points", 0))
+        if person_id in self.people and points:
+            scores = self.state.setdefault("scores", {})
+            scores[person_id] = max(0, int(scores.get(person_id, 0)) - points)
+        await self._set_native_status(occurrence.get("uid"), "needs_action")
+        for created_id in payload.get("created_occurrences", []):
+            created = self.state["occurrences"].pop(created_id, None)
+            if created:
+                await self._set_native_status(created.get("uid"), "completed")
+
+    async def _set_native_status(self, uid: str | None, status: str) -> None:
+        """Update one native item when an undo record contains its UID."""
+        if not uid:
+            return
+        await self.hass.services.async_call(
+            "todo",
+            "update_item",
+            {
+                "entity_id": self.todo_entity,
+                "item": uid,
+                "status": status,
+            },
+            blocking=True,
+        )
 
     async def async_reset_seasonal_executions(self, task_id: str) -> int:
         """Reset all persisted season targets for one configured rule."""
@@ -2010,63 +2064,114 @@ class HouseholdTaskEngine:
             if result["calendar_events"]:
                 result["next_due"] = result["calendar_events"][0]["due"]
         elif schedule_type == "forecast_trigger":
-            forecast = await self._forecast_decision(task, now, scenario=scenario)
-            result["forecast"] = forecast
-            result["weather"] = forecast
-            matched = forecast.get("matched_period")
-            matched_reference = None
-            if matched:
-                matched_reference = dt_util.parse_datetime(matched["datetime"])
-                if matched_reference is not None:
-                    matched_reference = dt_util.as_local(matched_reference)
-                    result["season"] = self._season_decision(task, matched_reference)
-                activation = forecast_activation(
-                    matched["datetime"],
-                    lead_days=int(schedule.get("lead_days", 1)),
-                    activation_time=self._parse_time(schedule.get("time", "18:00:00")),
-                    zone=ZoneInfo(self.hass.config.time_zone),
-                )
-                result["next_due"] = activation.isoformat()
-            for target in self._fanout_targets(task):
-                repetition = self._seasonal_execution_decision(
-                    task_id or "__preview__",
-                    task,
-                    matched_reference or now,
-                    target,
-                )
-                effective = self._active_handover_target(target)
-                result["planned_occurrences"].append(
-                    {
-                        "target_person": target,
-                        "target_name": self.people.get(target, {}).get("name", target),
-                        "assignee": effective,
-                        "assignee_name": self.people.get(effective, {}).get(
-                            "name", effective
-                        ),
-                        "would_create": bool(
-                            forecast["allowed"]
-                            and result["mode"]["allowed"]
-                            and result["season"]["allowed"]
-                            and repetition["allowed"]
-                        ),
-                        "repetition": repetition,
-                    }
-                )
-            result["trace"] = self._forecast_trace(task, result)
+            await self._apply_forecast_preview(
+                result,
+                task,
+                task_id or "__preview__",
+                now,
+                scenario,
+            )
 
         if schedule_type in {"state_trigger", "daily_after_state"}:
             result["state_triggers"] = self._preview_state_triggers(schedule)
+        fanout_allowed = True
+        if schedule_type == "forecast_trigger":
+            fanout_allowed = any(
+                item["would_create"] for item in result["planned_occurrences"]
+            )
         result["would_create"] = bool(
             result["mode"]["allowed"]
             and result["season"]["allowed"]
             and result["weather"]["allowed"]
-            and (
-                any(item["would_create"] for item in result["planned_occurrences"])
-                if schedule_type == "forecast_trigger"
-                else True
-            )
+            and fanout_allowed
         )
         return result
+
+    async def _apply_forecast_preview(
+        self,
+        result: dict[str, Any],
+        task: dict[str, Any],
+        task_id: str,
+        now: datetime,
+        scenario: dict[str, Any] | None,
+    ) -> None:
+        """Add forecast, activation, fan-out, and trace details to a preview."""
+        schedule = task.get("schedule", {})
+        forecast = await self._forecast_decision(task, now, scenario=scenario)
+        result["forecast"] = forecast
+        result["weather"] = forecast
+        matched = forecast.get("matched_period")
+        matched_reference = self._preview_matched_reference(result, task, matched)
+        if matched:
+            activation = forecast_activation(
+                matched["datetime"],
+                lead_days=int(schedule.get("lead_days", 1)),
+                activation_time=self._parse_time(schedule.get("time", "18:00:00")),
+                zone=ZoneInfo(self.hass.config.time_zone),
+            )
+            result["next_due"] = activation.isoformat()
+        result["planned_occurrences"] = [
+            self._planned_forecast_occurrence(
+                task_id,
+                task,
+                target,
+                matched_reference or now,
+                forecast,
+                result,
+            )
+            for target in self._fanout_targets(task)
+        ]
+        result["trace"] = self._forecast_trace(task, result)
+
+    def _preview_matched_reference(
+        self,
+        result: dict[str, Any],
+        task: dict[str, Any],
+        matched: dict[str, Any] | None,
+    ) -> datetime | None:
+        """Update preview season context from the matched forecast period."""
+        if not matched:
+            return None
+        reference = dt_util.parse_datetime(matched["datetime"])
+        if reference is None:
+            return None
+        reference = dt_util.as_local(reference)
+        result["season"] = self._season_decision(task, reference)
+        return reference
+
+    def _planned_forecast_occurrence(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        target: str,
+        reference: datetime,
+        forecast: dict[str, Any],
+        preview: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return one explainable per-person forecast plan."""
+        repetition = self._seasonal_execution_decision(
+            task_id,
+            task,
+            reference,
+            target,
+        )
+        effective = self._active_handover_target(target)
+        would_create = all(
+            (
+                forecast["allowed"],
+                preview["mode"]["allowed"],
+                preview["season"]["allowed"],
+                repetition["allowed"],
+            )
+        )
+        return {
+            "target_person": target,
+            "target_name": self.people.get(target, {}).get("name", target),
+            "assignee": effective,
+            "assignee_name": self.people.get(effective, {}).get("name", effective),
+            "would_create": would_create,
+            "repetition": repetition,
+        }
 
     async def _forecast_decision(
         self,
@@ -2085,57 +2190,15 @@ class HouseholdTaskEngine:
                 if condition.get("entity_id")
             )
         )
-        forecasts: dict[str, list[dict[str, Any]]] = {}
         if scenario:
-            scenario_date = str(
-                scenario.get("date") or (now + timedelta(days=1)).date().isoformat()
-            )
-            values = list(scenario.get("values", []))
-            by_entity: dict[str, dict[str, Any]] = {}
-            for index, condition in enumerate(weather.get("conditions", [])):
-                entity_id = str(condition.get("entity_id", ""))
-                entry = by_entity.setdefault(entity_id, {"datetime": scenario_date})
-                attribute = str(condition.get("attribute", "")).strip()
-                if attribute and index < len(values):
-                    entry[attribute] = values[index]
-            forecasts = {entity_id: [entry] for entity_id, entry in by_entity.items()}
-        elif entity_ids:
+            forecasts = self._scenario_forecasts(weather, scenario, now)
+        else:
             forecast_type = str(task.get("schedule", {}).get("forecast_type", "daily"))
-            missing = (
-                [
-                    entity_id
-                    for entity_id in entity_ids
-                    if (forecast_type, entity_id) not in cache
-                ]
-                if cache is not None
-                else entity_ids
+            forecasts = await self._load_forecasts(
+                entity_ids,
+                forecast_type,
+                cache,
             )
-            response = None
-            if missing:
-                response = await self.hass.services.async_call(
-                    "weather",
-                    "get_forecasts",
-                    {
-                        "entity_id": missing,
-                        "type": forecast_type,
-                    },
-                    blocking=True,
-                    return_response=True,
-                )
-            if cache is not None:
-                for entity_id in missing:
-                    payload = (response or {}).get(entity_id, {})
-                    cache[(forecast_type, entity_id)] = (
-                        payload.get("forecast", []) if isinstance(payload, dict) else []
-                    )
-            for entity_id in entity_ids:
-                if cache is not None:
-                    forecasts[entity_id] = cache.get((forecast_type, entity_id), [])
-                else:
-                    payload = (response or {}).get(entity_id, {})
-                    forecasts[entity_id] = (
-                        payload.get("forecast", []) if isinstance(payload, dict) else []
-                    )
         result = forecast_decision(
             weather,
             forecasts,
@@ -2146,6 +2209,73 @@ class HouseholdTaskEngine:
         if scenario:
             result["scenario"] = True
         return result
+
+    @staticmethod
+    def _scenario_forecasts(
+        weather: dict[str, Any],
+        scenario: dict[str, Any],
+        now: datetime,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Translate simulator values into Home Assistant-shaped forecasts."""
+        scenario_date = str(
+            scenario.get("date") or (now + timedelta(days=1)).date().isoformat()
+        )
+        values = list(scenario.get("values", []))
+        by_entity: dict[str, dict[str, Any]] = {}
+        for index, condition in enumerate(weather.get("conditions", [])):
+            entity_id = str(condition.get("entity_id", ""))
+            entry = by_entity.setdefault(entity_id, {"datetime": scenario_date})
+            attribute = str(condition.get("attribute", "")).strip()
+            if attribute and index < len(values):
+                entry[attribute] = values[index]
+        return {entity_id: [entry] for entity_id, entry in by_entity.items()}
+
+    async def _load_forecasts(
+        self,
+        entity_ids: list[str],
+        forecast_type: str,
+        cache: dict[tuple[str, str], list[dict[str, Any]]] | None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Load forecasts once and reuse an optional scan-local cache."""
+        if not entity_ids:
+            return {}
+        missing = entity_ids
+        if cache is not None:
+            missing = [
+                entity_id
+                for entity_id in entity_ids
+                if (forecast_type, entity_id) not in cache
+            ]
+        response = {}
+        if missing:
+            response = (
+                await self.hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {"entity_id": missing, "type": forecast_type},
+                    blocking=True,
+                    return_response=True,
+                )
+                or {}
+            )
+        if cache is not None:
+            for entity_id in missing:
+                cache[(forecast_type, entity_id)] = self._forecast_payload(
+                    response.get(entity_id)
+                )
+            return {
+                entity_id: cache.get((forecast_type, entity_id), [])
+                for entity_id in entity_ids
+            }
+        return {
+            entity_id: self._forecast_payload(response.get(entity_id))
+            for entity_id in entity_ids
+        }
+
+    @staticmethod
+    def _forecast_payload(payload: Any) -> list[dict[str, Any]]:
+        """Return a forecast array from one HA service payload."""
+        return payload.get("forecast", []) if isinstance(payload, dict) else []
 
     def _forecast_trace(
         self, task: dict[str, Any], preview: dict[str, Any]
@@ -2373,7 +2503,7 @@ class HouseholdTaskEngine:
         async with self.lock:
             occurrence = self.state["occurrences"].get(occurrence_id)
             if not occurrence or occurrence.get("resolved"):
-                raise vol.Invalid("Die Aufgabe ist nicht mehr offen.")
+                raise vol.Invalid(_TASK_NOT_OPEN)
             uid = occurrence.get("uid")
             if not uid:
                 await self._refresh_open_items()
@@ -2925,7 +3055,7 @@ class HouseholdTaskEngine:
         async with self.lock:
             occurrence = self.state["occurrences"].get(occurrence_id)
             if not occurrence or occurrence.get("resolved"):
-                raise vol.Invalid("Die Aufgabe ist nicht mehr offen.")
+                raise vol.Invalid(_TASK_NOT_OPEN)
             person_id = self._person_for_context(context)
             if person_id is None:
                 raise vol.Invalid(
@@ -2941,7 +3071,7 @@ class HouseholdTaskEngine:
         async with self.lock:
             occurrence = self.state["occurrences"].get(occurrence_id)
             if not occurrence or occurrence.get("resolved"):
-                raise vol.Invalid("Die Aufgabe ist nicht mehr offen.")
+                raise vol.Invalid(_TASK_NOT_OPEN)
             now = dt_util.now()
             if choice == "evening":
                 target = datetime.combine(
@@ -2967,7 +3097,7 @@ class HouseholdTaskEngine:
         async with self.lock:
             occurrence = self.state["occurrences"].get(occurrence_id)
             if not occurrence or occurrence.get("resolved"):
-                raise vol.Invalid("Die Aufgabe ist nicht mehr offen.")
+                raise vol.Invalid(_TASK_NOT_OPEN)
             await self._request_help(occurrence_id, occurrence)
             await self._save()
 
@@ -2976,7 +3106,7 @@ class HouseholdTaskEngine:
         async with self.lock:
             occurrence = self.state["occurrences"].get(occurrence_id)
             if not occurrence or occurrence.get("resolved"):
-                raise vol.Invalid("Die Aufgabe ist nicht mehr offen.")
+                raise vol.Invalid(_TASK_NOT_OPEN)
             if not await self._delegate_occurrence(occurrence_id, occurrence):
                 await self._open_occurrence_for_claim(
                     occurrence_id,
@@ -2999,7 +3129,7 @@ class HouseholdTaskEngine:
                 occurrence_id,
                 occurrence,
                 [helper],
-                "Hilfe benötigt",
+                _HELP_NEEDED,
                 f"{occurrence['title']}: Kannst du unterstützen?",
                 claim_help_for=helper,
             )
@@ -3316,40 +3446,62 @@ class HouseholdTaskEngine:
         matches = self.state.setdefault("weather_matches", {})
         last_created = self.state.setdefault("weather_last_created", {})
         for task_id, task in self.tasks.items():
-            schedule = task.get("schedule", {})
-            if (
-                not task.get("enabled", True)
-                or schedule.get("type") != "weather_trigger"
-            ):
-                continue
-            decision = self._weather_decision(task)
-            previous = bool(matches.get(task_id, False))
-            matches[task_id] = decision["allowed"]
-            if not decision["allowed"]:
-                continue
-            cooldown = self._parse_duration(schedule.get("cooldown", "24:00:00"))
-            last = dt_util.parse_datetime(str(last_created.get(task_id, "")))
-            cooldown_due = last is None or dt_util.as_local(last) + cooldown <= now
-            open_exists = any(
-                not occurrence.get("resolved") and occurrence.get("task_id") == task_id
-                for occurrence in self.state["occurrences"].values()
-            )
-            if schedule.get("skip_if_open", True) and open_exists:
-                continue
-            if previous and (schedule.get("skip_if_open", True) or not cooldown_due):
-                continue
-            due_after = self._parse_duration(schedule.get("due_after", "00:00:00"))
-            occurrence_id = await self._create_occurrence(
+            await self._scan_weather_task(
                 task_id,
                 task,
-                now + due_after,
+                now,
+                matches,
+                last_created,
             )
-            if occurrence_id:
-                last_created[task_id] = now.isoformat()
-            else:
-                # A matching weather edge blocked by vacation/season policy must
-                # remain retryable when that independent policy changes.
-                matches[task_id] = False
+
+    async def _scan_weather_task(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        now: datetime,
+        matches: dict[str, Any],
+        last_created: dict[str, Any],
+    ) -> None:
+        """Evaluate and potentially create one weather-triggered task."""
+        schedule = task.get("schedule", {})
+        if not task.get("enabled", True) or schedule.get("type") != "weather_trigger":
+            return
+        decision = self._weather_decision(task)
+        previous = bool(matches.get(task_id, False))
+        matches[task_id] = decision["allowed"]
+        if not decision["allowed"]:
+            return
+        cooldown = self._parse_duration(schedule.get("cooldown", "24:00:00"))
+        last = dt_util.parse_datetime(str(last_created.get(task_id, "")))
+        cooldown_due = last is None or dt_util.as_local(last) + cooldown <= now
+        skip_if_open = schedule.get("skip_if_open", True)
+        if skip_if_open and self._open_occurrence_exists(task_id):
+            return
+        if previous and (skip_if_open or not cooldown_due):
+            return
+        due_after = self._parse_duration(schedule.get("due_after", "00:00:00"))
+        occurrence_id = await self._create_occurrence(task_id, task, now + due_after)
+        if occurrence_id:
+            last_created[task_id] = now.isoformat()
+            return
+        # A matching edge blocked by another policy must remain retryable.
+        matches[task_id] = False
+
+    def _open_occurrence_exists(
+        self,
+        task_id: str,
+        target_person: str | None = None,
+    ) -> bool:
+        """Return whether one matching unresolved occurrence already exists."""
+        return any(
+            not occurrence.get("resolved")
+            and occurrence.get("task_id") == task_id
+            and (
+                target_person is None
+                or occurrence.get("target_person") == target_person
+            )
+            for occurrence in self.state["occurrences"].values()
+        )
 
     async def _scan_forecast_tasks(self, now: datetime) -> None:
         """Plan and create tasks from Home Assistant weather forecasts."""
@@ -3785,86 +3937,107 @@ class HouseholdTaskEngine:
         ):
             return
         delivered = False
-        for person_id, pending in list(queue.items()):
+        for person_id, pending in queue.items():
             if person_id not in self.people or not pending:
                 continue
             entries = list(pending.values())
-            task_count = len(entries)
             minimum = max(1, int(settings.get("minimum_tasks", 2)))
-            if task_count < minimum:
-                payloads = [
-                    {
-                        "title": entry["short_title"],
-                        "message": entry["title"],
-                        "data": {
-                            "tag": f"household_task_{entry['occurrence_id']}",
-                            "url": _PANEL_PATH,
-                            "actions": [
-                                {
-                                    "action": (
-                                        f"{ACTION_PREFIX}"
-                                        f"{entry['occurrence_id']}_{person_id}"
-                                    ),
-                                    "title": "Erledigt",
-                                    "activationMode": "background",
-                                },
-                                {
-                                    "action": "URI",
-                                    "title": "Aufgabe öffnen",
-                                    "uri": _PANEL_PATH,
-                                },
-                            ],
-                        },
-                    }
-                    for entry in entries
-                ]
-            else:
-                message = " · ".join(entry["title"] for entry in entries[:4])
-                if task_count > 4:
-                    message += f" · +{task_count - 4} weitere"
-                actions = [
-                    {
-                        "action": (
-                            f"{ACTION_PREFIX}{entry['occurrence_id']}_{person_id}"
-                        ),
-                        "title": f"✓ {entry['short_title'][:24]}",
-                        "activationMode": "background",
-                    }
-                    for entry in entries[:3]
-                ]
-                actions.append(
-                    {
-                        "action": "URI",
-                        "title": "Meine Aufgaben öffnen",
-                        "uri": _PANEL_PATH,
-                    }
-                )
-                payloads = [
-                    {
-                        "title": f"{task_count} Haushaltsaufgaben",
-                        "message": message,
-                        "data": {
-                            "tag": f"household_tasks_digest_{person_id}",
-                            "url": _PANEL_PATH,
-                            "actions": actions,
-                        },
-                    }
-                ]
-            service = self.people[person_id]["notify"].removeprefix("notify.")
-            try:
-                for payload in payloads:
-                    await self.hass.services.async_call(
-                        "notify", service, payload, blocking=True
-                    )
+            payloads = self._notification_digest_payloads(
+                person_id,
+                entries,
+                minimum,
+            )
+            if await self._send_notification_digest(person_id, payloads):
                 queue[person_id] = {}
                 delivered = True
-            except Exception:
-                _LOGGER.exception(
-                    "Could not send notification digest using %s",
-                    self.people[person_id]["notify"],
-                )
         if delivered:
             last_sent["date"] = now.date().isoformat()
+
+    @staticmethod
+    def _notification_digest_payloads(
+        person_id: str,
+        entries: list[dict[str, Any]],
+        minimum: int,
+    ) -> list[dict[str, Any]]:
+        """Build individual or bundled digest payloads."""
+        if len(entries) < minimum:
+            return [
+                {
+                    "title": entry["short_title"],
+                    "message": entry["title"],
+                    "data": {
+                        "tag": f"household_task_{entry['occurrence_id']}",
+                        "url": _PANEL_PATH,
+                        "actions": [
+                            {
+                                "action": (
+                                    f"{ACTION_PREFIX}"
+                                    f"{entry['occurrence_id']}_{person_id}"
+                                ),
+                                "title": "Erledigt",
+                                "activationMode": "background",
+                            },
+                            {
+                                "action": "URI",
+                                "title": _OPEN_TASK,
+                                "uri": _PANEL_PATH,
+                            },
+                        ],
+                    },
+                }
+                for entry in entries
+            ]
+        task_count = len(entries)
+        message = " · ".join(entry["title"] for entry in entries[:4])
+        if task_count > 4:
+            message += f" · +{task_count - 4} weitere"
+        actions = [
+            {
+                "action": f"{ACTION_PREFIX}{entry['occurrence_id']}_{person_id}",
+                "title": f"✓ {entry['short_title'][:24]}",
+                "activationMode": "background",
+            }
+            for entry in entries[:3]
+        ]
+        actions.append(
+            {
+                "action": "URI",
+                "title": "Meine Aufgaben öffnen",
+                "uri": _PANEL_PATH,
+            }
+        )
+        return [
+            {
+                "title": f"{task_count} Haushaltsaufgaben",
+                "message": message,
+                "data": {
+                    "tag": f"household_tasks_digest_{person_id}",
+                    "url": _PANEL_PATH,
+                    "actions": actions,
+                },
+            }
+        ]
+
+    async def _send_notification_digest(
+        self,
+        person_id: str,
+        payloads: list[dict[str, Any]],
+    ) -> bool:
+        """Send all payloads for one person as one transactional digest."""
+        notify_action = self.people[person_id]["notify"]
+        service = notify_action.removeprefix("notify.")
+        try:
+            for payload in payloads:
+                await self.hass.services.async_call(
+                    "notify", service, payload, blocking=True
+                )
+        except Exception:
+            _LOGGER.exception(
+                "Could not send notification digest using %s",
+                notify_action,
+            )
+            return False
+        return True
 
     async def _create_daily_state_occurrences(self) -> None:
         """Recover any latched daily tasks not yet created."""
@@ -4240,162 +4413,63 @@ class HouseholdTaskEngine:
             task.get("assignment", {}).get("type") == "per_person"
             and _target_person is None
         ):
-            first_created = None
-            for target_person in self._fanout_targets(task):
-                if task.get("schedule", {}).get("skip_if_open", True) and any(
-                    not occurrence.get("resolved")
-                    and occurrence.get("task_id") == task_id
-                    and occurrence.get("target_person") == target_person
-                    for occurrence in self.state["occurrences"].values()
-                ):
-                    continue
-                targeted_task = deepcopy(task)
-                targeted_task["assignee"] = target_person
-                targeted_task["assignment"] = {
-                    "type": "fixed",
-                    "people": [target_person],
-                    **(
-                        {"presence_required": True}
-                        if task.get("assignment", {}).get("presence_required")
-                        else {}
-                    ),
-                }
-                occurrence_id = await self._create_occurrence(
-                    task_id,
-                    targeted_task,
-                    due,
-                    event_summary=event_summary,
-                    manual=manual,
-                    context=context,
-                    prechecked_weather=prechecked_weather,
-                    creation_trace=creation_trace,
-                    rule_reference=rule_reference,
-                    _target_person=target_person,
-                )
-                first_created = first_created or occurrence_id
-            return first_created
+            return await self._create_fanout_occurrences(
+                task_id,
+                task,
+                due,
+                event_summary=event_summary,
+                manual=manual,
+                context=context,
+                prechecked_weather=prechecked_weather,
+                creation_trace=creation_trace,
+                rule_reference=rule_reference,
+            )
 
         due = dt_util.as_local(due).replace(microsecond=0)
-        identity = f"{task_id}|{due.astimezone(dt_util.UTC).isoformat()}"
-        if _target_person:
-            identity += f"|person:{_target_person}"
-        if manual:
-            identity += f"|{dt_util.utcnow().isoformat()}"
-        occurrence_id = hashlib.sha256(identity.encode()).hexdigest()[:20]
+        occurrence_id = self._occurrence_id(
+            task_id,
+            due,
+            manual=manual,
+            target_person=_target_person,
+        )
         if occurrence_id in self.state["occurrences"]:
             return occurrence_id
 
-        if not manual:
-            repetition = self._seasonal_execution_decision(
-                task_id, task, rule_reference or due, _target_person
-            )
-            if not repetition["allowed"]:
-                self._record_creation_decision(
-                    task_id,
-                    task,
-                    due,
-                    {
-                        **repetition,
-                        "target_person": _target_person,
-                    },
-                )
-                return None
-            decision = self._automatic_creation_decision(
-                task,
-                due,
-                prechecked_weather=prechecked_weather,
-                rule_reference=rule_reference,
-            )
-            if not decision["allowed"]:
-                self._record_creation_decision(
-                    task_id,
-                    task,
-                    due,
-                    {
-                        **decision,
-                        "target_person": _target_person,
-                    },
-                )
-                return None
-            if decision.get("delegate_to") in self.people:
-                task = deepcopy(task)
-                task["assignee"] = decision["delegate_to"]
-                task["assignment"] = {
-                    "type": "fixed",
-                    "people": [decision["delegate_to"]],
-                }
+        prepared = self._prepare_occurrence_task(
+            task_id,
+            task,
+            due,
+            manual=manual,
+            prechecked_weather=prechecked_weather,
+            rule_reference=rule_reference,
+            target_person=_target_person,
+        )
+        if prepared is None:
+            return None
+        task, repetition = prepared
 
         assignee, assignment_reason = self._select_assignee_with_reason(task_id, task)
-        assignee_name = (
-            self.people[assignee]["name"] if assignee in self.people else "Offen"
-        )
+        assignee_name = self.people.get(assignee, {}).get("name", "Offen")
         title = f"[{assignee_name}] {task['name']}"
-        description = task.get("description")
-        if event_summary and description:
-            description = f"{description}\nKalender: {event_summary}"
-        elif event_summary:
-            description = f"Kalender: {event_summary}"
-
-        before = await self._get_open_items()
-        data: dict[str, Any] = {
-            "entity_id": self.todo_entity,
-            "item": title,
-            "due_datetime": due.isoformat(),
-        }
-        if description:
-            data["description"] = description
-        await self.hass.services.async_call(
-            "todo", "add_item", data, blocking=True, context=context
+        uid = await self._add_native_occurrence(
+            title,
+            due,
+            self._occurrence_description(task, event_summary),
+            context,
         )
-        after = await self._get_open_items()
-        new_uids = set(after) - set(before)
-        uid = next(
-            (
-                item_uid
-                for item_uid in new_uids
-                if after[item_uid].get("summary") == title
-            ),
-            next(iter(new_uids), None),
+        occurrence = self._occurrence_record(
+            task_id,
+            task,
+            title,
+            assignee,
+            assignment_reason,
+            due,
+            uid,
+            repetition,
+            target_person=_target_person,
+            creation_trace=creation_trace,
+            rule_reference=rule_reference,
         )
-
-        occurrence = {
-            "task_id": task_id,
-            "task": deepcopy(task),
-            "title": title,
-            "assignee": assignee,
-            "assignment_reason": assignment_reason,
-            "due": due.isoformat(),
-            "uid": uid,
-            "sent_steps": [],
-            "notified_people": [],
-            "first_notification_at": None,
-            "resolved": False,
-        }
-        if _target_person:
-            occurrence["target_person"] = _target_person
-        if creation_trace:
-            occurrence["creation_trace"] = deepcopy(creation_trace)
-        if rule_reference:
-            occurrence["rule_reference"] = rule_reference.isoformat()
-        repetition = self._seasonal_execution_decision(
-            task_id, task, rule_reference or due, _target_person
-        )
-        if repetition.get("season_key"):
-            occurrence["season_key"] = repetition["season_key"]
-            occurrence["campaign_id"] = f"{task_id}:{repetition['season_key']}"
-        if task.get("schedule", {}).get("type") == "flexible_after_completion":
-            schedule = task["schedule"]
-            preferred = self._parse_duration(schedule["preferred_interval"])
-            anchor = due - preferred
-            occurrence["due_window"] = {
-                "earliest": (
-                    anchor + self._parse_duration(schedule["earliest_interval"])
-                ).isoformat(),
-                "preferred": due.isoformat(),
-                "latest": (
-                    anchor + self._parse_duration(schedule["latest_interval"])
-                ).isoformat(),
-            }
         self.state["occurrences"][occurrence_id] = occurrence
         if not manual:
             self._mark_seasonal_execution(repetition)
@@ -4411,6 +4485,210 @@ class HouseholdTaskEngine:
             )
         _LOGGER.info("Created task %s as occurrence %s", task_id, occurrence_id)
         return occurrence_id
+
+    async def _create_fanout_occurrences(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        due: datetime,
+        **options: Any,
+    ) -> str | None:
+        """Create one independent occurrence per configured target person."""
+        first_created = None
+        skip_if_open = task.get("schedule", {}).get("skip_if_open", True)
+        for target_person in self._fanout_targets(task):
+            if skip_if_open and self._open_occurrence_exists(task_id, target_person):
+                continue
+            occurrence_id = await self._create_occurrence(
+                task_id,
+                self._targeted_task(task, target_person),
+                due,
+                **options,
+                _target_person=target_person,
+            )
+            first_created = first_created or occurrence_id
+        return first_created
+
+    @staticmethod
+    def _targeted_task(
+        task: dict[str, Any],
+        target_person: str,
+    ) -> dict[str, Any]:
+        """Convert one per-person rule into a fixed targeted copy."""
+        targeted_task = deepcopy(task)
+        targeted_task["assignee"] = target_person
+        assignment = {"type": "fixed", "people": [target_person]}
+        if task.get("assignment", {}).get("presence_required"):
+            assignment["presence_required"] = True
+        targeted_task["assignment"] = assignment
+        return targeted_task
+
+    @staticmethod
+    def _occurrence_id(
+        task_id: str,
+        due: datetime,
+        *,
+        manual: bool,
+        target_person: str | None,
+    ) -> str:
+        """Build the deterministic occurrence identity."""
+        identity = f"{task_id}|{due.astimezone(dt_util.UTC).isoformat()}"
+        if target_person:
+            identity += f"|person:{target_person}"
+        if manual:
+            identity += f"|{dt_util.utcnow().isoformat()}"
+        return hashlib.sha256(identity.encode()).hexdigest()[:20]
+
+    def _prepare_occurrence_task(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        due: datetime,
+        *,
+        manual: bool,
+        prechecked_weather: dict[str, Any] | None,
+        rule_reference: datetime | None,
+        target_person: str | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Apply automatic policy decisions before native task creation."""
+        repetition = self._seasonal_execution_decision(
+            task_id,
+            task,
+            rule_reference or due,
+            target_person,
+        )
+        if manual:
+            return task, repetition
+        if not repetition["allowed"]:
+            self._record_creation_decision(
+                task_id,
+                task,
+                due,
+                {**repetition, "target_person": target_person},
+            )
+            return None
+        decision = self._automatic_creation_decision(
+            task,
+            due,
+            prechecked_weather=prechecked_weather,
+            rule_reference=rule_reference,
+        )
+        if not decision["allowed"]:
+            self._record_creation_decision(
+                task_id,
+                task,
+                due,
+                {**decision, "target_person": target_person},
+            )
+            return None
+        delegate_to = decision.get("delegate_to")
+        if delegate_to not in self.people:
+            return task, repetition
+        delegated = deepcopy(task)
+        delegated["assignee"] = delegate_to
+        delegated["assignment"] = {"type": "fixed", "people": [delegate_to]}
+        return delegated, repetition
+
+    @staticmethod
+    def _occurrence_description(
+        task: dict[str, Any],
+        event_summary: str | None,
+    ) -> str | None:
+        """Combine task and calendar descriptions."""
+        description = task.get("description")
+        if event_summary and description:
+            return f"{description}\nKalender: {event_summary}"
+        if event_summary:
+            return f"Kalender: {event_summary}"
+        return description
+
+    async def _add_native_occurrence(
+        self,
+        title: str,
+        due: datetime,
+        description: str | None,
+        context: Context | None,
+    ) -> str | None:
+        """Create a native to-do item and identify its returned UID."""
+        before = await self._get_open_items()
+        data: dict[str, Any] = {
+            "entity_id": self.todo_entity,
+            "item": title,
+            "due_datetime": due.isoformat(),
+        }
+        if description:
+            data["description"] = description
+        await self.hass.services.async_call(
+            "todo", "add_item", data, blocking=True, context=context
+        )
+        after = await self._get_open_items()
+        new_uids = set(after) - set(before)
+        matching = (
+            item_uid for item_uid in new_uids if after[item_uid].get("summary") == title
+        )
+        return next(matching, next(iter(new_uids), None))
+
+    def _occurrence_record(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        title: str,
+        assignee: str | None,
+        assignment_reason: dict[str, Any],
+        due: datetime,
+        uid: str | None,
+        repetition: dict[str, Any],
+        *,
+        target_person: str | None,
+        creation_trace: dict[str, Any] | None,
+        rule_reference: datetime | None,
+    ) -> dict[str, Any]:
+        """Build persisted occurrence metadata."""
+        occurrence = {
+            "task_id": task_id,
+            "task": deepcopy(task),
+            "title": title,
+            "assignee": assignee,
+            "assignment_reason": assignment_reason,
+            "due": due.isoformat(),
+            "uid": uid,
+            "sent_steps": [],
+            "notified_people": [],
+            "first_notification_at": None,
+            "resolved": False,
+        }
+        optional = {
+            "target_person": target_person,
+            "creation_trace": deepcopy(creation_trace) if creation_trace else None,
+            "rule_reference": rule_reference.isoformat() if rule_reference else None,
+        }
+        occurrence.update({key: value for key, value in optional.items() if value})
+        if repetition.get("season_key"):
+            occurrence["season_key"] = repetition["season_key"]
+            occurrence["campaign_id"] = f"{task_id}:{repetition['season_key']}"
+        self._add_due_window(occurrence, task, due)
+        return occurrence
+
+    def _add_due_window(
+        self,
+        occurrence: dict[str, Any],
+        task: dict[str, Any],
+        due: datetime,
+    ) -> None:
+        """Add a flexible due window when configured."""
+        schedule = task.get("schedule", {})
+        if schedule.get("type") != "flexible_after_completion":
+            return
+        anchor = due - self._parse_duration(schedule["preferred_interval"])
+        occurrence["due_window"] = {
+            "earliest": (
+                anchor + self._parse_duration(schedule["earliest_interval"])
+            ).isoformat(),
+            "preferred": due.isoformat(),
+            "latest": (
+                anchor + self._parse_duration(schedule["latest_interval"])
+            ).isoformat(),
+        }
 
     async def _refresh_open_items(self) -> None:
         open_items = await self._get_open_items()
@@ -4582,120 +4860,153 @@ class HouseholdTaskEngine:
         for person_id in dict.fromkeys(people):
             notify_action = self.people[person_id]["notify"]
             service = notify_action.removeprefix("notify.")
-            digest = self.defaults.get("notification_digest", {})
-            priority = (
-                occurrence.get("task", {}).get("market", {}).get("priority", "normal")
-            )
-            should_queue = (
-                digest.get("enabled", False)
-                and claim_help_for is None
-                and occurrence.get("assignee") is not None
-                and priority != "critical"
-                and title not in {"Hilfe benötigt", "Hilfe zugesagt"}
-            )
-            if should_queue:
-                person_queue = self.state.setdefault(
-                    "notification_queue", {}
-                ).setdefault(person_id, {})
-                person_queue[occurrence_id] = {
-                    "occurrence_id": occurrence_id,
-                    "title": message,
-                    "short_title": self._plain_occurrence_title(occurrence),
-                    "queued_at": dt_util.utcnow().isoformat(),
-                }
-                if person_id not in occurrence["notified_people"]:
-                    occurrence["notified_people"].append(person_id)
+            if self._should_queue_notification(occurrence, title, claim_help_for):
+                self._queue_notification(
+                    occurrence_id,
+                    occurrence,
+                    person_id,
+                    message,
+                )
                 delivered = True
                 continue
-            try:
-                await self.hass.services.async_call(
-                    "notify",
-                    service,
-                    {
-                        "title": title,
-                        "message": message,
-                        "data": {
-                            "tag": tag,
-                            "url": "/todo",
-                            "actions": (
-                                [
-                                    {
-                                        "action": (
-                                            f"{CLAIM_HELP_PREFIX}"
-                                            f"{occurrence_id}_{claim_help_for}"
-                                        ),
-                                        "title": "Ich helfe",
-                                        "activationMode": "background",
-                                    },
-                                    {
-                                        "action": "URI",
-                                        "title": "Aufgabe öffnen",
-                                        "uri": "/todo",
-                                    },
-                                ]
-                                if claim_help_for
-                                else [
-                                    {
-                                        "action": (
-                                            f"{CLAIM_TASK_PREFIX}"
-                                            f"{occurrence_id}_{person_id}"
-                                        ),
-                                        "title": "Übernehmen",
-                                        "activationMode": "background",
-                                    },
-                                    {
-                                        "action": "URI",
-                                        "title": "Aufgabe öffnen",
-                                        "uri": "/todo",
-                                    },
-                                ]
-                                if occurrence.get("assignee") is None
-                                else [
-                                    {
-                                        "action": (
-                                            f"{ACTION_PREFIX}{occurrence_id}_{person_id}"
-                                        ),
-                                        "title": "Erledigt",
-                                        "activationMode": "background",
-                                    },
-                                    {
-                                        "action": (
-                                            f"{SNOOZE_EVENING_PREFIX}{occurrence_id}"
-                                        ),
-                                        "title": "Heute Abend",
-                                        "activationMode": "background",
-                                    },
-                                    {
-                                        "action": (
-                                            f"{SNOOZE_TOMORROW_PREFIX}{occurrence_id}"
-                                        ),
-                                        "title": "Morgen",
-                                        "activationMode": "background",
-                                    },
-                                    {
-                                        "action": f"{DECLINE_PREFIX}{occurrence_id}",
-                                        "title": "Kann ich nicht",
-                                        "activationMode": "background",
-                                    },
-                                    {
-                                        "action": f"{HELP_PREFIX}{occurrence_id}",
-                                        "title": "Hilfe benötigt",
-                                        "activationMode": "background",
-                                    },
-                                ]
-                            ),
-                        },
-                    },
-                    blocking=True,
-                )
+            actions = self._notification_actions(
+                occurrence_id,
+                person_id,
+                occurrence.get("assignee"),
+                claim_help_for,
+            )
+            if await self._send_notification(
+                service,
+                notify_action,
+                title,
+                message,
+                tag,
+                actions,
+            ):
                 if person_id not in occurrence["notified_people"]:
                     occurrence["notified_people"].append(person_id)
                 delivered = True
-            except Exception:
-                _LOGGER.exception(
-                    "Could not notify %s using %s", person_id, notify_action
-                )
         return delivered
+
+    def _should_queue_notification(
+        self,
+        occurrence: dict[str, Any],
+        title: str,
+        claim_help_for: str | None,
+    ) -> bool:
+        """Return whether a routine reminder belongs in the digest."""
+        digest = self.defaults.get("notification_digest", {})
+        priority = (
+            occurrence.get("task", {}).get("market", {}).get("priority", "normal")
+        )
+        return bool(
+            digest.get("enabled", False)
+            and claim_help_for is None
+            and occurrence.get("assignee") is not None
+            and priority != "critical"
+            and title not in {_HELP_NEEDED, "Hilfe zugesagt"}
+        )
+
+    def _queue_notification(
+        self,
+        occurrence_id: str,
+        occurrence: dict[str, Any],
+        person_id: str,
+        message: str,
+    ) -> None:
+        """Queue one routine reminder and record its intended recipient."""
+        person_queue = self.state.setdefault("notification_queue", {}).setdefault(
+            person_id, {}
+        )
+        person_queue[occurrence_id] = {
+            "occurrence_id": occurrence_id,
+            "title": message,
+            "short_title": self._plain_occurrence_title(occurrence),
+            "queued_at": dt_util.utcnow().isoformat(),
+        }
+        if person_id not in occurrence["notified_people"]:
+            occurrence["notified_people"].append(person_id)
+
+    @staticmethod
+    def _notification_actions(
+        occurrence_id: str,
+        person_id: str,
+        assignee: str | None,
+        claim_help_for: str | None,
+    ) -> list[dict[str, Any]]:
+        """Build mobile actions for help, market, or assigned tasks."""
+        open_action = {"action": "URI", "title": _OPEN_TASK, "uri": "/todo"}
+        if claim_help_for:
+            return [
+                {
+                    "action": f"{CLAIM_HELP_PREFIX}{occurrence_id}_{claim_help_for}",
+                    "title": "Ich helfe",
+                    "activationMode": "background",
+                },
+                open_action,
+            ]
+        if assignee is None:
+            return [
+                {
+                    "action": f"{CLAIM_TASK_PREFIX}{occurrence_id}_{person_id}",
+                    "title": "Übernehmen",
+                    "activationMode": "background",
+                },
+                open_action,
+            ]
+        return [
+            {
+                "action": f"{ACTION_PREFIX}{occurrence_id}_{person_id}",
+                "title": "Erledigt",
+                "activationMode": "background",
+            },
+            {
+                "action": f"{SNOOZE_EVENING_PREFIX}{occurrence_id}",
+                "title": "Heute Abend",
+                "activationMode": "background",
+            },
+            {
+                "action": f"{SNOOZE_TOMORROW_PREFIX}{occurrence_id}",
+                "title": "Morgen",
+                "activationMode": "background",
+            },
+            {
+                "action": f"{DECLINE_PREFIX}{occurrence_id}",
+                "title": "Kann ich nicht",
+                "activationMode": "background",
+            },
+            {
+                "action": f"{HELP_PREFIX}{occurrence_id}",
+                "title": _HELP_NEEDED,
+                "activationMode": "background",
+            },
+        ]
+
+    async def _send_notification(
+        self,
+        service: str,
+        notify_action: str,
+        title: str,
+        message: str,
+        tag: str,
+        actions: list[dict[str, Any]],
+    ) -> bool:
+        """Send one actionable notification with isolated error handling."""
+        try:
+            await self.hass.services.async_call(
+                "notify",
+                service,
+                {
+                    "title": title,
+                    "message": message,
+                    "data": {"tag": tag, "url": "/todo", "actions": actions},
+                },
+                blocking=True,
+            )
+        except Exception:
+            _LOGGER.exception("Could not call notification action %s", notify_action)
+            return False
+        return True
 
     @staticmethod
     def _plain_occurrence_title(occurrence: dict[str, Any]) -> str:
