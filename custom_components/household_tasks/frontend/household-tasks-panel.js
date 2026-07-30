@@ -1921,7 +1921,7 @@ class HouseholdTasksPanel extends HTMLElement {
         <label class="full">Home-Assistant-Entität${this._entityInput("entity_id", device.entity_id || "", [], { placeholder: "sensor.gerät_status" })}</label>
         <label>Modell<input name="model" value="${this._e(device.model || "")}"></label>
         <label>Ersatzteil<input name="replacement_part" value="${this._e(device.replacement_part || "")}"></label>
-        <label class="full">Handbuch-URL<input name="manual_url" type="url" value="${this._e(device.manual_url || "")}"></label>
+        <label class="full">Handbuch-URL<input name="manual_url" type="url" pattern="https://.*" placeholder="https://…" value="${this._e(device.manual_url || "")}"></label>
         <label class="full">Notizen<textarea name="notes" rows="3">${this._e(device.notes || "")}</textarea></label>
         <div class="full modal-actions"><button type="button" class="cancel">Abbrechen</button><button class="primary">Speichern</button></div>
       </form></div></div>`;
@@ -2071,9 +2071,15 @@ class HouseholdTasksPanel extends HTMLElement {
       const needsEntity = entry.task.schedule?.triggers?.some((trigger) => !trigger.entity_id)
         || entry.task.weather?.conditions?.some((condition) => !condition.entity_id);
       modal.querySelector(".wizard-entity").classList.toggle("hidden", !needsEntity);
-      modal.querySelector(".wizard-preview").innerHTML = `<strong>Vorschau</strong>
-        <p>Person „${this._e(personNameInput.value || "…")}“ und Aufgabe „${this._e(entry.task.name)}“ werden angelegt.
-        Zeitplan: ${this._e(this._scheduleLabel(entry.task.schedule))}; Priorität: ${this._e(entry.task.market?.priority || "normal")}; ${Number(entry.task.market?.points || 0)} Punkte.</p>`;
+      const preview = modal.querySelector(".wizard-preview");
+      const heading = document.createElement("strong");
+      const description = document.createElement("p");
+      heading.textContent = "Vorschau";
+      description.textContent = `Person „${personNameInput.value || "…"}“ und Aufgabe „${entry.task.name}“ werden angelegt. `
+        + `Zeitplan: ${this._scheduleLabel(entry.task.schedule)}; `
+        + `Priorität: ${entry.task.market?.priority || "normal"}; `
+        + `${Number(entry.task.market?.points || 0)} Punkte.`;
+      preview.replaceChildren(heading, description);
     };
     templateSelect.onchange = updatePreview;
     personNameInput.oninput = updatePreview;

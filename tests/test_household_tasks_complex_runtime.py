@@ -1,6 +1,7 @@
 """Runtime tests for chained tasks and combined weather configurations."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
@@ -554,3 +555,388 @@ async def test_forecast_configuration_validation_is_actionable(hass, mutation, m
 
     with pytest.raises(vol.Invalid, match=message):
         HouseholdTaskEngine(hass, config)._validate_config()
+
+
+async def test_advanced_task_operations_cover_success_and_failure_paths(hass):
+    """Favorites, batches, stacks, moves, and attachments remain transactional."""
+    engine, items = await _engine_with_todo(
+        hass,
+        {"laundry": _manual("Laundry"), "dishes": _manual("Dishes")},
+    )
+
+    assert await engine.async_toggle_favorite("alex", "laundry")
+    assert not await engine.async_toggle_favorite("alex", "laundry")
+    with pytest.raises(vol.Invalid, match="Unknown person"):
+        await engine.async_toggle_favorite("nobody", "laundry")
+    with pytest.raises(vol.Invalid, match="Unknown task"):
+        await engine.async_toggle_favorite("alex", "missing")
+
+    previews = [
+        {
+            "name": "Laundry",
+            "assignee": "alex",
+            "due": "2026-08-01T18:00:00+00:00",
+            "priority": "normal",
+            "points": 1,
+            "missing": [],
+        },
+        {
+            "name": "Incomplete",
+            "assignee": None,
+            "due": "2026-08-01T18:00:00+00:00",
+            "priority": "normal",
+            "points": 1,
+            "missing": ["assignee"],
+        },
+        {
+            "name": "Rejected",
+            "assignee": "alex",
+            "due": "2026-08-01T18:00:00+00:00",
+            "priority": "normal",
+            "points": 1,
+            "missing": [],
+        },
+    ]
+    create_ad_hoc = AsyncMock(side_effect=[None, vol.Invalid("creation rejected")])
+    with (
+        patch.object(engine, "preview_task_batch", return_value=previews),
+        patch.object(engine, "async_create_ad_hoc", create_ad_hoc),
+    ):
+        batch = await engine.async_create_batch("Laundry; Incomplete; Rejected")
+    assert batch["created"] == [0]
+    assert [item["index"] for item in batch["failed"]] == [1, 2]
+
+    await engine.async_create_manual("laundry")
+    occurrence_id = next(iter(engine.state["occurrences"]))
+    move = await engine.async_move_occurrence(occurrence_id, "wenn Alex zuhause ist")
+    assert move["kind"] == "presence"
+    assert engine.state["occurrences"][occurrence_id]["waiting_for"]["person_id"] == (
+        "alex"
+    )
+    with pytest.raises(vol.Invalid):
+        await engine.async_move_occurrence(occurrence_id, "nonsense")
+
+    attachment = await engine.async_add_attachment(
+        occurrence_id, "", "image/png", "aGVsbG8="
+    )
+    assert attachment["name"] == "Anhang"
+    assert engine.attachment_content(occurrence_id, attachment["id"])["size"] == 5
+    with pytest.raises(vol.Invalid, match="Nur JPG"):
+        await engine.async_add_attachment(
+            occurrence_id, "bad.exe", "application/octet-stream", "aGVsbG8="
+        )
+    with pytest.raises(vol.Invalid, match="ungültig"):
+        await engine.async_add_attachment(
+            occurrence_id, "bad.png", "image/png", "not-base64"
+        )
+    with pytest.raises(vol.Invalid, match="Anhang nicht gefunden"):
+        engine.attachment_content(occurrence_id, "missing")
+    await engine.async_delete_attachment(occurrence_id, attachment["id"])
+    with pytest.raises(vol.Invalid, match="Anhang nicht gefunden"):
+        await engine.async_delete_attachment(occurrence_id, attachment["id"])
+
+    with pytest.raises(vol.Invalid, match="Name und Vorlagen"):
+        await engine.async_save_task_stack("empty", {"name": "", "task_ids": []})
+    with pytest.raises(vol.Invalid, match="Unbekannte Vorlagen"):
+        await engine.async_save_task_stack(
+            "broken", {"name": "Broken", "task_ids": ["missing"]}
+        )
+    await engine.async_save_task_stack(
+        "evening",
+        {"name": " Evening ", "task_ids": ["laundry", "dishes", "laundry"]},
+    )
+    created = await engine.async_launch_task_stack("evening")
+    assert len(created) == 2
+    assert len(items) == 3
+    await engine.async_save_task_stack("evening", None)
+    with pytest.raises(vol.Invalid, match="Unbekannter Aufgabenstapel"):
+        await engine.async_launch_task_stack("evening")
+
+    with (
+        patch.object(engine, "async_complete_occurrence", new=AsyncMock()),
+        patch.object(engine, "async_snooze_occurrence", new=AsyncMock()),
+        patch.object(engine, "async_request_help", new=AsyncMock()),
+        patch.object(engine, "async_decline_occurrence", new=AsyncMock()),
+    ):
+        for action in ("complete", "tomorrow", "help", "decline"):
+            result = await engine.async_bulk_occurrences(["one", "one"], action)
+            assert result["completed"] == ["one"]
+        rejected = await engine.async_bulk_occurrences(["one"], "unsupported")
+    assert rejected["failed"]["one"] == "Unknown bulk action"
+
+
+async def test_modes_gallery_discovery_and_undo_are_explainable(hass):
+    """Advanced configuration helpers validate local context and support undo."""
+    people = {
+        "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
+        "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
+    }
+    engine, _items = await _engine_with_todo(
+        hass, {"laundry": _manual("Laundry")}, people
+    )
+    hass.states.async_set(
+        "sensor.phone_battery",
+        "18",
+        {"friendly_name": "Phone", "device_class": "battery"},
+    )
+    hass.states.async_set(
+        "binary_sensor.washing_machine",
+        "on",
+        {"friendly_name": "Washing machine"},
+    )
+    hass.states.async_set("weather.home", "sunny", {"temperature": 20})
+
+    suggestions = engine.discovery_suggestions()
+    resource = next(item for item in suggestions if item["kind"] == "resource")
+    appliance = next(item for item in suggestions if item["kind"] == "appliance")
+    await engine.async_install_discovery_suggestion(
+        resource["id"], "phone_battery", "alex"
+    )
+    await engine.async_install_discovery_suggestion(
+        appliance["id"], "washer_done", "sam"
+    )
+    assert engine.monitors["resources"]["phone_battery"]["assignee"] == "alex"
+    assert engine.tasks["washer_done"]["assignment"]["people"] == ["sam"]
+    with pytest.raises(vol.Invalid, match="Unknown assignee"):
+        await engine.async_install_discovery_suggestion(
+            appliance["id"], "other", "nobody"
+        )
+    with pytest.raises(vol.Invalid, match="no longer available"):
+        await engine.async_install_discovery_suggestion("missing", "other", "alex")
+
+    with pytest.raises(vol.Invalid, match="Unknown household mode"):
+        await engine.async_set_household_mode("invalid")
+    with pytest.raises(vol.Invalid, match="policy"):
+        await engine.async_set_household_mode("vacation", policy="invalid")
+    with pytest.raises(vol.Invalid, match="delegate"):
+        await engine.async_set_household_mode(
+            "vacation", policy="delegate", delegate_to="nobody"
+        )
+    with pytest.raises(vol.Invalid, match="ISO"):
+        await engine.async_set_household_mode("vacation", until="not-a-date")
+    await engine.async_set_household_mode(
+        "vacation",
+        policy="delegate",
+        delegate_to="sam",
+        until=(datetime.now(UTC) + timedelta(days=2)).isoformat(),
+        note=" Holiday ",
+    )
+    assert engine.state["household_mode"]["note"] == "Holiday"
+    assert await engine.async_undo_last() == "Haushaltsmodus ändern"
+    assert engine.state["household_mode"]["mode"] == "normal"
+
+    await engine.async_install_gallery_template(
+        "first_frost_personal_vehicle",
+        "car_frost",
+        None,
+        "weather.home",
+        people=["alex", "sam", "alex", "nobody"],
+    )
+    assert engine.tasks["car_frost"]["assignment"]["people"] == ["alex", "sam"]
+    await engine.async_install_gallery_template(
+        "frostschutz", "garden_frost", "alex", "weather.home"
+    )
+    assert engine.tasks["garden_frost"]["assignee"] == "alex"
+    assert (
+        engine.tasks["garden_frost"]["weather"]["conditions"][0]["entity_id"]
+        == "weather.home"
+    )
+    with pytest.raises(vol.Invalid, match="Unknown gallery"):
+        await engine.async_install_gallery_template("missing", "missing", "alex")
+    with pytest.raises(vol.Invalid, match="target person"):
+        await engine.async_install_gallery_template(
+            "first_frost_personal_vehicle", "missing_people", None, people=[]
+        )
+    with pytest.raises(vol.Invalid, match="weather entity"):
+        await engine.async_install_gallery_template(
+            "frostschutz", "missing_weather", "alex", "weather.missing"
+        )
+
+    explanation = engine.explain_task("car_frost")
+    assert explanation["configured_candidates"] == ["alex", "sam"]
+    with pytest.raises(vol.Invalid, match="Unknown task_id"):
+        engine.explain_task("missing")
+    engine.state["undo_stack"] = []
+    with pytest.raises(vol.Invalid, match="Keine Aktion"):
+        await engine.async_undo_last()
+
+
+def test_device_manual_urls_require_https(hass):
+    """Device records never create downgrade links to insecure manuals."""
+    config = initial_config("todo.household")
+    config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
+    config["tasks"] = {
+        "valid": {
+            **_manual("Valid"),
+            "device": {
+                "entity_id": "sensor.appliance",
+                "manual_url": "https://example.com/manual.pdf",
+            },
+        }
+    }
+    hass.states.async_set("sensor.appliance", "ok")
+    HouseholdTaskEngine(hass, config)._validate_config()
+
+    config["tasks"]["valid"]["device"]["manual_url"] = "http://example.com/manual.pdf"
+    with pytest.raises(vol.Invalid, match="must use HTTPS"):
+        HouseholdTaskEngine(hass, config)._validate_config()
+
+
+def test_configuration_health_reports_actionable_combined_failures(hass):
+    """The health report explains independent failures in one deterministic pass."""
+    config = initial_config("todo.missing")
+    config["people"] = {
+        "alex": {
+            "name": "Alex",
+            "notify": "notify.mobile_app_missing",
+            "presence": "person.missing",
+        }
+    }
+    config["tasks"] = {
+        "cycle_a": {
+            **_manual("Duplicate"),
+            "nfc": {"tag_id": "tag-a"},
+            "follow_ups": [{"task_id": "cycle_b", "delay": "00:00:00"}],
+        },
+        "cycle_b": {
+            **_manual("Duplicate"),
+            "follow_ups": [{"task_id": "cycle_a", "delay": "00:00:00"}],
+        },
+        "forecast": {
+            **_manual("Forecast"),
+            "schedule": {"type": "forecast_trigger"},
+            "weather": {
+                "conditions": [
+                    {
+                        "entity_id": "weather.missing",
+                        "attribute": "templow",
+                        "condition": "below",
+                        "threshold": 0,
+                    }
+                ]
+            },
+            "device": {"entity_id": "sensor.missing_device"},
+            "season": {"entity_id": "sensor.missing_season"},
+        },
+    }
+    engine = HouseholdTaskEngine(hass, config)
+
+    health = engine.configuration_health()
+    codes = {finding["code"] for finding in health["findings"]}
+
+    assert health["status"] == "critical"
+    assert {
+        "todo_missing",
+        "presence_missing",
+        "notify_missing",
+        "forecast_service_missing",
+        "weather_entity_missing",
+        "device_entity_missing",
+        "season_entity_missing",
+        "nfc_verify",
+        "dependency_cycle",
+        "duplicate_name",
+    } <= codes
+    assert all("action" in finding for finding in health["findings"])
+
+    engine.state["household_mode"] = {
+        "mode": "vacation",
+        "until": (datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+    }
+    assert engine._current_household_mode()["mode"] == "normal"
+
+
+def test_configuration_validation_aggregates_complex_rule_errors(hass):
+    """One validation pass reports independent expert-rule mistakes together."""
+    config = initial_config("todo.household")
+    config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
+    config["tasks"] = {
+        "forecast": {
+            **_manual("Forecast"),
+            "schedule": {
+                "type": "forecast_trigger",
+                "time": "invalid",
+                "horizon_hours": 0,
+                "lead_days": 8,
+            },
+            "weather": {
+                "logic": "xor",
+                "conditions": [
+                    "invalid",
+                    {
+                        "entity_id": "invalid",
+                        "condition": "invalid",
+                        "threshold": None,
+                    },
+                ],
+            },
+        },
+        "completion": {
+            **_manual("Completion"),
+            "schedule": {
+                "type": "after_completion",
+                "interval": "00:00:00",
+                "start": "invalid",
+            },
+        },
+        "flexible": {
+            **_manual("Flexible"),
+            "schedule": {
+                "type": "flexible_after_completion",
+                "earliest_interval": "24:00:00",
+                "preferred_interval": "12:00:00",
+                "latest_interval": "bad",
+                "start": "invalid",
+            },
+        },
+        "metadata": {
+            **_manual("Metadata"),
+            "follow_ups": [
+                "invalid",
+                {"task_id": "metadata", "delay": "-01:00:00"},
+            ],
+            "market": {"priority": "urgent", "points": -1},
+            "modes": {"vacation": "invalid"},
+            "season": {
+                "months": ["invalid"],
+                "condition": "invalid",
+            },
+            "device": "invalid",
+            "repeat": {"mode": "invalid"},
+            "escalation": [
+                {
+                    "after": "invalid",
+                    "relative_to": "invalid",
+                    "action": "invalid",
+                }
+            ],
+        },
+        "invalid_sections": {
+            **_manual("Invalid sections"),
+            "follow_ups": "invalid",
+            "market": "invalid",
+            "modes": "invalid",
+            "season": "invalid",
+            "weather": "invalid",
+        },
+    }
+    config["monitors"] = {
+        "printers": {"enabled": True, "assignee": "missing"},
+        "resources": "invalid",
+    }
+    config["defaults"]["nfc_feedback"] = "invalid"
+    config["defaults"]["weekly_summary"] = "invalid"
+    config["defaults"]["notification_digest"] = "invalid"
+
+    with pytest.raises(vol.Invalid) as error:
+        HouseholdTaskEngine(hass, config)._validate_config()
+
+    message = str(error.value)
+    assert "forecast trigger needs a valid time" in message
+    assert "completion interval must be positive" in message
+    assert "flexible intervals must be positive and ordered" in message
+    assert "follow-up delay is invalid" in message
+    assert "device file must be a mapping" in message
+    assert "weather rule must be a mapping" in message
+    assert "resource monitors must be a mapping" in message
+    assert "Notification digest settings must be a mapping" in message

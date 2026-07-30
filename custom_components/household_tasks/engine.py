@@ -752,11 +752,9 @@ class HouseholdTaskEngine:
                     if entity_id and "." not in entity_id:
                         errors.append(f"task '{task_id}' device entity_id is invalid")
                     manual_url = str(device.get("manual_url", ""))
-                    if manual_url and not manual_url.startswith(
-                        ("https://", "http://")
-                    ):
+                    if manual_url and not manual_url.startswith("https://"):
                         errors.append(
-                            f"task '{task_id}' device manual_url must use HTTP(S)"
+                            f"task '{task_id}' device manual_url must use HTTPS"
                         )
 
             weather = task.get("weather")
