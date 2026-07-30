@@ -38,9 +38,13 @@ pre-commit install
 Run the quality checks before every pull request:
 
 ```bash
-pytest
-ruff check .
-ruff format --check .
+make check
+```
+
+For an isolated, cached Docker environment on Windows:
+
+```powershell
+.\scripts\docker-check.ps1
 ```
 
 For an end-to-end check, copy or symlink the integration into a dedicated Home
