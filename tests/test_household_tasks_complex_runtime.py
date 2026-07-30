@@ -552,9 +552,10 @@ async def test_forecast_configuration_validation_is_actionable(hass, mutation, m
         "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
     }
     config["tasks"] = {"forecast": task}
+    engine = HouseholdTaskEngine(hass, config)
 
     with pytest.raises(vol.Invalid, match=message):
-        HouseholdTaskEngine(hass, config)._validate_config()
+        engine._validate_config()
 
 
 async def test_advanced_task_operations_cover_success_and_failure_paths(hass):
@@ -778,8 +779,9 @@ def test_device_manual_urls_require_https(hass):
     HouseholdTaskEngine(hass, config)._validate_config()
 
     config["tasks"]["valid"]["device"]["manual_url"] = "http://example.com/manual.pdf"
+    engine = HouseholdTaskEngine(hass, config)
     with pytest.raises(vol.Invalid, match="must use HTTPS"):
-        HouseholdTaskEngine(hass, config)._validate_config()
+        engine._validate_config()
 
 
 def test_configuration_health_reports_actionable_combined_failures(hass):
@@ -927,9 +929,10 @@ def test_configuration_validation_aggregates_complex_rule_errors(hass):
     config["defaults"]["nfc_feedback"] = "invalid"
     config["defaults"]["weekly_summary"] = "invalid"
     config["defaults"]["notification_digest"] = "invalid"
+    engine = HouseholdTaskEngine(hass, config)
 
     with pytest.raises(vol.Invalid) as error:
-        HouseholdTaskEngine(hass, config)._validate_config()
+        engine._validate_config()
 
     message = str(error.value)
     assert "forecast trigger needs a valid time" in message

@@ -12,6 +12,78 @@ from .comfort import parse_smart_task
 _CLOCK = re.compile(r"\b(?:um\s*)?(\d{1,2})(?::(\d{2}))?\s*(?:uhr)?\b", re.I)
 
 
+def _iso_move(source: str, now: datetime) -> dict[str, Any] | None:
+    """Parse an explicit ISO date and optional clock."""
+    iso_date = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", source)
+    if iso_date is None:
+        return None
+    try:
+        target = datetime.combine(
+            datetime.fromisoformat(iso_date.group(1)).date(),
+            now.timetz().replace(tzinfo=None),
+            now.tzinfo,
+        ).replace(second=0, microsecond=0)
+    except ValueError as err:
+        raise ValueError("Ungültiges Datum") from err
+    clock = _CLOCK.search(source.casefold().replace(iso_date.group(1), ""))
+    if clock:
+        target = target.replace(
+            hour=int(clock.group(1)),
+            minute=int(clock.group(2) or 0),
+        )
+    return {"kind": "datetime", "due": target.isoformat(), "label": source}
+
+
+def _presence_move(
+    source: str,
+    people: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Parse a wait-until-present instruction."""
+    lowered = source.casefold()
+    presence_tokens = ("zuhause", "da ist", "heimkommt")
+    for person_id, person in people.items():
+        name = str(person.get("name", person_id))
+        if name.casefold() in lowered and any(
+            token in lowered for token in presence_tokens
+        ):
+            return {
+                "kind": "presence",
+                "person_id": person_id,
+                "label": f"Wenn {name} zuhause ist",
+            }
+    return None
+
+
+def _relative_target(lowered: str, now: datetime) -> datetime:
+    """Apply the supported relative-day expression."""
+    if "übermorgen" in lowered:
+        return now + timedelta(days=2)
+    if "morgen" in lowered:
+        return now + timedelta(days=1)
+    if "wochenende" in lowered:
+        days = (5 - now.weekday()) % 7
+        return now + timedelta(days=days or 7)
+    if "nächste woche" in lowered or "naechste woche" in lowered:
+        return now + timedelta(days=7 - now.weekday())
+    return now
+
+
+def _target_time(lowered: str, target: datetime) -> datetime:
+    """Apply an explicit or natural default clock."""
+    clock = _CLOCK.search(lowered)
+    if clock:
+        hour = int(clock.group(1))
+        minute = int(clock.group(2) or 0)
+        if hour > 23 or minute > 59:
+            raise ValueError("Ungültige Uhrzeit")
+        return target.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if "abend" in lowered or "essen" in lowered:
+        return target.replace(hour=19, minute=0, second=0, microsecond=0)
+    if any(token in lowered for token in ("morgen", "wochenende", "woche")):
+        return target.replace(hour=9, minute=0, second=0, microsecond=0)
+    raise ValueError("Kein unterstützter Zeitpunkt erkannt")
+
+
 def parse_natural_move(
     text: str,
     now: datetime,
@@ -20,58 +92,13 @@ def parse_natural_move(
     """Turn a short German move instruction into a due date or wait condition."""
     source = " ".join(text.strip().split())
     lowered = source.casefold()
-    iso_date = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", source)
-    if iso_date:
-        try:
-            target = datetime.combine(
-                datetime.fromisoformat(iso_date.group(1)).date(),
-                now.timetz().replace(tzinfo=None),
-                now.tzinfo,
-            ).replace(second=0, microsecond=0)
-        except ValueError as err:
-            raise ValueError("Ungültiges Datum") from err
-        clock = _CLOCK.search(lowered.replace(iso_date.group(1), ""))
-        if clock:
-            target = target.replace(
-                hour=int(clock.group(1)),
-                minute=int(clock.group(2) or 0),
-            )
-        return {"kind": "datetime", "due": target.isoformat(), "label": source}
-    for person_id, person in people.items():
-        name = str(person.get("name", person_id))
-        if name.casefold() in lowered and any(
-            token in lowered for token in ("zuhause", "da ist", "heimkommt")
-        ):
-            return {
-                "kind": "presence",
-                "person_id": person_id,
-                "label": f"Wenn {name} zuhause ist",
-            }
-
-    target = now
-    if "übermorgen" in lowered:
-        target += timedelta(days=2)
-    elif "morgen" in lowered:
-        target += timedelta(days=1)
-    elif "wochenende" in lowered:
-        days = (5 - target.weekday()) % 7
-        target += timedelta(days=days or 7)
-    elif "nächste woche" in lowered or "naechste woche" in lowered:
-        target += timedelta(days=7 - target.weekday())
-
-    clock = _CLOCK.search(lowered)
-    if clock:
-        hour = int(clock.group(1))
-        minute = int(clock.group(2) or 0)
-        if hour > 23 or minute > 59:
-            raise ValueError("Ungültige Uhrzeit")
-        target = target.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    elif "abend" in lowered or "essen" in lowered:
-        target = target.replace(hour=19, minute=0, second=0, microsecond=0)
-    elif "morgen" in lowered or "wochenende" in lowered or "woche" in lowered:
-        target = target.replace(hour=9, minute=0, second=0, microsecond=0)
-    else:
-        raise ValueError("Kein unterstützter Zeitpunkt erkannt")
+    explicit = _iso_move(source, now)
+    if explicit is not None:
+        return explicit
+    presence = _presence_move(source, people)
+    if presence is not None:
+        return presence
+    target = _target_time(lowered, _relative_target(lowered, now))
     if target <= now and not any(
         token in lowered for token in ("morgen", "übermorgen", "wochenende", "woche")
     ):
@@ -96,38 +123,55 @@ def habit_suggestions(
     people: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """Learn transparent local defaults from completed task history."""
-    samples: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for occurrence in occurrences.values():
-        task_id = occurrence.get("task_id")
-        if (
-            occurrence.get("resolved")
-            and occurrence.get("resolution_reason") == "completed"
-            and task_id
-            and task_id != "__adhoc__"
-        ):
-            samples[task_id].append(occurrence)
+    samples = _completed_samples(occurrences)
     result = {}
     for task_id, items in samples.items():
         if len(items) < 2:
             continue
-        assignees = [
-            item.get("completed_by") or item.get("assignee")
-            for item in items
-            if (item.get("completed_by") or item.get("assignee")) in people
-        ]
-        hours = []
-        for item in items:
-            completed = _datetime(item.get("resolved_at"))
-            if completed:
-                hours.append(completed.hour)
-        result[task_id] = {
-            "samples": len(items),
-            "assignee": Counter(assignees).most_common(1)[0][0] if assignees else None,
-            "hour": round(sum(hours) / len(hours)) if hours else None,
-            "confidence": min(0.95, 0.45 + len(items) * 0.1),
-            "explanation": "Lokal aus bisherigen Erledigungen abgeleitet.",
-        }
+        result[task_id] = _habit_result(items, people)
     return result
+
+
+def _completed_samples(
+    occurrences: dict[str, dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Group relevant completed occurrences by reusable task."""
+    samples: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for occurrence in occurrences.values():
+        task_id = occurrence.get("task_id")
+        completed = (
+            occurrence.get("resolved")
+            and occurrence.get("resolution_reason") == "completed"
+        )
+        if completed and task_id and task_id != "__adhoc__":
+            samples[task_id].append(occurrence)
+    return samples
+
+
+def _habit_result(
+    items: list[dict[str, Any]],
+    people: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build one transparent suggestion from completed samples."""
+    assignees = [
+        item.get("completed_by") or item.get("assignee")
+        for item in items
+        if (item.get("completed_by") or item.get("assignee")) in people
+    ]
+    hours = []
+    for item in items:
+        completed = _datetime(item.get("resolved_at"))
+        if completed:
+            hours.append(completed.hour)
+    assignee = Counter(assignees).most_common(1)[0][0] if assignees else None
+    hour = round(sum(hours) / len(hours)) if hours else None
+    return {
+        "samples": len(items),
+        "assignee": assignee,
+        "hour": hour,
+        "confidence": min(0.95, 0.45 + len(items) * 0.1),
+        "explanation": "Lokal aus bisherigen Erledigungen abgeleitet.",
+    }
 
 
 def configuration_conflicts(tasks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -181,7 +225,12 @@ def schedule_projection(task: dict[str, Any]) -> dict[str, Any]:
         "after_completion": _duration_rate(schedule.get("interval")),
         "flexible_after_completion": _duration_rate(schedule.get("preferred_interval")),
     }.get(schedule_type)
-    risk = "unknown" if per_week is None else "high" if per_week > 14 else "normal"
+    if per_week is None:
+        risk = "unknown"
+    elif per_week > 14:
+        risk = "high"
+    else:
+        risk = "normal"
     return {
         "per_week": round(per_week, 2) if per_week is not None else None,
         "risk": risk,

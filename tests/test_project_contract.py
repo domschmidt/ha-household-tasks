@@ -103,7 +103,7 @@ class ProjectContractTests(unittest.TestCase):
         self.assertIn('setAttribute("aria-modal", "true")', panel)
         self.assertIn('setAttribute("aria-live"', panel)
         self.assertIn('event.key === "Escape"', panel)
-        self.assertIn('hasOwnProperty.call(this, "hass")', panel)
+        self.assertIn('Object.hasOwn(this, "hass")', panel)
         self.assertIn("event.stopImmediatePropagation()", panel)
         self.assertIn("new URL(import.meta.url)", panel)
         self.assertIn("encodeURIComponent(frontendVersion)", panel)

@@ -24,6 +24,64 @@ def default_household_mode() -> dict[str, Any]:
     }
 
 
+def _guest_decision(task_modes: dict[str, Any]) -> dict[str, Any]:
+    """Return guest-mode eligibility."""
+    allowed = not task_modes.get("skip_in_guest", False)
+    return {
+        "allowed": allowed,
+        "code": "guest_allowed" if allowed else "guest_skipped",
+        "message": (
+            "Die Aufgabe ist im Gastmodus aktiv."
+            if allowed
+            else "Die Aufgabe ist im Gastmodus deaktiviert."
+        ),
+    }
+
+
+def _vacation_decision(
+    behavior: str,
+    priority: str,
+    mode: dict[str, Any],
+) -> dict[str, Any]:
+    """Return vacation-mode eligibility for one configured behavior."""
+    if behavior == "always":
+        return {
+            "allowed": True,
+            "code": "vacation_always",
+            "message": "Die Aufgabe bleibt im Urlaubsmodus aktiv.",
+        }
+    if behavior == "reduce":
+        allowed = priority in {"high", "critical"}
+        return {
+            "allowed": allowed,
+            "code": "vacation_essential" if allowed else "vacation_reduced",
+            "message": (
+                "Die Aufgabe bleibt wegen ihrer hohen Priorität aktiv."
+                if allowed
+                else "Die Aufgabe wurde im reduzierten Urlaubsmodus ausgelassen."
+            ),
+        }
+    if behavior == "delegate":
+        delegate_to = mode.get("delegate_to")
+        return {
+            "allowed": bool(delegate_to),
+            "code": (
+                "vacation_delegated" if delegate_to else "vacation_delegate_missing"
+            ),
+            "message": (
+                "Die Aufgabe wird im Urlaubsmodus delegiert."
+                if delegate_to
+                else "Für die Urlaubsdelegation ist keine Person ausgewählt."
+            ),
+            "delegate_to": delegate_to,
+        }
+    return {
+        "allowed": False,
+        "code": "vacation_paused",
+        "message": "Die Aufgabe ist im Urlaubsmodus pausiert.",
+    }
+
+
 def mode_decision(
     mode: dict[str, Any],
     task: dict[str, Any],
@@ -46,54 +104,10 @@ def mode_decision(
             "message": "Normalbetrieb ist aktiv.",
         }
     if current == "guest":
-        allowed = not task_modes.get("skip_in_guest", False)
-        return {
-            "allowed": allowed,
-            "code": "guest_allowed" if allowed else "guest_skipped",
-            "message": (
-                "Die Aufgabe ist im Gastmodus aktiv."
-                if allowed
-                else "Die Aufgabe ist im Gastmodus deaktiviert."
-            ),
-        }
+        return _guest_decision(task_modes)
 
     behavior = task_modes.get("vacation", mode.get("policy", "pause"))
-    if behavior == "always":
-        return {
-            "allowed": True,
-            "code": "vacation_always",
-            "message": "Die Aufgabe bleibt im Urlaubsmodus aktiv.",
-        }
-    if behavior == "reduce":
-        allowed = priority in {"high", "critical"}
-        return {
-            "allowed": allowed,
-            "code": "vacation_essential" if allowed else "vacation_reduced",
-            "message": (
-                "Die Aufgabe bleibt wegen ihrer hohen Priorität aktiv."
-                if allowed
-                else "Die Aufgabe wurde im reduzierten Urlaubsmodus ausgelassen."
-            ),
-        }
-    if behavior == "delegate":
-        delegate_to = mode.get("delegate_to")
-        return {
-            "allowed": bool(delegate_to),
-            "code": "vacation_delegated"
-            if delegate_to
-            else "vacation_delegate_missing",
-            "message": (
-                "Die Aufgabe wird im Urlaubsmodus delegiert."
-                if delegate_to
-                else "Für die Urlaubsdelegation ist keine Person ausgewählt."
-            ),
-            "delegate_to": delegate_to,
-        }
-    return {
-        "allowed": False,
-        "code": "vacation_paused",
-        "message": "Die Aufgabe ist im Urlaubsmodus pausiert.",
-    }
+    return _vacation_decision(behavior, priority, mode)
 
 
 def season_decision(
