@@ -1529,6 +1529,7 @@ class HouseholdTasksPanel extends HTMLElement {
     const modeControls = this._modeControls(householdMode);
     const healthMarkup = this._healthMarkup(health);
     const discoveryMarkup = this._discoveryMarkup(suggestions);
+    const digestChecked = digest.enabled ? "checked" : "";
     return `<div class="toolbar"><div><h2>Einstellungen</h2><p>Globale Regeln und Datenquelle</p></div></div>
       <article class="settings-card mode-card">
         <h3>Urlaubs- und Gastmodus</h3>
@@ -1549,7 +1550,7 @@ class HouseholdTasksPanel extends HTMLElement {
         <h3>Intelligente Benachrichtigungsbündelung</h3>
         <p>Routinehinweise werden pro Person gesammelt. Kritische Aufgaben, Hilferufe und offene Übernahmen bleiben sofort sichtbar.</p>
         ${this._data.is_admin ? `<form id="notification-digest-form" class="form-grid">
-          <label class="checkbox full"><input name="enabled" type="checkbox" ${digest.enabled ? "checked" : ""}> Routinehinweise bündeln</label>
+          <label class="checkbox full"><input name="enabled" type="checkbox" ${digestChecked}> Routinehinweise bündeln</label>
           <label>Zustellzeit<input name="time" type="time" step="1" value="${this._e(digest.time || "17:30:00")}"></label>
           <label>Ab dieser Anzahl<input name="minimum_tasks" type="number" min="1" max="20" value="${Number(digest.minimum_tasks || 2)}"></label>
           <div class="full"><button class="primary" type="submit">Bündelung speichern</button></div>
