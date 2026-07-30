@@ -60,8 +60,36 @@ class ProjectContractTests(unittest.TestCase):
             "_resourceRows(",
             "_escalationRows(",
             "_bindInlineTaskCreates(",
+            "_showSetupWizard(",
+            "_showCommandPalette(",
+            "_showGallery(",
+            "_showWhyNot(",
+            "_renderMobileQuickActions(",
+            "_renderMine(",
+            "_renderWeek(",
+            "_bindBulkActions(",
+            "_showDiscoveryInstall(",
+            "_showTodayPlanner(",
+            "_showBatchCapture(",
+            "_showNaturalMove(",
+            "_showAttachments(",
+            "_showDeviceFile(",
+            "_showTaskStackEditor(",
+            "_bindWeekDragDrop(",
+            "_weatherRows(",
+            "_bindWeatherEditor(",
             'type: "household_tasks/preview_task"',
             'type: "household_tasks/test_notification"',
+            'type: "household_tasks/smart_task_preview"',
+            'this._call("undo")',
+            'this._call("request_help"',
+            'this._call("snooze"',
+            'this._call("bulk"',
+            'this._call("toggle_favorite"',
+            'this._call("install_discovery"',
+            'this._call("move_occurrence"',
+            'this._call("create_batch"',
+            'this._call("add_attachment"',
         ):
             with self.subTest(helper=helper):
                 self.assertIn(helper, panel)
@@ -75,6 +103,8 @@ class ProjectContractTests(unittest.TestCase):
         self.assertIn('setAttribute("aria-modal", "true")', panel)
         self.assertIn('setAttribute("aria-live"', panel)
         self.assertIn('event.key === "Escape"', panel)
+        self.assertIn('hasOwnProperty.call(this, "hass")', panel)
+        self.assertIn("event.stopImmediatePropagation()", panel)
         self.assertIn("new URL(import.meta.url)", panel)
         self.assertIn("encodeURIComponent(frontendVersion)", panel)
         self.assertIn('type: "tag/create"', panel)
@@ -85,6 +115,58 @@ class ProjectContractTests(unittest.TestCase):
         engine = (INTEGRATION / "engine.py").read_text("utf-8")
         self.assertIn("def _frontend_version()", engine)
         self.assertIn("cache_headers=False", engine)
+        for capability in (
+            "async_set_household_mode",
+            "async_install_gallery_template",
+            "async_undo_last",
+            "configuration_health",
+            "explain_task",
+            "async_request_help",
+            "preview_smart_task",
+            "async_bulk_occurrences",
+            "async_toggle_favorite",
+            "async_install_discovery_suggestion",
+            "_process_notification_digest",
+            "async_move_occurrence",
+            "async_create_batch",
+            "async_save_task_stack",
+            "async_add_attachment",
+            "_scan_weather_tasks",
+            "_weather_decision",
+        ):
+            with self.subTest(capability=capability):
+                self.assertIn(capability, engine)
+
+        guide = (ROOT / "docs" / "user-guide.md").read_text("utf-8")
+        for heading in (
+            "Einrichtungsassistent und Vorlagengalerie",
+            "Urlaub, Gäste und saisonale Aufgaben",
+            "Aufgabenmarkt und gegenseitige Hilfe",
+            "Suche, Erklärungen und Rückgängig",
+            "Gesundheitscheck und Mobilansicht",
+            "Persönlicher Arbeitsbereich und Wochenplanung",
+            "Smarte Schnellerfassung",
+            "Autodiscovery und aktionsfähige Diagnose",
+            "Gebündelte Benachrichtigungen",
+            "Home Assistant Assist",
+            "Komfortplanung und lokale Assistenz",
+            "Gewohnheiten, Stapel und flexible Serien",
+            "Kontextmenüs, Geräteakten und Anhänge",
+            "Fehlervermeidung und Offline-Bedienung",
+            "Wetter- und Klimaregeln",
+        ):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, guide)
+
+        self.assertTrue((INTEGRATION / "intents.py").is_file())
+        self.assertTrue((INTEGRATION / "productivity.py").is_file())
+        self.assertTrue((INTEGRATION / "weather_rules.py").is_file())
+        self.assertTrue((INTEGRATION / "forecast_rules.py").is_file())
+        self.assertTrue(
+            (
+                ROOT / "examples" / "custom_sentences" / "de" / "household_tasks.yaml"
+            ).is_file()
+        )
 
     def test_runtime_and_personal_workspace_files_are_absent(self):
         for relative in (

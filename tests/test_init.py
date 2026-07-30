@@ -78,6 +78,15 @@ async def test_real_runtime_service_persistence_panel_and_unload(
             }
         )
 
+    async def update_item(call):
+        item = next(item for item in items if item["uid"] == call.data["item"])
+        if "rename" in call.data:
+            item["summary"] = call.data["rename"]
+        if "due_datetime" in call.data:
+            item["due"] = call.data["due_datetime"]
+        if "status" in call.data:
+            item["status"] = call.data["status"]
+
     hass.services.async_register(
         "todo",
         "get_items",
@@ -85,6 +94,7 @@ async def test_real_runtime_service_persistence_panel_and_unload(
         supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register("todo", "add_item", add_item)
+    hass.services.async_register("todo", "update_item", update_item)
     hass.services.async_register(
         "notify",
         "mobile_app_alex",
@@ -218,6 +228,40 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     assert message["success"]
     assert message["result"]["schedule_type"] == "manual"
 
+    await websocket.send_json(
+        {
+            "id": 3,
+            "type": f"{DOMAIN}/task_batch_preview",
+            "text": "Müll morgen 18 Uhr an Alex; Pflanzen heute Abend an Alex",
+        }
+    )
+    message = await websocket.receive_json()
+    assert message["success"]
+    assert len(message["result"]) == 2
+    assert all(item["assignee"] == "alex" for item in message["result"])
+
+    await websocket.send_json(
+        {
+            "id": 4,
+            "type": f"{DOMAIN}/task_projection",
+            "task": {
+                "schedule": {
+                    "type": "after_completion",
+                    "interval": "08:00:00",
+                }
+            },
+        }
+    )
+    message = await websocket.receive_json()
+    assert message["success"]
+    assert message["result"]["risk"] == "high"
+
+    await engine.async_save_task_stack(
+        "evening",
+        {"name": "Evening", "task_ids": ["laundry"]},
+    )
+    assert engine.ui_data()["task_stacks"]["evening"]["task_ids"] == ["laundry"]
+
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(
             DOMAIN,
@@ -237,6 +281,21 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     assert items[0]["summary"] == "[Alex] Laundry"
     assert len(engine.state["occurrences"]) == 1
     assert engine.state["ui_config"]["tasks"]["laundry"]["name"] == "Laundry"
+    occurrence_id = next(iter(engine.state["occurrences"]))
+    move = await engine.async_move_occurrence(occurrence_id, "morgen 9 Uhr")
+    assert move["kind"] == "datetime"
+    assert datetime.fromisoformat(items[0]["due"]).hour == 9
+    attachment = await engine.async_add_attachment(
+        occurrence_id,
+        "proof.png",
+        "image/png",
+        "aGVsbG8=",
+    )
+    assert attachment["name"] == "proof.png"
+    assert "content" not in engine.ui_data()["attachments"][occurrence_id][0]
+    assert engine.attachment_content(occurrence_id, attachment["id"])["content"] == (
+        "aGVsbG8="
+    )
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert getattr(entry, "runtime_data", None) is None

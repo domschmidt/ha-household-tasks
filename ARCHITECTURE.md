@@ -27,8 +27,8 @@ Packaged sidebar panel
 - `engine.py` owns lifecycle, orchestration, Home Assistant listeners, native
   to-do synchronization, escalation, and persistence.
 - `assignment.py`, `scheduling.py`, `workflows.py`, `analytics.py`, `resources.py`,
-  `nfc.py`, and `config_io.py` contain deterministic domain logic with focused
-  unit tests.
+  `weather_rules.py`, `forecast_rules.py`, `nfc.py`, and `config_io.py` contain
+  deterministic domain logic with focused unit tests.
 - `ui.py` is the authenticated WebSocket boundary and enforces admin-only
   mutations.
 - `frontend/` contains the packaged panel and its German/English translations.
@@ -43,9 +43,10 @@ pure module first and called by the engine.
 
 The selected Home Assistant `todo` entity owns the visible to-do items.
 Household Tasks stores definitions, people mappings, counters, assignment
-reasons, schedules, occurrence linkage, handovers, resource incidents, and
-history in Home Assistant's storage API. Configuration exports are
-schema-versioned JSON documents.
+reasons, schedules, occurrence linkage, handovers, resource incidents,
+seasonal execution keys, forecast decision traces, and history in Home
+Assistant's storage API. Configuration exports are schema-versioned JSON
+documents; operational seasonal locks deliberately remain outside imports.
 
 Presence-aware assignment and handover resolution happen before an occurrence
 is written to the native to-do list. Operational handover and incident history
@@ -65,8 +66,9 @@ to the selected to-do entity.
 - Listener unsubscribe callbacks are retained and called on unload.
 - Imports are parsed and validated before replacing live configuration.
 - Native to-do items are not deleted during integration removal.
-- External cloud availability is irrelevant because there are no external
-  network dependencies.
+- Forecast rules depend on the selected Home Assistant weather integration.
+  Service failures and missing values suppress creation and retain an
+  actionable trace; Household Tasks never contacts the provider directly.
 
 ## Compatibility and migrations
 
