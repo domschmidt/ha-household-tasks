@@ -3185,9 +3185,12 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _bindInlineTaskCreates(modal, currentTaskId) {
     const personPanel = modal.querySelector(".inline-person-form");
-    modal.querySelector("[data-toggle-inline-person]").onclick = () => {
-      personPanel.classList.toggle("hidden");
-      if (!personPanel.classList.contains("hidden")) personPanel.querySelector("[name=inline_person_id]")?.focus();
+    const personToggle = modal.querySelector("[data-toggle-inline-person]");
+    this._setInlinePanelOpen(personPanel, personToggle, false);
+    personToggle.onclick = () => {
+      const open = personPanel.classList.contains("hidden");
+      this._setInlinePanelOpen(personPanel, personToggle, open);
+      if (open) personPanel.querySelector("[name=inline_person_id]")?.focus();
     };
     modal.querySelector("[data-save-inline-person]").onclick = async () => {
       const personId = personPanel.querySelector("[name=inline_person_id]").value.trim();
@@ -3231,7 +3234,7 @@ class HouseholdTasksPanel extends HTMLElement {
 
         const followUpAssignee = modal.querySelector("[name=inline_follow_up_assignee]");
         followUpAssignee?.add(new Option(name, personId));
-        personPanel.classList.add("hidden");
+        this._setInlinePanelOpen(personPanel, personToggle, false);
         this._toast("Person angelegt und ausgewählt.");
       } catch (error) {
         this._toast(this._errorText(error), true);
@@ -3239,9 +3242,12 @@ class HouseholdTasksPanel extends HTMLElement {
     };
 
     const followUpPanel = modal.querySelector(".inline-follow-up-form");
-    modal.querySelector("[data-toggle-inline-follow-up]").onclick = () => {
-      followUpPanel.classList.toggle("hidden");
-      if (!followUpPanel.classList.contains("hidden")) followUpPanel.querySelector("[name=inline_follow_up_id]")?.focus();
+    const followUpToggle = modal.querySelector("[data-toggle-inline-follow-up]");
+    this._setInlinePanelOpen(followUpPanel, followUpToggle, false);
+    followUpToggle.onclick = () => {
+      const open = followUpPanel.classList.contains("hidden");
+      this._setInlinePanelOpen(followUpPanel, followUpToggle, open);
+      if (open) followUpPanel.querySelector("[name=inline_follow_up_id]")?.focus();
     };
     modal.querySelector("[data-save-inline-follow-up]").onclick = async () => {
       const taskId = followUpPanel.querySelector("[name=inline_follow_up_id]").value.trim();
@@ -3274,12 +3280,22 @@ class HouseholdTasksPanel extends HTMLElement {
         list.append(row);
         this._localize(row);
         this._bindRepeatableEditors(modal, currentTaskId);
-        followUpPanel.classList.add("hidden");
+        this._setInlinePanelOpen(followUpPanel, followUpToggle, false);
         this._toast("Vorlage angelegt und als Folgeaufgabe ausgewählt.");
       } catch (error) {
         this._toast(this._errorText(error), true);
       }
     };
+  }
+
+  _setInlinePanelOpen(panel, toggle, open) {
+    panel.classList.toggle("hidden", !open);
+    panel.toggleAttribute("inert", !open);
+    panel.setAttribute("aria-hidden", String(!open));
+    toggle.setAttribute("aria-expanded", String(open));
+    for (const control of panel.querySelectorAll("input, select, textarea, button")) {
+      control.disabled = !open;
+    }
   }
 
   _scheduleFields(s, weather = {}) {
