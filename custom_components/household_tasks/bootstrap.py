@@ -21,6 +21,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "weekday": "sun",
             "time": "18:00:00",
         },
+        "notification_digest": {
+            "enabled": False,
+            "time": "17:30:00",
+            "minimum_tasks": 2,
+        },
         "escalation": [
             {
                 "after": "00:00:00",

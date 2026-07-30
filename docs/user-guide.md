@@ -203,6 +203,48 @@ Administratoren können Konfigurationen prüfen, bevor sie produktiv wirken:
 Diese Vorschauen verändern weder To-dos noch Verlauf oder Punktestand. Nur die
 Testbenachrichtigung sendet bewusst eine Nachricht.
 
+### Wettervorhersage, Verteilung je Person und Saisonsperren
+
+Der Zeitplantyp **Wettervorhersage** wertet die von einer vorhandenen
+`weather.*`-Entität bereitgestellten täglichen oder stündlichen Vorhersagen aus.
+Die Integration ruft dafür ausschließlich den lokalen Home-Assistant-Dienst
+`weather.get_forecasts` auf und kontaktiert selbst keinen Wetteranbieter.
+
+Für „Frostschutz beim eigenen Auto prüfen“ wird empfohlen:
+
+- Zuweisung **Je Person eine Aufgabe** und Auswahl aller Personen mit eigenem
+  Auto,
+- tägliche Vorhersage mit 48 Stunden Prüfzeitraum,
+- ein Tag Vorlauf und Bereitstellung um 18 Uhr,
+- Attribut `templow`, Vergleich **kleiner als**, Grenzwert `0`,
+- Saisonmonate Oktober bis März und
+- **Nur einmal je Saison und Zielperson**.
+
+Jede ausgewählte Person erhält ein eigenes To-do und kann es unabhängig
+erledigen. Die Saisonsperre gehört weiterhin zur ursprünglichen Zielperson,
+auch wenn eine aktive Haushaltsübergabe die Aufgabe vorübergehend jemand
+anderem zuweist. Die Wintersaison über den Jahreswechsel erhält einen
+gemeinsamen Schlüssel, beispielsweise `2026-2027`.
+
+**Regel testen / nächste Fälligkeit** zeigt ohne Nebenwirkungen:
+
+- den ersten passenden Vorhersagetag und die geplante Aktivierungszeit,
+- jeden geprüften Wert und das Ergebnis seiner Bedingung,
+- Haushaltsmodus und Saisonentscheidung,
+- alle entstehenden personenbezogenen Aufgaben sowie
+- bereits vorhandene Saisonsperren mit Begründung.
+
+In den Wetterbedingungen können optionale Testwerte und ein Testdatum
+eingetragen werden. Dadurch lässt sich beispielsweise `templow = -3`
+simulieren, ohne Live-Vorhersagen zu verwenden oder Aufgaben anzulegen.
+Erfolgreiche Laufzeitprüfungen speichern denselben Entscheidungsverlauf für
+**Warum nicht?**. Da Home Assistant vergangene Wettervorhersagen nicht
+zuverlässig als Historie garantiert, verwendet die Anwendung bewusst
+reproduzierbare Szenariotests statt eines irreführenden Forecast-Backtests.
+
+**Saisonsperren zurücksetzen** ermöglicht einen kontrollierten erneuten Lauf
+der Regel. Das Zurücksetzen wird in den Rückgängig-Stapel aufgenommen.
+
 ## Punktestand
 
 Jede manuell erledigte Aufgabe zählt einen Punkt. Das Familien-Ranking auf der
@@ -321,3 +363,224 @@ entstehen ausschließlich durch Eingaben in der lokalen UI.
 **Auf Ausgangswerte zurücksetzen** verwirft angepasste Personen, Vorlagen und
 Standardregeln und stellt den leeren, personenbezogen neutralen Zustand wieder
 her. Bereits erzeugte To-dos und ihr Verlauf bleiben erhalten.
+
+## Komfort- und Betriebsfunktionen
+
+### Einrichtungsassistent und Vorlagengalerie
+
+Eine leere Installation startet mit einem Einrichtungsassistenten. Er legt die
+erste Person und eine ausgewählte Starter-Vorlage gemeinsam an und zeigt davor
+eine Vorschau von Zeitplan, Priorität und Punkten. Weitere kuratierte Vorlagen
+für Frostschutz, Pollenfilter, Reifenwechsel, Gäste und den Wochenabschluss
+stehen unter **Aufgaben > Vorlagengalerie** bereit. Zustandsbasierte Vorlagen
+verlangen dabei ausdrücklich eine vorhandene Home-Assistant-Entität.
+
+Das Aufgabenformular zeigt zunächst nur die üblichen Felder. Aufgabenmarkt,
+Saison, NFC, Folgeaufgaben und eigene Eskalationen liegen in den aufklappbaren
+Expertenoptionen. **Regel testen** zeigt nicht nur die nächste Fälligkeit,
+sondern auch, ob Haushaltsmodus und Saison die Erzeugung aktuell zulassen.
+
+### Urlaub, Gäste und saisonale Aufgaben
+
+Unter **Einstellungen > Urlaubs- und Gastmodus** stehen drei Betriebsarten zur
+Verfügung:
+
+- **Normal** führt alle regulären Regeln aus.
+- **Urlaub** pausiert automatische Aufgaben, reduziert sie auf hohe
+  Prioritäten oder delegiert sie an eine Vertretung. Jede Vorlage kann dieses
+  Verhalten überschreiben.
+- **Gäste** aktiviert Gastaufgaben und kann dafür ungeeignete private Routinen
+  auslassen.
+
+Ein optionales Ende schaltet den Haushalt automatisch auf Normalbetrieb
+zurück. Saisonale Vorlagen können zusätzlich auf Monate und einen Sensorwert
+begrenzt werden, etwa Frostwarnung unter 2 °C oder einen Pollenstatus `high`.
+Manuell gestartete Aufgaben bleiben bewusst möglich.
+
+### Aufgabenmarkt und gegenseitige Hilfe
+
+Offene Aufgaben können von berechtigten Personen übernommen werden. Jede
+Vorlage kann Priorität, Punkte und eine sichtbare Belohnung tragen. Bei
+**Hilfe anfordern** bleibt die Zuständigkeit erhalten; andere Personen erhalten
+eine Aktions-Benachrichtigung zur freiwilligen Unterstützung. **Heute nicht
+geschafft** versucht zuerst eine geeignete Weitergabe und öffnet die Aufgabe
+ansonsten zur Übernahme, bevor die normale Eskalation greift.
+
+Push-Nachrichten und das Panel bieten dieselben Kernaktionen: **Erledigt**,
+**Heute Abend**, **Morgen**, **Übernehmen** und **Hilfe anfordern**.
+
+### Suche, Erklärungen und Rückgängig
+
+**Strg/⌘ + K** öffnet die globale Suche über Vorlagen, Personen, offene und
+erledigte Aufgaben, NFC-Tags sowie Home-Assistant-Entitäten. Entitäten und
+Tag-IDs lassen sich direkt kopieren.
+
+**Warum nicht?** erklärt den aktiven Haushaltsmodus, Saisonbedingungen,
+geeignete Personen, ausgeschlossene Personen und zuletzt ausgelassene
+Erzeugungsversuche. **Warum wurde mir das zugewiesen?** bleibt die ergänzende
+Erklärung für bereits erzeugte Aufgaben.
+
+Nach Erledigen, Löschen, Übergaben, Importen und Modusänderungen erscheint im
+Kopf des Panels **Rückgängig**. Der Verlauf ist absichtlich auf die letzten
+20 lokalen Aktionen begrenzt.
+
+### Gesundheitscheck und Mobilansicht
+
+Der Gesundheitscheck unter **Einstellungen** meldet eine fehlende To-do-Liste,
+nicht verfügbare Anwesenheits- oder Saisonentitäten, ungültige
+Benachrichtigungsdienste, nicht registrierte NFC-Tags und zyklische
+Folgeaufgaben. Auf schmalen Displays zeigt **Jetzt sinnvoll** bis zu drei
+Aktionen, gewichtet nach eigener Zuständigkeit, Priorität und Fälligkeit.
+
+## Persönlicher Arbeitsbereich und Wochenplanung
+
+**Meine Aufgaben** filtert automatisch auf die mit dem aktuellen
+Home-Assistant-Benutzer verknüpfte Person. Neben direkt zugewiesenen Aufgaben
+erscheinen dort angenommene Hilfen und passende offene Aufgaben. Häufig
+verwendete Vorlagen können als Favoriten gespeichert und anschließend mit
+einem Tipp erzeugt werden.
+
+In **Meine Aufgaben** und im **Wochenplan** lassen sich mehrere Vorkommen
+auswählen und gemeinsam erledigen, auf morgen verschieben oder als Hilferuf
+verteilen. Der Wochenplan gruppiert die nächsten sieben Tage und zeigt dadurch
+Überlastungen frühzeitig. Der schwebende Plus-Button öffnet abhängig von der
+aktuellen Ansicht eine Schnellaufgabe, neue Vorlage oder Person.
+
+## Smarte Schnellerfassung
+
+**Smart erfassen** versteht kompakte deutsche Eingaben wie:
+
+```text
+Müll morgen 18 Uhr an Alex, dringend, 2 Punkte
+```
+
+Name, Person, Termin, Priorität und Punkte werden ausschließlich lokal
+extrahiert und zunächst in die normalen Formularfelder übernommen. Erst ein
+weiterer Klick auf **Aufgabe hinzufügen** erzeugt das To-do. Unklare Werte
+bleiben sichtbar und können korrigiert werden.
+
+## Autodiscovery und aktionsfähige Diagnose
+
+Der Bereich **Home-Assistant-Autodiscovery** erkennt lokal typische
+Batteriesensoren, Haushaltsgeräte, Verbrauchs- und Wartungssensoren sowie
+Abfallkalender. Vorschläge werden nie automatisch aktiviert. **Einrichten**
+zeigt Entität, eigene Regel-ID und Zuständigkeit, bevor eine Aufgabe oder
+Ressourcenregel gespeichert wird.
+
+Gesundheitshinweise besitzen, soweit eindeutig möglich, **Beheben**. Der Button
+öffnet direkt die betroffene Person, Vorlage oder Integrationskonfiguration.
+Automatische Reparaturen, die eine mehrdeutige Entitätsauswahl treffen müssten,
+werden bewusst nicht ausgeführt.
+
+## Gebündelte Benachrichtigungen
+
+Unter **Einstellungen > Intelligente Benachrichtigungsbündelung** lassen sich
+Routinehinweise bis zu einer täglichen Zustellzeit sammeln. Jede Person erhält
+eine kompakte Nachricht mit bis zu drei direkten Erledigt-Aktionen. Kritische
+Aufgaben, Hilferufe und offene Übernahmen werden weiterhin sofort versendet.
+
+## Home Assistant Assist
+
+Die Integration registriert die Intents `HouseholdTasksList`,
+`HouseholdTasksComplete` und `HouseholdTasksCreate`. Damit kann Assist eigene
+Aufgaben vorlesen, eine eindeutig passende Aufgabe erledigen und eine
+Schnellaufgabe für eine konfigurierte Person anlegen.
+
+Home Assistant lädt Formulierungen für benutzerdefinierte Integrationen nicht
+automatisch in den globalen Sprachkatalog. Kopiere deshalb die gewünschte Datei
+aus `examples/custom_sentences/de` oder `examples/custom_sentences/en` nach
+`/config/custom_sentences/<sprache>/household_tasks.yaml` und lade Home
+Assistant neu. Danach funktionieren beispielsweise:
+
+- „Welche Haushaltsaufgaben habe ich heute?“
+- „Markiere Müll rausbringen als erledigt.“
+- „Erstelle die Aufgabe Pflanzen gießen für Alex.“
+
+Bei mehrdeutigen Abschlüssen verändert Assist bewusst nichts.
+
+## Komfortplanung und lokale Assistenz
+
+Die Startseite passt ihren Schwerpunkt an die Tageszeit an: morgens steht die
+Tagesplanung im Vordergrund, tagsüber die nächsten sinnvollen Aufgaben und
+abends die Abendrunde. **Heute planen** öffnet alle nahen Aufgaben in einer
+gemeinsamen Planungsansicht. Im Wochenplan lassen sich Aufgaben per
+Drag-and-drop auf einen anderen Tag verschieben.
+
+Über **Natürlich verschieben** kann eine Aufgabe beispielsweise auf „morgen 18
+Uhr“, „am Wochenende“ oder „wenn Alex zuhause ist“ gelegt werden. Bei einer
+Anwesenheitsbedingung wartet Household Tasks lokal auf die konfigurierte
+Anwesenheitsentität und aktiviert die Aufgabe beim nächsten Scan.
+
+Die smarte Schnellerfassung unterstützt außerdem mehrere Zeilen oder mit
+Semikolon getrennte Aufgaben. Vor dem Anlegen wird für jede Zeile eine Vorschau
+mit erkannter Person und Fälligkeit angezeigt.
+
+## Gewohnheiten, Stapel und flexible Serien
+
+Nach mindestens zwei Erledigungen einer Vorlage zeigt Household Tasks eine
+transparente lokale Empfehlung für die typische Person und Uhrzeit. Es werden
+keine Daten an einen externen Dienst übertragen. Empfehlungen werden erst nach
+einer ausdrücklichen Bestätigung in die Vorlage übernommen.
+
+Aufgabenstapel bündeln mehrere Vorlagen zu einer Routine wie „Abendrunde“. Ein
+Start erzeugt alle enthaltenen Aufgaben in der festgelegten Reihenfolge.
+
+Der Zeitplantyp **Flexibel nach Erledigung** besitzt drei Intervalle:
+frühestens, bevorzugt und spätestens. Die nächste Aufgabe wird zum bevorzugten
+Zeitpunkt fällig; das zulässige Fenster bleibt auf der Aufgabenkarte sichtbar.
+
+## Kontextmenüs, Geräteakten und Anhänge
+
+Ein Rechtsklick oder langes Drücken öffnet das Kontextmenü einer Aufgabe. Dort
+stehen Verschieben, Hilfe, Delegation, Geräteakte und Anhänge zur Verfügung.
+
+Eine Geräteakte kann eine Home-Assistant-Entität, Modell, Ersatzteil,
+Handbuch-URL und Notizen enthalten. Sie zeigt außerdem den aktuellen
+Entitätszustand und die letzten Erledigungen.
+
+Fotos, WebP-Bilder und PDF-Belege können direkt an eine Aufgabe gehängt werden.
+Sie werden im lokalen Home-Assistant-Speicher abgelegt. Pro Datei gelten 750 KB,
+pro Aufgabe maximal zehn Anhänge. Die eigentlichen Dateiinhalte werden erst beim
+Öffnen über die WebSocket-API übertragen.
+
+## Fehlervermeidung und Offline-Bedienung
+
+Vorlagen zeigen vor dem Speichern eine verständliche Mengenprognose. Regeln mit
+mehr als ungefähr 14 erwarteten Erzeugungen pro Woche benötigen eine zusätzliche
+Bestätigung. Der Gesundheitscheck erkennt außerdem ähnliche Vorlagennamen,
+doppelte NFC-Tags, fehlende Geräteentitäten und bestehende
+Abhängigkeitskreise.
+
+Das Panel hält einen lokalen, inhaltsbegrenzten Snapshot für eine bereits
+geöffnete mobile Ansicht vor. Erledigen, Verschieben und ausgewählte
+Massenaktionen können bei fehlender Verbindung vorgemerkt und nach Rückkehr der
+Verbindung synchronisiert werden. Dies ist keine eigenständige Offline-PWA:
+Home Assistant muss für den erstmaligen Seitenaufruf erreichbar sein.
+
+## Wetter- und Klimaregeln
+
+Der Zeitplantyp **Wetterregel** erzeugt Aufgaben aus normalen Sensoren oder aus
+Attributen einer `weather.*`-Entität. Dadurch sind sowohl einfache Regeln als
+auch kombinierte Bedingungen möglich:
+
+- `sensor.aussentemperatur` ist kleiner als `2`
+- `weather.home.temperature` ist größer als `28`
+- `weather.home.wind_speed` ist größer als `60`
+- `weather.home.precipitation_probability` ist mindestens `70`
+- Wetterzustand ist gleich `snowy`
+
+Mehrere Bedingungen lassen sich mit **UND** oder **ODER** verbinden. Eine
+Glatteisregel kann beispielsweise verlangen, dass die Temperatur unter 1 °C
+liegt **und** die Niederschlagswahrscheinlichkeit über 30 Prozent liegt. Die
+Vorschau zeigt für jede Teilbedingung den aktuellen Wert und ob sie erfüllt ist.
+
+`Fällig nach` verschiebt den Termin relativ zum erkannten Wetterzustand.
+`Cooldown` begrenzt wiederholte Erzeugungen. **Nicht erneut erzeugen, solange
+offen** verhindert doppelte Aufgaben bei länger anhaltendem Wetter. Ist eine
+Wetterentität nicht verfügbar, wird sicherheitshalber keine Aufgabe erzeugt und
+der Gesundheitscheck weist auf die fehlende Entität hin.
+
+Die Vorlagengalerie enthält unter anderem Frostschutz, Garten-Hitzeschutz,
+Sturmsicherung, Starkregen-/Fensterprüfung, Glatteisvorsorge, Lüften bei hoher
+Feuchte, UV-Schutz, Schneeräumen und Hitzeschutz für Haustiere. Vorlagen werden
+erst nach Auswahl einer konkreten lokalen Entität aktiviert.

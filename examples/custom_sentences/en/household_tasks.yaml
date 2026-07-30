@@ -1,0 +1,22 @@
+language: en
+intents:
+  HouseholdTasksList:
+    data:
+      - sentences:
+          - "what household tasks do I have [today]"
+          - "what do I still need to do at home"
+  HouseholdTasksComplete:
+    data:
+      - sentences:
+          - "mark {task} as completed"
+          - "{task} is done"
+  HouseholdTasksCreate:
+    data:
+      - sentences:
+          - "create [the] task {task}"
+          - "create [the] task {task} for {person}"
+lists:
+  task:
+    wildcard: true
+  person:
+    wildcard: true

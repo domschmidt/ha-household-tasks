@@ -30,6 +30,7 @@ def test_redact_recursively_removes_household_identifiers():
             }
         },
         "counts": {"tasks": 3},
+        "seasonal_executions": {"first_frost|2026-2027|alex": "2026-10-01T18:00:00Z"},
     }
 
     result = _redact(source)
@@ -41,6 +42,7 @@ def test_redact_recursively_removes_household_identifiers():
     assert result["handovers"]["alex"]["to"] == "**REDACTED**"
     assert result["handovers"]["alex"]["reason"] == "**REDACTED**"
     assert result["counts"] == {"tasks": 3}
+    assert result["seasonal_executions"] == "**REDACTED**"
 
 
 async def test_diagnostics_cover_loaded_and_unloaded_entries(hass):

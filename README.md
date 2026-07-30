@@ -29,6 +29,22 @@ push escalation, and a multilingual management panel.
 - Escalations, snoozing, help requests, takeover, and actionable notifications.
 - Visual resource rules and unlimited, structured escalation stages.
 - Guided entity selection, inline creation, and side-effect-free rule previews.
+- Vacation and guest modes, seasonal rules, and curated household templates.
+- Open task marketplace with priorities, points, rewards, and voluntary help.
+- Global command search, explainable skipped decisions, health checks, and undo.
+- Progressive forms and a mobile top-three quick-action view.
+- Personal task inbox, seven-day planner, bulk actions, and favorites.
+- Local smart capture and entity-based setup suggestions.
+- Actionable diagnostics, routine notification digests, and Assist intents.
+- Context-aware daily planning, natural moves, and drag-and-drop week planning.
+- Transparent local habit suggestions, reusable task stacks, and flexible series.
+- Task context menus, device records, bounded photo/PDF attachments, and an
+  offline action queue.
+- Pre-save volume projections plus duplicate and conflict diagnostics.
+- Combined weather and climate rules for temperature, rain, wind, humidity,
+  UV, and textual weather states, including AND/OR conditions and previews.
+- An expanded curated gallery covering frost, heat, storms, rain, ice, snow,
+  ventilation, UV protection, pets, guests, and weekly routines.
 - Weekly household review and 90-day analytics.
 - Import/export with schema validation and an explicit replace workflow.
 - German and English panel localization.
@@ -89,6 +105,7 @@ versioned storage, so definitions and progress survive restarts.
 | Rotation | Cycles through eligible people and persists the cursor. |
 | Fair | Uses assignment count, then current workload, then configured order. |
 | Open | Creates an unassigned item that an eligible person can claim. |
+| Per person | Creates one independent occurrence for every selected person. |
 
 The panel exposes **Why was this assigned to me?** using the factors recorded at
 assignment time.
@@ -111,10 +128,57 @@ underlying task definitions.
 | Calendar event | Preparation or follow-up around appointments |
 | State change | Dishwasher finished, filter warning, someone arrived |
 | After completion | Repeat relative to when work was actually completed |
+| Weather forecast | Prepare before the first matching daily or hourly forecast |
 
 State schedules support `for`, due offsets, cooldowns, and duplicate
 suppression. Completion schedules include an initial due date to bootstrap the
 series.
+
+### Forecast planning and once-per-season rules
+
+Forecast schedules call Home Assistant's local `weather.get_forecasts` action.
+They evaluate an explicit horizon, retain a condition trace for every examined
+period, and can make work due a configurable number of calendar days before the
+first matching period. Forecast providers remain responsible for availability
+and accuracy; Household Tasks does not contact external weather services.
+
+The **Per person** assignment mode combines with `once_per_season` to create one
+independent occurrence and seasonal lock for every selected person:
+
+```yaml
+name: Check antifreeze in your own car
+assignment:
+  type: per_person
+  people: [alex, sam]
+schedule:
+  type: forecast_trigger
+  forecast_type: daily
+  horizon_hours: 48
+  lead_days: 1
+  time: "18:00:00"
+weather:
+  conditions:
+    - entity_id: weather.home
+      attribute: templow
+      condition: below
+      threshold: 0
+season:
+  months: [10, 11, 12, 1, 2, 3]
+repeat:
+  mode: once_per_season
+```
+
+The winter key spans the year boundary, so October 2026 through March 2027 is
+one season. Handovers may change the effective assignee without changing whose
+seasonal responsibility is recorded.
+
+The editor's rule preview is side-effect free. It shows the first matching
+forecast period, activation time, condition results, household-mode and season
+decisions, every target person, and existing seasonal locks. Optional scenario
+values let administrators test hypothetical forecasts. Successful runtime
+evaluations retain the same forecast trace, while **Why not?** exposes the most
+recent result. Seasonal locks can be reset deliberately and restored with
+Undo.
 
 ### Dependencies
 
