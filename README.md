@@ -244,10 +244,21 @@ if no longer required.
 ```bash
 python -m pip install -e ".[dev]"
 pre-commit install
-pytest
-ruff check .
-ruff format --check .
+make check
 ```
+
+On Windows, or when local Python dependencies should stay isolated, run the
+same checks in Docker:
+
+```powershell
+.\scripts\docker-check.ps1
+```
+
+The Docker development image caches the Home Assistant dependency stack.
+Subsequent runs only mount the current source tree, then run pytest on four
+workers while both Ruff checks run in parallel. Use `-Workers auto` to let
+pytest use every CPU available to Docker, or `-NoBuild` to skip even the
+cached image check when dependencies have not changed.
 
 For an end-to-end test, copy or symlink
 `custom_components/household_tasks` into a dedicated Home Assistant development
