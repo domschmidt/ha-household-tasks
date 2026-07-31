@@ -1038,17 +1038,23 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _renderWeek() {
     const open = this._openOccurrences();
+    const previews = this._data.week_preview || [];
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     const days = Array.from({ length: 7 }, (_, offset) => {
       const date = new Date(start);
       date.setDate(start.getDate() + offset);
       const key = date.toLocaleDateString("sv-SE");
-      return { date, key, items: open.filter((item) => new Date(item.due).toLocaleDateString("sv-SE") === key) };
+      return {
+        date,
+        key,
+        items: open.filter((item) => new Date(item.due).toLocaleDateString("sv-SE") === key),
+        previews: previews.filter((item) => new Date(item.due).toLocaleDateString("sv-SE") === key),
+      };
     });
     const visible = days.flatMap((day) => day.items);
     const dayMarkup = days.map((day) => this._weekDayMarkup(day)).join("");
-    return `<div class="toolbar"><div><div class="eyebrow">PLANUNG</div><h2>Die nächsten sieben Tage</h2><p>Arbeitslast und Fälligkeiten auf einen Blick.</p></div><button id="smart-quick-task" class="primary">+ Aufgabe</button></div>
+    return `<div class="toolbar"><div><div class="eyebrow">PLANUNG</div><h2>Die nächsten sieben Tage</h2><p>Erzeugte Aufgaben und schreibgeschützte Vorschauen auf einen Blick.</p></div><button id="smart-quick-task" class="primary">+ Aufgabe</button></div>
       ${this._renderBulkToolbar(visible)}
       <div class="week-board">${dayMarkup}</div>`;
   }
@@ -1056,16 +1062,23 @@ class HouseholdTasksPanel extends HTMLElement {
   _weekDayMarkup(day) {
     const weekday = day.date.toLocaleDateString(this._locale(), { weekday: "short" });
     const date = day.date.toLocaleDateString(this._locale(), { day: "2-digit", month: "2-digit" });
-    let contents = "<p>Hierher ziehen</p>";
-    if (day.items.length) {
-      contents = day.items.map((item) => {
+    const actual = day.items.map((item) => {
         const time = new Date(item.due).toLocaleTimeString(this._locale(), { hour: "2-digit", minute: "2-digit" });
         const assignee = this._e(this._data.people[item.assignee]?.name || "Offen");
         return `<article draggable="true" data-drag-occurrence="${this._e(item.id)}"><input type="checkbox" data-select-occurrence="${this._e(item.id)}"><div><strong>${this._e(this._plainTitle(item.title))}</strong><small>${time} · ${assignee}</small></div></article>`;
       }).join("");
-    }
+    const projected = day.previews.map((item) => {
+      const time = new Date(item.due).toLocaleTimeString(this._locale(), { hour: "2-digit", minute: "2-digit" });
+      const assignee = item.assignment_pending
+        ? "Zuweisung bei Erzeugung"
+        : this._data.people[item.assignee]?.name || "Offen";
+      const hint = item.conditional ? "Bedingte Vorschau" : "Wird automatisch erzeugt";
+      return `<article class="week-preview" aria-label="Vorschau: ${this._e(item.title)}"><div><strong>${this._e(item.title)}</strong><small>${time} · ${this._e(assignee)}</small></div><span title="${this._e(hint)}">Vorschau</span></article>`;
+    }).join("");
+    const contents = actual || projected ? `${actual}${projected}` : "<p>Hierher ziehen</p>";
+    const total = day.items.length + day.previews.length;
     return `<section class="week-day" data-drop-date="${day.key}">
-      <header><strong>${weekday}</strong><span>${date}</span><b>${day.items.length}</b></header>
+      <header><strong>${weekday}</strong><span>${date}</span><b>${total}</b></header>
       ${contents}
     </section>`;
   }
@@ -3809,7 +3822,7 @@ class HouseholdTasksPanel extends HTMLElement {
       .hero{display:flex;justify-content:space-between;align-items:center;border-radius:20px;padding:24px 28px;background:linear-gradient(135deg,var(--primary-color,#03a9f4),#536dfe);color:#fff;margin-bottom:16px}.hero .eyebrow,.hero p{color:#e9f7ff}.hero h2{font-size:28px}.hero-side{display:flex;align-items:center;gap:18px}.hero-button{background:#fff;color:#3347ba;border:0}.score{font-size:36px;font-weight:800;text-align:center}.score small{display:block;font-size:12px;font-weight:500}
       .people-strip{display:flex;gap:9px;overflow:auto;padding:4px 0 18px}.person-chip{display:flex;align-items:center;gap:8px;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:99px;padding:6px 10px 6px 6px;white-space:nowrap}.person-chip b{color:var(--secondary-text-color)}
       .context-home{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:16px 18px;margin-bottom:14px;border-radius:16px;background:linear-gradient(135deg,color-mix(in srgb,var(--primary-color) 15%,var(--card-background-color)),var(--card-background-color));border:1px solid color-mix(in srgb,var(--primary-color) 25%,var(--divider-color))}.context-home h2{margin:2px 0}.context-home p{margin:4px 0 0;color:var(--secondary-text-color)}.stack-strip{display:flex;align-items:center;gap:8px;overflow:auto;margin-bottom:14px;padding:10px;border:1px solid var(--divider-color);border-radius:13px}.stack-strip>*{white-space:nowrap}.stack-strip small{margin-left:5px}.habit-tip,.due-window,.attachment-count{font-size:12px;color:var(--secondary-text-color)}.planner-list{display:grid;gap:8px;max-height:55vh;overflow:auto;margin:14px 0}.planner-row{display:grid;grid-template-columns:1fr minmax(210px,auto);align-items:center;gap:12px;padding:10px;border:1px solid var(--divider-color);border-radius:11px}.planner-row span{display:grid}.planner-row small{color:var(--secondary-text-color)}.batch-preview{display:grid;gap:6px;margin:12px 0}.batch-preview>div{display:flex;justify-content:space-between;gap:10px;padding:9px;border-radius:9px;background:var(--secondary-background-color)}.batch-preview .error{border-left:3px solid var(--error-color)}.attachment-list,.stack-list{display:grid;gap:8px;margin:12px 0}.attachment-list>div,.stack-list article{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px;border:1px solid var(--divider-color);border-radius:10px}.stack-list article>div{display:grid}.week-day.drag-over{outline:3px solid var(--primary-color);background:color-mix(in srgb,var(--primary-color) 10%,var(--card-background-color))}.week-day [draggable=true]{cursor:grab}.quick-presets{display:flex;gap:6px;flex-wrap:wrap}
-      .favorite-strip{display:flex;align-items:center;gap:8px;overflow:auto;margin-bottom:14px;padding:11px;border:1px solid var(--divider-color);border-radius:13px;background:var(--card-background-color)}.favorite-strip>*{white-space:nowrap}.bulk-toolbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px;margin-bottom:12px;border:1px solid var(--divider-color);border-radius:12px;background:var(--card-background-color);box-shadow:0 2px 8px #0001}.bulk-count{margin-right:auto;color:var(--secondary-text-color);font-size:12px}.selectable-task{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px}.selectable-task>.task-card{min-width:0}.week-board{display:grid;grid-template-columns:repeat(7,minmax(150px,1fr));gap:8px;overflow:auto;padding-bottom:8px}.week-day{min-height:230px;padding:10px;border:1px solid var(--divider-color);border-radius:13px;background:var(--card-background-color)}.week-day>header{display:grid;grid-template-columns:1fr auto;gap:2px;margin-bottom:10px}.week-day>header span{font-size:11px;color:var(--secondary-text-color)}.week-day>header b{grid-row:1/3;grid-column:2;align-self:center}.week-day>article{display:flex;gap:6px;padding:8px;margin-bottom:6px;border-radius:9px;background:var(--secondary-background-color)}.week-day>article div{display:grid;min-width:0}.week-day>article strong{font-size:12px;overflow-wrap:anywhere}.week-day>article small{color:var(--secondary-text-color)}
+      .favorite-strip{display:flex;align-items:center;gap:8px;overflow:auto;margin-bottom:14px;padding:11px;border:1px solid var(--divider-color);border-radius:13px;background:var(--card-background-color)}.favorite-strip>*{white-space:nowrap}.bulk-toolbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px;margin-bottom:12px;border:1px solid var(--divider-color);border-radius:12px;background:var(--card-background-color);box-shadow:0 2px 8px #0001}.bulk-count{margin-right:auto;color:var(--secondary-text-color);font-size:12px}.selectable-task{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px}.selectable-task>.task-card{min-width:0}.week-board{display:grid;grid-template-columns:repeat(7,minmax(150px,1fr));gap:8px;overflow:auto;padding-bottom:8px}.week-day{min-height:230px;padding:10px;border:1px solid var(--divider-color);border-radius:13px;background:var(--card-background-color)}.week-day>header{display:grid;grid-template-columns:1fr auto;gap:2px;margin-bottom:10px}.week-day>header span{font-size:11px;color:var(--secondary-text-color)}.week-day>header b{grid-row:1/3;grid-column:2;align-self:center}.week-day>article{display:flex;gap:6px;padding:8px;margin-bottom:6px;border-radius:9px;background:var(--secondary-background-color)}.week-day>article div{display:grid;min-width:0;flex:1}.week-day>article strong{font-size:12px;overflow-wrap:anywhere}.week-day>article small{color:var(--secondary-text-color)}.week-day>article.week-preview{align-items:center;border:1px dashed var(--divider-color);cursor:default;opacity:.82;background:color-mix(in srgb,var(--secondary-background-color) 86%,transparent)}.week-preview>span{font-size:9px;font-weight:800;text-transform:uppercase;color:var(--secondary-text-color);border:1px solid var(--divider-color);border-radius:99px;padding:3px 5px}
       .ranking-card{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:16px;padding:17px 18px;margin-bottom:18px}.ranking-head{display:flex;justify-content:space-between;align-items:end;margin-bottom:10px}.ranking-head>span{font-size:12px;color:var(--secondary-text-color)}.ranking-list{display:grid;gap:4px}.ranking-row{display:grid;grid-template-columns:30px 38px minmax(100px,1fr) auto auto;align-items:center;gap:10px;padding:7px 2px;border-top:1px solid var(--divider-color,#ddd)}.ranking-row:first-child{border-top:0}.rank{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;font-size:12px;font-weight:800;background:var(--divider-color,#eee)}.rank.top-1{background:#ffe08a;color:#6d4c00}.rank.top-2{background:#e2e5e9;color:#46505a}.rank.top-3{background:#e8c3a3;color:#70401f}.month-points{font-size:12px;color:var(--secondary-text-color)}.ranking-row>b{min-width:72px;text-align:right;color:var(--primary-color)}
       .avatar{display:grid;place-items:center;flex:none;width:38px;height:38px;border-radius:50%;background:color-mix(in srgb,var(--primary-color,#03a9f4) 16%,var(--card-background-color,#fff));color:var(--primary-color,#03a9f4);font-weight:800}.avatar.large{width:52px;height:52px;font-size:20px}
       .section-title{display:flex;align-items:center;gap:8px;margin:20px 2px 9px}.section-title span{font-size:12px;background:var(--divider-color,#ddd);padding:2px 7px;border-radius:99px}.section-title.danger h3{color:var(--error-color,#db4437)}

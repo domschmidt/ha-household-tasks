@@ -35,7 +35,8 @@ escalation, and a multilingual management panel.
 - Open task marketplace with priorities, points, rewards, and voluntary help.
 - Global command search, explainable skipped decisions, health checks, and undo.
 - Progressive forms and a mobile top-three quick-action view.
-- Personal task inbox, seven-day planner, bulk actions, and favorites.
+- Personal task inbox, seven-day planner with read-only schedule projections,
+  bulk actions, and favorites.
 - Local smart capture and entity-based setup suggestions.
 - Actionable diagnostics, routine notification digests, and Assist intents.
 - Context-aware daily planning, natural moves, and drag-and-drop week planning.
