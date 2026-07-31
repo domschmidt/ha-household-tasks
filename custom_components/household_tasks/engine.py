@@ -152,8 +152,10 @@ def _frontend_version() -> str:
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up the integration package."""
+    from .client_api import async_register_client_api
     from .ui import async_register_websocket_commands
 
+    async_register_client_api(hass)
     async_register_websocket_commands(hass)
     await hass.http.async_register_static_paths(
         [
@@ -3310,6 +3312,24 @@ class HouseholdTaskEngine:
                 raise vol.Invalid(
                     "Dem Home-Assistant-Benutzer ist keine Person zugeordnet."
                 )
+        await self.async_claim_occurrence_for_person(
+            occurrence_id, person_id, context=context
+        )
+
+    async def async_claim_occurrence_for_person(
+        self,
+        occurrence_id: str,
+        person_id: str,
+        *,
+        context: Context | None = None,
+    ) -> None:
+        """Claim an open task for an explicitly authorized household person."""
+        async with self.lock:
+            occurrence = self.state["occurrences"].get(occurrence_id)
+            if not occurrence or occurrence.get("resolved"):
+                raise vol.Invalid(_TASK_NOT_OPEN)
+            if person_id not in self.people:
+                raise vol.Invalid("Die Person ist unbekannt.")
             await self._claim_occurrence(
                 occurrence_id, occurrence, person_id, context=context
             )

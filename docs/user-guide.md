@@ -608,3 +608,23 @@ Die Vorlagengalerie enthält unter anderem Frostschutz, Garten-Hitzeschutz,
 Sturmsicherung, Starkregen-/Fensterprüfung, Glatteisvorsorge, Lüften bei hoher
 Feuchte, UV-Schutz, Schneeräumen und Hitzeschutz für Haustiere. Vorlagen werden
 erst nach Auswahl einer konkreten lokalen Entität aktiviert.
+
+## iPhone- und iPad-Widget mit Scriptable
+
+Unter `clients/scriptable` liegt ein eigenständiger Scriptable-Client. Er zeigt
+offene, heute fällige, überfällige und blockierte Aufgaben als Home-Screen-
+Widget. Ein Antippen öffnet das Aktionsmenü zum Erledigen, Übernehmen,
+Verschieben, Starten, Bearbeiten der Checkliste oder Anfordern von Hilfe.
+
+Der Client verwendet die versionierte Schnittstelle
+`/api/household_tasks/v1/tasks` mit der normalen Home-Assistant-Bearer-
+Authentifizierung. Empfohlen wird ein eigener Nicht-Administrator-Benutzer, der
+in Household Tasks genau einer Person zugeordnet ist. Ein Administrator mit
+mehreren Personen gibt beim Setup zusätzlich die technische Person-ID an.
+
+Der langlebige Zugriffstoken wird ausschließlich im iOS-Schlüsselbund
+gespeichert. In den Offline-Cache gelangen nur die bereits auf die Person
+reduzierten Aufgabendaten. Für Zugriffe außerhalb des lokalen Netzes sollte
+Home Assistant über HTTPS, Home Assistant Cloud oder ein vertrauenswürdiges VPN
+erreichbar sein. Die vollständige Installation und Fehlerhilfe steht in
+`clients/scriptable/README.md`.
