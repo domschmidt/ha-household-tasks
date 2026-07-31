@@ -21,9 +21,9 @@ from homeassistant.components.frontend import (
 )
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Context, Event, HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_call_later,
@@ -96,6 +96,14 @@ from .resources import (
     resource_condition_matches,
 )
 from .scheduling import month_day, parse_duration, parse_time
+from .task_store import (
+    TASK_SCHEMA_VERSION,
+    TERMINAL_TASK_STATUSES,
+    append_event,
+    has_dependency_cycle,
+    migrate_state,
+    task_store_health,
+)
 from .weather_rules import WEATHER_LOGIC, WEATHER_OPERATORS, weather_decision
 from .workflows import (
     completion_due,
@@ -219,6 +227,35 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 )
         await engine.async_clear_handover(call.data["from_person"])
 
+    async def _async_set_status(call: ServiceCall) -> None:
+        engine = get_loaded_engine(hass)
+        if engine is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="not_loaded",
+            )
+        await engine.async_set_occurrence_status(
+            call.data["occurrence_id"],
+            call.data["status"],
+            expected_revision=call.data.get("expected_revision"),
+            context=call.context,
+        )
+
+    async def _async_set_checklist_item(call: ServiceCall) -> None:
+        engine = get_loaded_engine(hass)
+        if engine is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="not_loaded",
+            )
+        await engine.async_set_checklist_item(
+            call.data["occurrence_id"],
+            call.data["item_id"],
+            call.data["completed"],
+            expected_revision=call.data.get("expected_revision"),
+            context=call.context,
+        )
+
     hass.services.async_register(
         DOMAIN,
         "create",
@@ -245,22 +282,50 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         _async_clear_handover,
         schema=vol.Schema({vol.Required("from_person"): str}),
     )
+    hass.services.async_register(
+        DOMAIN,
+        "set_status",
+        _async_set_status,
+        schema=vol.Schema(
+            {
+                vol.Required("occurrence_id"): str,
+                vol.Required("status"): vol.In(
+                    [
+                        "open",
+                        "in_progress",
+                        "waiting",
+                        "blocked",
+                        "completed",
+                        "cancelled",
+                    ]
+                ),
+                vol.Optional("expected_revision"): int,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "set_checklist_item",
+        _async_set_checklist_item,
+        schema=vol.Schema(
+            {
+                vol.Required("occurrence_id"): str,
+                vol.Required("item_id"): str,
+                vol.Required("completed"): bool,
+                vol.Optional("expected_revision"): int,
+            }
+        ),
+    )
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Household Tasks from a UI config entry."""
-    todo_entity = entry.data["todo_entity"]
-    if hass.states.get(todo_entity) is None:
-        raise ConfigEntryNotReady(
-            translation_domain=DOMAIN,
-            translation_key="todo_unavailable",
-            translation_placeholders={"entity_id": todo_entity},
-        )
-    engine = HouseholdTaskEngine(hass, initial_config(todo_entity))
+    engine = HouseholdTaskEngine(hass, initial_config())
     await engine.async_setup()
     async_register_intents(hass)
     entry.runtime_data = engine
+    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
     if "haushaltsaufgaben" not in hass.data.get("frontend_panels", {}):
         frontend_version = await hass.async_add_executor_job(_frontend_version)
         async_register_built_in_panel(
@@ -285,6 +350,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Household Tasks config entry."""
+    if not await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR]):
+        return False
     engine = getattr(entry, "runtime_data", None)
     if isinstance(engine, HouseholdTaskEngine):
         await engine.async_shutdown()
@@ -301,7 +368,6 @@ class HouseholdTaskEngine:
         self.hass = hass
         self.config = config
         self.initial_config = deepcopy(config)
-        self.todo_entity: str = config["todo_entity"]
         self.people: dict[str, dict[str, Any]] = config["people"]
         self.tasks: dict[str, dict[str, Any]] = config["tasks"]
         self.defaults: dict[str, Any] = config.get("defaults", {})
@@ -334,6 +400,9 @@ class HouseholdTaskEngine:
             "forecast_traces": {},
             "forecast_last_created": {},
             "ui_config": None,
+            "task_schema_version": TASK_SCHEMA_VERSION,
+            "task_events": [],
+            "store_recovery": [],
         }
         self.lock = asyncio.Lock()
         self.remove_interval = None
@@ -347,8 +416,11 @@ class HouseholdTaskEngine:
     async def async_setup(self) -> None:
         """Load state, validate configuration, and register listeners."""
         stored = await self.store.async_load()
+        migrated_store = False
         if stored:
-            self.state.update(stored)
+            migrated = migrate_state(stored, now=dt_util.utcnow())
+            migrated_store = migrated != stored
+            self.state.update(migrated)
         self.state.setdefault("daily_triggers", {})
         self.state.setdefault("state_triggers", {})
         self.state.setdefault("weekly_summaries", {})
@@ -373,6 +445,9 @@ class HouseholdTaskEngine:
         self.state.setdefault("forecast_traces", {})
         self.state.setdefault("forecast_last_created", {})
         self.state.setdefault("ui_config", None)
+        self.state.setdefault("task_schema_version", TASK_SCHEMA_VERSION)
+        self.state.setdefault("task_events", [])
+        self.state.setdefault("store_recovery", [])
         if self.state["ui_config"]:
             self._apply_editable_config(self.state["ui_config"])
         if stored and "scores" not in stored:
@@ -399,6 +474,8 @@ class HouseholdTaskEngine:
         self._validate_config()
         if self.state["ui_config"] is None:
             self.state["ui_config"] = self._editable_config()
+            await self._save()
+        elif migrated_store:
             await self._save()
 
         self.remove_notification_listener = self.hass.bus.async_listen(
@@ -427,9 +504,6 @@ class HouseholdTaskEngine:
         """Raise a useful configuration error before starting."""
         errors: list[str] = []
         configured_tags: dict[str, str] = {}
-        if not self.todo_entity.startswith("todo."):
-            errors.append("todo_entity must start with 'todo.'")
-
         for person_id, person in self.people.items():
             if not isinstance(person, dict):
                 errors.append(f"person '{person_id}' must be a mapping")
@@ -681,6 +755,35 @@ class HouseholdTaskEngine:
                     errors.append(
                         f"task '{task_id}' needs a valid first flexible due date"
                     )
+
+            checklist = task.get("checklist", [])
+            if not isinstance(checklist, list):
+                errors.append(f"task '{task_id}' checklist must be a list")
+            else:
+                checklist_ids = [
+                    str(item.get("id") or f"step_{index + 1}")
+                    if isinstance(item, dict)
+                    else f"step_{index + 1}"
+                    for index, item in enumerate(checklist)
+                ]
+                if len(checklist_ids) != len(set(checklist_ids)):
+                    errors.append(f"task '{task_id}' checklist IDs must be unique")
+                if any(
+                    not str(item.get("title") or item.get("name") or "").strip()
+                    if isinstance(item, dict)
+                    else not str(item).strip()
+                    for item in checklist
+                ):
+                    errors.append(f"task '{task_id}' checklist items need a title")
+
+            depends_on = task.get("depends_on", [])
+            if not isinstance(depends_on, list):
+                errors.append(f"task '{task_id}' dependencies must be a list")
+            elif any(
+                dependency not in self.tasks or dependency == task_id
+                for dependency in depends_on
+            ):
+                errors.append(f"task '{task_id}' has an invalid dependency")
 
             follow_ups = task.get("follow_ups", [])
             if not isinstance(follow_ups, list):
@@ -1273,7 +1376,12 @@ class HouseholdTaskEngine:
             "scores": deepcopy(self.state.get("scores", {})),
             "handovers": deepcopy(self.state.get("handovers", {})),
             "occurrences": occurrences,
-            "todo_entity": self.todo_entity,
+            "task_store": {
+                "schema_version": self.state.get("task_schema_version"),
+                "journal_entries": len(self.state.get("task_events", [])),
+                "backend": "home_assistant_store",
+            },
+            "task_events": deepcopy(self.state.get("task_events", [])[-200:]),
             "using_ui_config": self.state.get("ui_config") is not None,
             "last_check": self.state.get("last_check"),
             "household_mode": deepcopy(self._current_household_mode()),
@@ -1311,15 +1419,8 @@ class HouseholdTaskEngine:
     def configuration_health(self) -> dict[str, Any]:
         """Return actionable configuration findings without exposing secrets."""
         findings: list[dict[str, Any]] = []
-        if self.hass.states.get(self.todo_entity) is None:
-            findings.append(
-                {
-                    "severity": "critical",
-                    "code": "todo_missing",
-                    "message": f"To-do-Entität {self.todo_entity} ist nicht verfügbar.",
-                    "action": {"type": "open_integration"},
-                }
-            )
+        store_health = task_store_health(self.state)
+        findings.extend(store_health["findings"])
         for person_id, person in self.people.items():
             findings.extend(self._person_health_findings(person_id, person))
         for task_id, task in self.tasks.items():
@@ -1329,6 +1430,7 @@ class HouseholdTaskEngine:
             "status": self._health_status(findings),
             "findings": findings,
             "checked_at": dt_util.utcnow().isoformat(),
+            "task_store": store_health,
         }
 
     def _person_health_findings(
@@ -1601,6 +1703,12 @@ class HouseholdTaskEngine:
                 await self._update_native_occurrence(occurrence, due=due)
                 occurrence["due"] = due.isoformat()
                 occurrence.pop("waiting_for", None)
+            self._touch_occurrence(
+                occurrence_id,
+                occurrence,
+                "task_moved",
+                details={"instruction": instruction, "kind": move["kind"]},
+            )
             await self._save()
             return move
 
@@ -1974,7 +2082,7 @@ class HouseholdTaskEngine:
         raise vol.Invalid("Diese Aktion kann nicht rückgängig gemacht werden.")
 
     async def _undo_completion(self, payload: dict[str, Any]) -> None:
-        """Restore a completed occurrence, score, and native to-do state."""
+        """Restore a completed occurrence and its awarded score."""
         occurrence_id = payload["occurrence_id"]
         occurrence = deepcopy(payload["occurrence"])
         self.state["occurrences"][occurrence_id] = occurrence
@@ -1983,26 +2091,14 @@ class HouseholdTaskEngine:
         if person_id in self.people and points:
             scores = self.state.setdefault("scores", {})
             scores[person_id] = max(0, int(scores.get(person_id, 0)) - points)
-        await self._set_native_status(occurrence.get("uid"), "needs_action")
+        occurrence["status"] = "open"
+        occurrence["resolved"] = False
+        occurrence.pop("resolved_at", None)
+        occurrence.pop("resolution_reason", None)
+        self._touch_occurrence(occurrence_id, occurrence, "task_reopened")
         for created_id in payload.get("created_occurrences", []):
-            created = self.state["occurrences"].pop(created_id, None)
-            if created:
-                await self._set_native_status(created.get("uid"), "completed")
-
-    async def _set_native_status(self, uid: str | None, status: str) -> None:
-        """Update one native item when an undo record contains its UID."""
-        if not uid:
-            return
-        await self.hass.services.async_call(
-            "todo",
-            "update_item",
-            {
-                "entity_id": self.todo_entity,
-                "item": uid,
-                "status": status,
-            },
-            blocking=True,
-        )
+            if self.state["occurrences"].pop(created_id, None):
+                self._record_task_event("task_removed_by_undo", created_id)
 
     async def async_reset_seasonal_executions(self, task_id: str) -> int:
         """Reset all persisted season targets for one configured rule."""
@@ -2497,32 +2593,30 @@ class HouseholdTaskEngine:
             await self._save()
 
     async def async_complete_occurrence(
-        self, occurrence_id: str, context: Context | None = None
+        self,
+        occurrence_id: str,
+        context: Context | None = None,
+        *,
+        expected_revision: int | None = None,
     ) -> None:
-        """Complete a tracked native to-do from the panel."""
+        """Complete a task owned by the native Household Tasks store."""
         async with self.lock:
-            occurrence = self.state["occurrences"].get(occurrence_id)
-            if not occurrence or occurrence.get("resolved"):
+            occurrence = self._occurrence_for_update(occurrence_id, expected_revision)
+            if occurrence.get("resolved"):
                 raise vol.Invalid(_TASK_NOT_OPEN)
-            uid = occurrence.get("uid")
-            if not uid:
-                await self._refresh_open_items()
-                uid = occurrence.get("uid")
-            if not uid:
-                raise vol.Invalid("Die To-do-ID konnte nicht ermittelt werden.")
+            if occurrence.get("status") == "blocked":
+                raise vol.Invalid("Offene Abhängigkeiten blockieren diese Aufgabe.")
+            incomplete = [
+                item
+                for item in occurrence.get("checklist", [])
+                if not item.get("completed")
+            ]
+            if incomplete and occurrence.get("task", {}).get(
+                "require_checklist_completion", True
+            ):
+                raise vol.Invalid(f"Noch {len(incomplete)} Checklistenpunkt(e) offen.")
             snapshot = deepcopy(occurrence)
             previous_occurrences = set(self.state["occurrences"])
-            await self.hass.services.async_call(
-                "todo",
-                "update_item",
-                {
-                    "entity_id": self.todo_entity,
-                    "item": uid,
-                    "status": "completed",
-                },
-                blocking=True,
-                context=context,
-            )
             await self._resolve_occurrence(
                 occurrence_id,
                 occurrence,
@@ -2545,6 +2639,177 @@ class HouseholdTaskEngine:
                 },
             )
             await self._save()
+
+    async def async_set_occurrence_status(
+        self,
+        occurrence_id: str,
+        status: str,
+        *,
+        expected_revision: int | None = None,
+        context: Context | None = None,
+    ) -> None:
+        """Transition one task with optimistic concurrency protection."""
+        if status not in {
+            "open",
+            "in_progress",
+            "waiting",
+            "blocked",
+            "completed",
+            "cancelled",
+        }:
+            raise vol.Invalid(f"Unknown task status: {status}")
+        if status == "blocked":
+            raise vol.Invalid(
+                "Der Status Blockiert wird ausschließlich aus Abhängigkeiten berechnet."
+            )
+        if status == "completed":
+            await self.async_complete_occurrence(
+                occurrence_id,
+                context,
+                expected_revision=expected_revision,
+            )
+            return
+        async with self.lock:
+            occurrence = self._occurrence_for_update(occurrence_id, expected_revision)
+            unresolved = [
+                dependency
+                for dependency in occurrence.get("dependencies", [])
+                if self.state["occurrences"].get(dependency, {}).get("status")
+                not in TERMINAL_TASK_STATUSES
+            ]
+            if unresolved:
+                raise vol.Invalid(
+                    "Offene Abhängigkeiten blockieren diesen Statuswechsel."
+                )
+            if status == "cancelled":
+                await self._resolve_occurrence(
+                    occurrence_id,
+                    occurrence,
+                    completed_by=self._person_for_context(context),
+                    award_point=False,
+                    resolution_reason="cancelled",
+                )
+                await self._save()
+                return
+            occurrence["status"] = status
+            occurrence["resolved"] = False
+            occurrence.pop("resolved_at", None)
+            occurrence.pop("resolution_reason", None)
+            self._touch_occurrence(
+                occurrence_id,
+                occurrence,
+                "task_status_changed",
+                actor=self._person_for_context(context),
+                details={"status": status},
+            )
+            await self._save()
+
+    async def async_set_checklist_item(
+        self,
+        occurrence_id: str,
+        item_id: str,
+        completed: bool,
+        *,
+        expected_revision: int | None = None,
+        context: Context | None = None,
+    ) -> None:
+        """Update one structured checklist item."""
+        async with self.lock:
+            occurrence = self._occurrence_for_update(occurrence_id, expected_revision)
+            item = next(
+                (
+                    entry
+                    for entry in occurrence.get("checklist", [])
+                    if entry.get("id") == item_id
+                ),
+                None,
+            )
+            if item is None:
+                raise vol.Invalid(f"Unknown checklist item: {item_id}")
+            actor = self._person_for_context(context)
+            item["completed"] = completed
+            if completed:
+                item["completed_at"] = dt_util.utcnow().isoformat()
+                if actor:
+                    item["completed_by"] = actor
+            else:
+                item.pop("completed_at", None)
+                item.pop("completed_by", None)
+            self._touch_occurrence(
+                occurrence_id,
+                occurrence,
+                "checklist_item_completed" if completed else "checklist_item_reopened",
+                actor=actor,
+                details={"item_id": item_id},
+            )
+            await self._save()
+
+    async def async_set_occurrence_dependencies(
+        self,
+        occurrence_id: str,
+        dependencies: list[str],
+        *,
+        expected_revision: int | None = None,
+    ) -> None:
+        """Replace occurrence dependencies and recompute its blocked state."""
+        async with self.lock:
+            occurrence = self._occurrence_for_update(occurrence_id, expected_revision)
+            normalized = list(dict.fromkeys(str(item) for item in dependencies))
+            if occurrence_id in normalized:
+                raise vol.Invalid("Eine Aufgabe kann nicht von sich selbst abhängen.")
+            missing = [
+                item for item in normalized if item not in self.state["occurrences"]
+            ]
+            if missing:
+                raise vol.Invalid(f"Unknown dependencies: {', '.join(missing)}")
+            if has_dependency_cycle(
+                self.state["occurrences"], occurrence_id, normalized
+            ):
+                raise vol.Invalid("Abhängigkeiten dürfen keinen Zyklus bilden.")
+            occurrence["dependencies"] = normalized
+            blocked = any(
+                self.state["occurrences"][item].get("status")
+                not in TERMINAL_TASK_STATUSES
+                for item in normalized
+            )
+            if occurrence.get("status") not in TERMINAL_TASK_STATUSES:
+                occurrence["status"] = "blocked" if blocked else "open"
+            self._touch_occurrence(
+                occurrence_id,
+                occurrence,
+                "task_dependencies_changed",
+                details={"dependencies": normalized},
+            )
+            await self._save()
+
+    def task_history(self, occurrence_id: str) -> list[dict[str, Any]]:
+        """Return the immutable event history for one task."""
+        if occurrence_id not in self.state["occurrences"]:
+            raise vol.Invalid("Unknown task occurrence")
+        return [
+            deepcopy(event)
+            for event in self.state.get("task_events", [])
+            if event.get("occurrence_id") == occurrence_id
+        ]
+
+    def _occurrence_for_update(
+        self, occurrence_id: str, expected_revision: int | None
+    ) -> dict[str, Any]:
+        occurrence = self.state["occurrences"].get(occurrence_id)
+        if occurrence is None:
+            raise vol.Invalid("Unknown task occurrence")
+        if occurrence.get("status") in TERMINAL_TASK_STATUSES:
+            raise vol.Invalid(
+                "Abgeschlossene oder abgebrochene Aufgaben können nicht verändert werden."
+            )
+        if (
+            expected_revision is not None
+            and int(occurrence.get("revision", 0)) != expected_revision
+        ):
+            raise vol.Invalid(
+                "Die Aufgabe wurde zwischenzeitlich geändert. Bitte neu laden."
+            )
+        return occurrence
 
     async def _scheduled_scan(self, now: datetime) -> None:
         await self.async_scan(now)
@@ -3008,24 +3273,8 @@ class HouseholdTaskEngine:
                 await self._claim_occurrence(occurrence_id, occurrence, helper_id)
                 await self._save()
                 return
-            uid = occurrence.get("uid")
-            if not uid:
-                await self._refresh_open_items()
-                uid = occurrence.get("uid")
-            if not uid:
-                _LOGGER.warning(
-                    "Cannot complete occurrence %s because its to-do UID is unknown",
-                    occurrence_id,
-                )
-                return
             snapshot = deepcopy(occurrence)
             previous_occurrences = set(self.state["occurrences"])
-            await self.hass.services.async_call(
-                "todo",
-                "update_item",
-                {"entity_id": self.todo_entity, "item": uid, "status": "completed"},
-                blocking=True,
-            )
             await self._resolve_occurrence(
                 occurrence_id,
                 occurrence,
@@ -3151,23 +3400,6 @@ class HouseholdTaskEngine:
             raise vol.Invalid("Diese Person darf die Aufgabe nicht übernehmen.")
         task_name = re.sub(r"^\[[^\]]+\]\s*", "", occurrence["title"])
         title = f"[{self.people[person_id]['name']}] {task_name}"
-        uid = occurrence.get("uid")
-        if not uid:
-            await self._refresh_open_items()
-            uid = occurrence.get("uid")
-        if not uid:
-            raise vol.Invalid("Die To-do-ID konnte nicht ermittelt werden.")
-        await self.hass.services.async_call(
-            "todo",
-            "update_item",
-            {
-                "entity_id": self.todo_entity,
-                "item": uid,
-                "rename": title,
-            },
-            blocking=True,
-            context=context,
-        )
         await self._clear_notifications(occurrence_id, occurrence)
         occurrence["assignee"] = person_id
         occurrence["title"] = title
@@ -3178,6 +3410,12 @@ class HouseholdTaskEngine:
             "candidates": candidates,
         }
         self._record_assignment(person_id)
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "task_claimed",
+            actor=person_id,
+        )
         await self._notify(
             occurrence_id,
             occurrence,
@@ -3220,6 +3458,13 @@ class HouseholdTaskEngine:
                 "at": dt_util.utcnow().isoformat(),
             }
         )
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "task_reassigned",
+            actor=person_id,
+            details={"from": previous, "to": person_id, "reason": reason_type},
+        )
         self._record_assignment(person_id)
         await self._notify(
             occurrence_id,
@@ -3259,7 +3504,7 @@ class HouseholdTaskEngine:
         occurrence: dict[str, Any],
         due: datetime,
     ) -> None:
-        """Move a native to-do and restart its escalation clock."""
+        """Move a task and restart its escalation clock."""
         due = dt_util.as_local(due).replace(second=0, microsecond=0)
         await self._update_native_occurrence(occurrence, due=due)
         await self._clear_notifications(occurrence_id, occurrence)
@@ -3267,6 +3512,12 @@ class HouseholdTaskEngine:
         occurrence["snoozed_until"] = due.isoformat()
         occurrence["sent_steps"] = []
         occurrence["first_notification_at"] = None
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "task_snoozed",
+            details={"due": due.isoformat()},
+        )
 
     async def _delegate_occurrence(
         self,
@@ -3309,6 +3560,13 @@ class HouseholdTaskEngine:
             occurrence["first_notification_at"] = None
         history.append(assignee)
         occurrence["delegated_at"] = dt_util.utcnow().isoformat()
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "task_delegated",
+            actor=assignee,
+            details={"from": current, "to": assignee},
+        )
         self._record_assignment(assignee)
         await self._notify(
             occurrence_id,
@@ -3348,6 +3606,12 @@ class HouseholdTaskEngine:
                 "at": dt_util.utcnow().isoformat(),
             }
         )
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "task_opened_for_claim",
+            details={"from": previous, "reason": reason_type},
+        )
         if notify:
             await self._notify(
                 occurrence_id,
@@ -3364,21 +3628,11 @@ class HouseholdTaskEngine:
         due: datetime | None = None,
         title: str | None = None,
     ) -> None:
-        uid = occurrence.get("uid")
-        if not uid:
-            await self._refresh_open_items()
-            uid = occurrence.get("uid")
-        if not uid:
-            raise vol.Invalid("Die To-do-ID konnte nicht ermittelt werden.")
-        data: dict[str, Any] = {
-            "entity_id": self.todo_entity,
-            "item": uid,
-        }
+        """Update native occurrence fields without an external mirror."""
         if due is not None:
-            data["due_datetime"] = due.isoformat()
+            occurrence["due"] = due.isoformat()
         if title is not None:
-            data["rename"] = title
-        await self.hass.services.async_call("todo", "update_item", data, blocking=True)
+            occurrence["title"] = title
 
     async def _handle_stop(self, event: Event) -> None:
         # A one-shot listener removes itself before invoking the callback.
@@ -3431,7 +3685,6 @@ class HouseholdTaskEngine:
             await self._scan_weather_tasks(current)
             await self._scan_forecast_tasks(current)
             await self._process_waiting_occurrences(current)
-            await self._refresh_open_items()
             await self._process_escalations(current)
             await self._process_weekly_summary(current)
             await self._process_notification_digest(current)
@@ -3616,18 +3869,6 @@ class HouseholdTaskEngine:
                     and not occurrence.get("resolved")
                     and monitor.get("auto_resolve", True)
                 ):
-                    uid = occurrence.get("uid")
-                    if uid:
-                        await self.hass.services.async_call(
-                            "todo",
-                            "update_item",
-                            {
-                                "entity_id": self.todo_entity,
-                                "item": uid,
-                                "status": "completed",
-                            },
-                            blocking=True,
-                        )
                     await self._resolve_occurrence(
                         active["occurrence_id"],
                         occurrence,
@@ -3708,18 +3949,6 @@ class HouseholdTaskEngine:
                         active.get("occurrence_id")
                     )
                     if occurrence and not occurrence.get("resolved"):
-                        uid = occurrence.get("uid")
-                        if uid:
-                            await self.hass.services.async_call(
-                                "todo",
-                                "update_item",
-                                {
-                                    "entity_id": self.todo_entity,
-                                    "item": uid,
-                                    "status": "completed",
-                                },
-                                blocking=True,
-                            )
                         await self._resolve_occurrence(
                             active["occurrence_id"],
                             occurrence,
@@ -3734,19 +3963,13 @@ class HouseholdTaskEngine:
             if active:
                 occurrence = self.state["occurrences"].get(active.get("occurrence_id"))
                 if occurrence and not occurrence.get("resolved"):
-                    uid = occurrence.get("uid")
-                    if uid:
-                        await self.hass.services.async_call(
-                            "todo",
-                            "update_item",
-                            {
-                                "entity_id": self.todo_entity,
-                                "item": uid,
-                                "description": detail,
-                            },
-                            blocking=True,
-                        )
                     occurrence["task"]["description"] = detail
+                    occurrence["description"] = detail
+                    self._touch_occurrence(
+                        active["occurrence_id"],
+                        occurrence,
+                        "task_description_updated",
+                    )
                     active["signature"] = signature
                     await self._notify(
                         active["occurrence_id"],
@@ -4451,12 +4674,8 @@ class HouseholdTaskEngine:
         assignee, assignment_reason = self._select_assignee_with_reason(task_id, task)
         assignee_name = self.people.get(assignee, {}).get("name", "Offen")
         title = f"[{assignee_name}] {task['name']}"
-        uid = await self._add_native_occurrence(
-            title,
-            due,
-            self._occurrence_description(task, event_summary),
-            context,
-        )
+        description = self._occurrence_description(task, event_summary)
+        dependencies = self._dependency_occurrence_ids(task)
         occurrence = self._occurrence_record(
             task_id,
             task,
@@ -4464,13 +4683,20 @@ class HouseholdTaskEngine:
             assignee,
             assignment_reason,
             due,
-            uid,
             repetition,
+            description=description,
+            dependencies=dependencies,
             target_person=_target_person,
             creation_trace=creation_trace,
             rule_reference=rule_reference,
         )
         self.state["occurrences"][occurrence_id] = occurrence
+        self._record_task_event(
+            "task_created",
+            occurrence_id,
+            actor=self._person_for_context(context),
+            details={"task_id": task_id, "due": due.isoformat()},
+        )
         if not manual:
             self._mark_seasonal_execution(repetition)
         self._record_assignment(assignee)
@@ -4602,32 +4828,6 @@ class HouseholdTaskEngine:
             return f"Kalender: {event_summary}"
         return description
 
-    async def _add_native_occurrence(
-        self,
-        title: str,
-        due: datetime,
-        description: str | None,
-        context: Context | None,
-    ) -> str | None:
-        """Create a native to-do item and identify its returned UID."""
-        before = await self._get_open_items()
-        data: dict[str, Any] = {
-            "entity_id": self.todo_entity,
-            "item": title,
-            "due_datetime": due.isoformat(),
-        }
-        if description:
-            data["description"] = description
-        await self.hass.services.async_call(
-            "todo", "add_item", data, blocking=True, context=context
-        )
-        after = await self._get_open_items()
-        new_uids = set(after) - set(before)
-        matching = (
-            item_uid for item_uid in new_uids if after[item_uid].get("summary") == title
-        )
-        return next(matching, next(iter(new_uids), None))
-
     def _occurrence_record(
         self,
         task_id: str,
@@ -4636,9 +4836,10 @@ class HouseholdTaskEngine:
         assignee: str | None,
         assignment_reason: dict[str, Any],
         due: datetime,
-        uid: str | None,
         repetition: dict[str, Any],
         *,
+        description: str | None,
+        dependencies: list[str],
         target_person: str | None,
         creation_trace: dict[str, Any] | None,
         rule_reference: datetime | None,
@@ -4651,7 +4852,26 @@ class HouseholdTaskEngine:
             "assignee": assignee,
             "assignment_reason": assignment_reason,
             "due": due.isoformat(),
-            "uid": uid,
+            "description": description,
+            "status": self._initial_occurrence_status(assignment_reason, dependencies),
+            "created_at": dt_util.utcnow().isoformat(),
+            "updated_at": dt_util.utcnow().isoformat(),
+            "revision": 1,
+            "checklist": [
+                {
+                    "id": str(item.get("id") or f"step_{index + 1}"),
+                    "title": str(item.get("title") or item.get("name") or "Schritt"),
+                    "completed": False,
+                }
+                if isinstance(item, dict)
+                else {
+                    "id": f"step_{index + 1}",
+                    "title": str(item),
+                    "completed": False,
+                }
+                for index, item in enumerate(task.get("checklist", []))
+            ],
+            "dependencies": dependencies,
             "sent_steps": [],
             "notified_people": [],
             "first_notification_at": None,
@@ -4668,6 +4888,28 @@ class HouseholdTaskEngine:
             occurrence["campaign_id"] = f"{task_id}:{repetition['season_key']}"
         self._add_due_window(occurrence, task, due)
         return occurrence
+
+    def _dependency_occurrence_ids(self, task: dict[str, Any]) -> list[str]:
+        """Resolve template dependencies to current unresolved occurrences."""
+        template_ids = {str(item) for item in task.get("depends_on", [])}
+        if not template_ids:
+            return []
+        return [
+            occurrence_id
+            for occurrence_id, occurrence in self.state["occurrences"].items()
+            if occurrence.get("task_id") in template_ids
+            and occurrence.get("status") not in {"completed", "cancelled"}
+        ]
+
+    @staticmethod
+    def _initial_occurrence_status(
+        assignment_reason: dict[str, Any], dependencies: list[str]
+    ) -> str:
+        if dependencies:
+            return "blocked"
+        if assignment_reason.get("waiting"):
+            return "waiting"
+        return "open"
 
     def _add_due_window(
         self,
@@ -4689,45 +4931,6 @@ class HouseholdTaskEngine:
                 anchor + self._parse_duration(schedule["latest_interval"])
             ).isoformat(),
         }
-
-    async def _refresh_open_items(self) -> None:
-        open_items = await self._get_open_items()
-        open_uids = set(open_items)
-        for occurrence_id, occurrence in list(self.state["occurrences"].items()):
-            if occurrence.get("resolved"):
-                continue
-            uid = occurrence.get("uid")
-            if uid and uid not in open_uids:
-                await self._resolve_occurrence(
-                    occurrence_id,
-                    occurrence,
-                    completed_by=occurrence.get("assignee"),
-                )
-                continue
-            if uid:
-                continue
-            due = dt_util.parse_datetime(occurrence["due"])
-            for item_uid, item in open_items.items():
-                item_due = self._parse_calendar_datetime(item.get("due"))
-                if (
-                    item.get("summary") == occurrence["title"]
-                    and item_due
-                    and due
-                    and abs((item_due - due).total_seconds()) < 2
-                ):
-                    occurrence["uid"] = item_uid
-                    break
-
-    async def _get_open_items(self) -> dict[str, dict[str, Any]]:
-        response = await self.hass.services.async_call(
-            "todo",
-            "get_items",
-            {"entity_id": self.todo_entity, "status": "needs_action"},
-            blocking=True,
-            return_response=True,
-        )
-        items = (response or {}).get(self.todo_entity, {}).get("items", [])
-        return {str(item["uid"]): item for item in items if item.get("uid") is not None}
 
     async def _process_escalations(self, now: datetime) -> None:
         for occurrence_id, occurrence in self.state["occurrences"].items():
@@ -4935,7 +5138,7 @@ class HouseholdTaskEngine:
         claim_help_for: str | None,
     ) -> list[dict[str, Any]]:
         """Build mobile actions for help, market, or assigned tasks."""
-        open_action = {"action": "URI", "title": _OPEN_TASK, "uri": "/todo"}
+        open_action = {"action": "URI", "title": _OPEN_TASK, "uri": _PANEL_PATH}
         if claim_help_for:
             return [
                 {
@@ -4999,7 +5202,7 @@ class HouseholdTaskEngine:
                 {
                     "title": title,
                     "message": message,
-                    "data": {"tag": tag, "url": "/todo", "actions": actions},
+                    "data": {"tag": tag, "url": _PANEL_PATH, "actions": actions},
                 },
                 blocking=True,
             )
@@ -5026,6 +5229,9 @@ class HouseholdTaskEngine:
             return
         resolved_at = dt_util.utcnow()
         occurrence["resolved"] = True
+        occurrence["status"] = (
+            "cancelled" if resolution_reason == "cancelled" else "completed"
+        )
         occurrence["resolved_at"] = resolved_at.isoformat()
         occurrence["resolution_reason"] = resolution_reason
         for pending in self.state.setdefault("notification_queue", {}).values():
@@ -5047,8 +5253,37 @@ class HouseholdTaskEngine:
                 occurrence["awarded_points"] = points
                 scores[person_id] = int(scores.get(person_id, 0)) + points
         await self._clear_notifications(occurrence_id, occurrence)
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "task_completed"
+            if occurrence["status"] == "completed"
+            else "task_cancelled",
+            actor=completed_by,
+            details={"reason": resolution_reason},
+        )
         if resolution_reason == "completed":
             await self._create_completion_followups(occurrence, resolved_at)
+        self._release_dependents(occurrence_id)
+
+    def _release_dependents(self, completed_id: str) -> None:
+        """Unblock tasks once all of their native dependencies are resolved."""
+        terminal = {"completed", "cancelled"}
+        for occurrence_id, candidate in self.state["occurrences"].items():
+            dependencies = candidate.get("dependencies", [])
+            if completed_id not in dependencies or candidate.get("status") != "blocked":
+                continue
+            if all(
+                self.state["occurrences"].get(dependency, {}).get("status") in terminal
+                for dependency in dependencies
+            ):
+                candidate["status"] = "open"
+                self._touch_occurrence(
+                    occurrence_id,
+                    candidate,
+                    "task_unblocked",
+                    details={"completed_dependency": completed_id},
+                )
 
     async def _create_completion_followups(
         self, occurrence: dict[str, Any], resolved_at: datetime
@@ -5173,6 +5408,55 @@ class HouseholdTaskEngine:
 
     async def _save(self) -> None:
         await self.store.async_save(self.state)
+        open_count = sum(
+            occurrence.get("status") not in {"completed", "cancelled"}
+            for occurrence in self.state.get("occurrences", {}).values()
+        )
+        self.hass.bus.async_fire(
+            f"{DOMAIN}_updated",
+            {
+                "schema_version": self.state.get("task_schema_version"),
+                "open_count": open_count,
+                "occurrence_count": len(self.state.get("occurrences", {})),
+            },
+        )
+
+    def _record_task_event(
+        self,
+        event_type: str,
+        occurrence_id: str | None = None,
+        *,
+        actor: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append one immutable native task journal entry."""
+        return append_event(
+            self.state,
+            event_type=event_type,
+            occurred_at=dt_util.utcnow().isoformat(),
+            occurrence_id=occurrence_id,
+            actor=actor,
+            details=details,
+        )
+
+    def _touch_occurrence(
+        self,
+        occurrence_id: str,
+        occurrence: dict[str, Any],
+        event_type: str,
+        *,
+        actor: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Advance optimistic revision metadata and append an event."""
+        occurrence["revision"] = int(occurrence.get("revision", 0)) + 1
+        occurrence["updated_at"] = dt_util.utcnow().isoformat()
+        self._record_task_event(
+            event_type,
+            occurrence_id,
+            actor=actor,
+            details=details,
+        )
 
     @staticmethod
     def _parse_time(value: str) -> time:

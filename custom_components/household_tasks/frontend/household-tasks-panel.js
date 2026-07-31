@@ -1072,7 +1072,7 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _openOccurrences() {
     return this._data.occurrences
-      .filter((item) => !item.resolved)
+      .filter((item) => !["completed", "cancelled"].includes(item.status || (item.resolved ? "completed" : "open")))
       .sort((a, b) => new Date(a.due) - new Date(b.due));
   }
 
@@ -1212,17 +1212,28 @@ class HouseholdTasksPanel extends HTMLElement {
     const marketBadges = this._marketBadges(marketBits);
     const attachmentCount = this._attachmentCount(attachments);
     const primaryAction = this._occurrencePrimaryAction(item, canClaim);
+    const status = item.status || (item.resolved ? "completed" : "open");
+    const statusLabels = { open: "Offen", in_progress: "In Arbeit", waiting: "Wartet", blocked: "Blockiert" };
+    const checklist = (item.checklist || []).length ? `<div class="task-checklist" aria-label="Checkliste">${item.checklist.map((step) => `
+      <label><input type="checkbox" data-checklist-occurrence="${this._e(item.id)}" data-checklist-item="${this._e(step.id)}" data-revision="${Number(item.revision || 1)}" ${step.completed ? "checked" : ""}> <span>${this._e(step.title)}</span></label>`).join("")}</div>` : "";
+    const dependencyNames = (item.dependencies || []).map((dependencyId) => {
+      const dependency = this._data.occurrences.find((entry) => entry.id === dependencyId);
+      return dependency ? this._plainTitle(dependency.title) : dependencyId;
+    });
+    const dependencies = dependencyNames.length ? `<p class="task-dependencies">Abhängig von: ${dependencyNames.map((name) => this._e(name)).join(", ")}</p>` : "";
     return `<article class="task-card ${overdue ? "overdue" : ""}" data-card-occurrence="${this._e(item.id)}">
       <div class="avatar">${this._e(person.name).slice(0, 1)}</div>
       <div class="task-main">
         <h3>${this._e(this._plainTitle(item.title))}</h3>
-        <p>${this._e(person.name)} · ${this._formatDue(due)}${reminder}</p>
+        <p><span class="task-status status-${this._e(status)}">${statusLabels[status] || status}</span> ${this._e(person.name)} · ${this._formatDue(due)}${reminder}</p>
         ${marketBadges}
         ${item.assignment_reason ? `<details class="assignment-explanation"><summary>Warum wurde mir das zugewiesen?</summary><p>${this._e(this._assignmentReason(item.assignment_reason))}</p></details>` : ""}
         ${item.help_status === "requested" ? `<p class="help-status">Hilfe wurde im Haushalt angefragt.</p>` : ""}
         ${item.waiting_for ? `<p class="help-status">Wartet auf Anwesenheit.</p>` : ""}
         ${dueWindow}
         ${attachmentCount}
+        ${dependencies}
+        ${checklist}
       </div>
       <div class="occurrence-actions">
         ${primaryAction}
@@ -1233,6 +1244,10 @@ class HouseholdTasksPanel extends HTMLElement {
           ${item.assignee ? `<button data-decline="${this._e(item.id)}">Heute nicht geschafft</button>` : ""}
           <button data-natural-move="${this._e(item.id)}">Natürlich verschieben …</button>
           <button data-attachment="${this._e(item.id)}">Foto oder Beleg …</button>
+          ${status === "blocked" ? `<span class="blocked-action-hint">Voraussetzungen zuerst erledigen</span>` : status !== "in_progress" ? `<button data-task-status="${this._e(item.id)}" data-status="in_progress" data-revision="${Number(item.revision || 1)}">In Arbeit nehmen</button>` : `<button data-task-status="${this._e(item.id)}" data-status="open" data-revision="${Number(item.revision || 1)}">Zurück auf offen</button>`}
+          ${status !== "blocked" ? `<button data-task-status="${this._e(item.id)}" data-status="waiting" data-revision="${Number(item.revision || 1)}">Auf wartend setzen</button>` : ""}
+          <button data-task-history="${this._e(item.id)}">Verlauf anzeigen</button>
+          <button data-task-status="${this._e(item.id)}" data-status="cancelled" data-revision="${Number(item.revision || 1)}">Abbrechen</button>
           ${item.task_id !== "__adhoc__" ? `<button data-device-file="${this._e(item.task_id)}">Geräteakte öffnen</button>` : ""}
         </div></details>
       </div>
@@ -1262,7 +1277,14 @@ class HouseholdTasksPanel extends HTMLElement {
   _occurrencePrimaryAction(item, canClaim) {
     const id = this._e(item.id);
     if (item.assignee) {
-      return `<button class="complete" data-complete="${id}">Erledigt</button>`;
+      const checklistRequired = item.task?.require_checklist_completion !== false;
+      const incomplete = checklistRequired
+        ? (item.checklist || []).filter((step) => !step.completed).length
+        : 0;
+      const blocked = item.status === "blocked";
+      const disabled = blocked || incomplete ? "disabled" : "";
+      const reason = blocked ? "Abhängigkeiten sind noch offen" : incomplete ? `${incomplete} Checklistenpunkt(e) offen` : "";
+      return `<button class="complete" data-complete="${id}" ${disabled} title="${this._e(reason)}">Erledigt</button>`;
     }
     const disabled = canClaim ? "" : "disabled";
     return `<button class="complete" data-claim="${id}" ${disabled}>Übernehmen</button>`;
@@ -1625,7 +1647,7 @@ class HouseholdTasksPanel extends HTMLElement {
       <article class="settings-card">
         <h3>Konfigurationsquelle</h3>
         <p>Personen, Vorlagen und Eskalationen werden vollständig im Home-Assistant-Speicher verwaltet.</p>
-        <div class="info-row"><span>To-do-Liste</span><code>${this._e(this._data.todo_entity)}</code></div>
+        <div class="info-row"><span>Aufgabenspeicher</span><code>nativ · Schema ${Number(this._data.task_store?.schema_version || this._data.task_schema_version || 1)}</code></div>
         <div class="info-row"><span>Letzte Prüfung</span><span>${this._data.last_check ? new Date(this._data.last_check).toLocaleString(this._locale()) : "noch nicht erfolgt"}</span></div>
         ${this._data.is_admin ? `<div class="config-transfer"><h3>Konfiguration sichern</h3>
           <p>Export enthält Personen, Vorlagen, Standardregeln und Monitore. Laufende Aufgaben und Verlauf bleiben unberührt.</p>
@@ -1771,6 +1793,32 @@ class HouseholdTasksPanel extends HTMLElement {
         await this._call("complete", { occurrence_id: b.dataset.complete });
         this._toast("Aufgabe erledigt");
       }
+    });
+    this.shadowRoot.querySelectorAll("[data-checklist-occurrence]").forEach((input) => input.onchange = async () => {
+      try {
+        await this._call("set_checklist_item", {
+          occurrence_id: input.dataset.checklistOccurrence,
+          item_id: input.dataset.checklistItem,
+          completed: input.checked,
+          expected_revision: Number(input.dataset.revision),
+        });
+        this._toast(input.checked ? "Checklistenpunkt erledigt" : "Checklistenpunkt wieder geöffnet");
+      } catch (error) {
+        input.checked = !input.checked;
+        this._toast(this._errorText(error), true);
+      }
+    });
+    this.shadowRoot.querySelectorAll("[data-task-status]").forEach((button) => button.onclick = async () => {
+      if (button.dataset.status === "cancelled" && !await this._confirm("Aufgabe wirklich abbrechen?")) return;
+      await this._call("set_status", {
+        occurrence_id: button.dataset.taskStatus,
+        status: button.dataset.status,
+        expected_revision: Number(button.dataset.revision),
+      });
+      this._toast("Aufgabenstatus aktualisiert");
+    });
+    this.shadowRoot.querySelectorAll("[data-task-history]").forEach((button) => {
+      button.onclick = () => this._showTaskHistory(button.dataset.taskHistory);
     });
     this.shadowRoot.querySelectorAll("[data-claim]").forEach((b) => b.onclick = async () => {
       await this._call("claim", { occurrence_id: b.dataset.claim });
@@ -2026,6 +2074,32 @@ class HouseholdTasksPanel extends HTMLElement {
       close();
       this._toast(`${result.batch_result?.created?.length || 0} Aufgaben angelegt`);
     };
+  }
+
+  async _showTaskHistory(occurrenceId) {
+    const occurrence = this._data.occurrences.find((item) => item.id === occurrenceId);
+    const events = await this._hass.callWS({ type: "household_tasks/task_history", occurrence_id: occurrenceId });
+    const modal = this.shadowRoot.querySelector("#modal");
+    const returnFocus = this.shadowRoot.activeElement;
+    const labels = {
+      task_created: "Aufgabe erstellt",
+      task_status_changed: "Status geändert",
+      checklist_item_completed: "Checklistenpunkt erledigt",
+      checklist_item_reopened: "Checklistenpunkt wieder geöffnet",
+      task_dependencies_changed: "Abhängigkeiten geändert",
+      task_completed: "Aufgabe erledigt",
+      task_cancelled: "Aufgabe abgebrochen",
+      task_claimed: "Aufgabe übernommen",
+    };
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card small">
+      <div class="modal-head"><div><div class="eyebrow">AUFGABENAKTE</div><h2>${this._e(this._plainTitle(occurrence?.title || "Aufgabe"))}</h2></div><button class="icon-button close">×</button></div>
+      <div class="task-event-list">${[...events].reverse().map((event) => `<article><strong>${this._e(labels[event.type] || event.type)}</strong><time>${new Date(event.occurred_at).toLocaleString(this._locale())}</time>${event.actor ? `<small>${this._e(this._data.people[event.actor]?.name || event.actor)}</small>` : ""}</article>`).join("") || "<p>Noch keine Verlaufsdaten.</p>"}</div>
+      <div class="modal-actions"><button type="button" class="close-bottom">Schließen</button></div>
+    </div></div>`;
+    const close = () => { modal.innerHTML = ""; returnFocus?.focus(); };
+    modal.querySelector(".close").onclick = close;
+    modal.querySelector(".close-bottom").onclick = close;
+    this._activateDialog(modal, close);
   }
 
   _showAttachments(occurrenceId) {
@@ -2643,6 +2717,8 @@ class HouseholdTasksPanel extends HTMLElement {
           </div>
         </div>
         <label class="full">Beschreibung<textarea name="description" rows="2">${this._e(task.description || "")}</textarea></label>
+        <label class="full">Checkliste<textarea name="checklist" rows="4" placeholder="Ein Schritt pro Zeile">${this._e((task.checklist || []).map((item) => typeof item === "string" ? item : item.title).join("\n"))}</textarea><span class="hint">Jede Zeile wird zu einem einzeln abhakbaren Schritt. Standardmäßig kann die Aufgabe erst abgeschlossen werden, wenn alle Schritte erledigt sind.</span></label>
+        <label class="full checkbox"><input name="require_checklist_completion" type="checkbox" ${task.require_checklist_completion !== false ? "checked" : ""}> Vollständige Checkliste vor Abschluss verlangen</label>
         <label>Zeitplan<select name="type">
           ${[["manual","Manuell"],["weekly","Wöchentlich"],["monthly","Monatlich"],["yearly","Jährlich"],["interval_months","Alle N Monate"],["after_completion","Nach letzter Erledigung"],["flexible_after_completion","Flexibel nach Erledigung"],["calendar","Kalender / ICS"],["weather_trigger","Aktuelle Wetterregel"],["forecast_trigger","Wettervorhersage"],["state_trigger","Bei Zustandswechsel"],["daily_after_state","Einmal täglich nach Gerätestatus"]].map(([v,l]) => `<option value="${v}" ${v === s.type ? "selected" : ""}>${l}</option>`).join("")}
         </select></label>
@@ -2651,6 +2727,11 @@ class HouseholdTasksPanel extends HTMLElement {
         <details class="full advanced-fields">
           <summary>Expertenoptionen: Markt, Saison, NFC, Abhängigkeiten und Eskalation</summary>
           <div class="form-grid advanced-grid">
+        <div class="full repeatable-editor">
+          <span class="field-label">Vorlagen-Abhängigkeiten</span>
+          <div class="candidate-grid">${Object.entries(this._data.tasks).filter(([taskId]) => taskId !== id).map(([taskId, dependency]) => `<label class="checkbox"><input type="checkbox" name="depends_on" value="${this._e(taskId)}" ${(task.depends_on || []).includes(taskId) ? "checked" : ""}> ${this._e(dependency.name)}</label>`).join("") || "<span class=\"hint\">Noch keine weitere Vorlage vorhanden.</span>"}</div>
+          <p class="hint">Eine neue Aufgabe bleibt blockiert, solange eine offene Aufgabe der gewählten Vorlage existiert.</p>
+        </div>
         <div class="full repeatable-editor follow-up-editor">
           <span class="field-label">Folgeaufgaben nach Erledigung</span>
           <div class="repeatable-list">${this._followUpRows(task.follow_ups || [], id)}</div>
@@ -3530,6 +3611,11 @@ class HouseholdTasksPanel extends HTMLElement {
     if (assignmentType === "fixed") value.assignee = f.get("assignee");
     else if (assignmentPeople.length) value.assignment.people = assignmentPeople;
     if (f.get("description")?.trim()) value.description = f.get("description").trim();
+    const checklist = String(f.get("checklist") || "").split("\n").map((line) => line.trim()).filter(Boolean);
+    if (checklist.length) value.checklist = checklist.map((title, index) => ({ id: `step_${index + 1}`, title }));
+    value.require_checklist_completion = f.get("require_checklist_completion") === "on";
+    const dependencies = f.getAll("depends_on").map(String);
+    if (dependencies.length) value.depends_on = dependencies;
     const followUpIds = f.getAll("follow_up_task_id");
     const followUpDelays = f.getAll("follow_up_delay");
     if (followUpIds.length) {
@@ -3729,6 +3815,7 @@ class HouseholdTasksPanel extends HTMLElement {
       .section-title{display:flex;align-items:center;gap:8px;margin:20px 2px 9px}.section-title span{font-size:12px;background:var(--divider-color,#ddd);padding:2px 7px;border-radius:99px}.section-title.danger h3{color:var(--error-color,#db4437)}
       .occurrences{display:grid;gap:8px}.task-card{display:flex;align-items:center;gap:13px;background:var(--card-background-color,#fff);padding:13px 15px;border-radius:14px;border:1px solid var(--divider-color,#ddd);box-shadow:0 1px 2px #0000000a;transition:box-shadow .2s}.task-card.highlight{box-shadow:0 0 0 3px var(--primary-color)}.task-card.overdue{border-left:4px solid var(--error-color,#db4437)}.task-main{flex:1;min-width:0}.task-main h3{font-size:16px}.task-main p{font-size:13px;margin:4px 0 0}.complete{color:var(--primary-color);border-color:color-mix(in srgb,var(--primary-color) 35%,transparent)}.occurrence-actions{display:flex;align-items:center;gap:6px}.more-actions{position:relative}.more-actions summary{list-style:none;cursor:pointer;padding:9px;border:1px solid var(--divider-color);border-radius:9px}.more-actions>div{position:absolute;z-index:5;right:0;top:44px;display:grid;gap:5px;width:190px;padding:8px;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:11px;box-shadow:0 8px 25px #0003}.more-actions button{text-align:left}.help-status{color:var(--primary-color)!important}.market-badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.market-badges span{font-size:11px;padding:3px 7px;border-radius:99px;background:color-mix(in srgb,var(--primary-color) 10%,transparent);color:var(--primary-color);font-weight:700}
       .assignment-explanation{margin-top:6px;font-size:12px;color:var(--secondary-text-color)}.assignment-explanation summary{cursor:pointer}.assignment-explanation p{margin:5px 0 0}
+      .task-status{display:inline-flex;padding:2px 7px;margin-right:5px;border-radius:99px;background:var(--divider-color,#eee);font-size:10px;font-weight:800;text-transform:uppercase}.status-in_progress{background:#dceeff;color:#075c9c}.status-waiting{background:#fff1c7;color:#735700}.status-blocked{background:#ffe1df;color:#9b1c16}.task-checklist{display:grid;gap:5px;margin-top:10px;padding:9px 10px;border-radius:10px;background:color-mix(in srgb,var(--primary-color) 5%,transparent)}.task-checklist label{display:flex;align-items:flex-start;gap:7px;font-size:13px}.task-checklist input{width:auto;margin-top:2px}.task-checklist input:checked+span{text-decoration:line-through;color:var(--secondary-text-color)}.task-dependencies{color:var(--warning-color,#b26a00)!important}.task-event-list{display:grid;gap:0;max-height:55vh;overflow:auto}.task-event-list article{display:grid;grid-template-columns:1fr auto;gap:3px 12px;padding:11px 2px;border-bottom:1px solid var(--divider-color)}.task-event-list time,.task-event-list small{font-size:12px;color:var(--secondary-text-color)}
       .toolbar{display:flex;align-items:end;justify-content:space-between;margin-bottom:18px}.toolbar p{margin:5px 0 0}.toolbar-actions{display:flex;gap:8px;flex-wrap:wrap}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}.config-card,.settings-card,.card{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:16px;padding:18px}.config-card.disabled{opacity:.65}.card-top{display:flex;align-items:center;gap:12px}.card-top>div:nth-child(2){flex:1}.card-top p{font-size:13px;margin:3px 0}.status{font-size:11px;font-weight:750;padding:4px 8px;border-radius:99px;background:var(--divider-color,#eee)}.status.home{background:#daf5df;color:#17752a}.description{font-size:14px}.actions{display:flex;gap:7px;margin-top:15px;flex-wrap:wrap}.danger-button{color:var(--error-color,#db4437)}dl{font-size:13px}dt{color:var(--secondary-text-color);margin-top:9px}dd{margin:2px 0;overflow-wrap:anywhere}.gallery-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}.gallery-strip article{display:flex;flex-direction:column;align-items:flex-start;padding:14px;border:1px solid var(--divider-color);border-radius:13px;background:var(--card-background-color)}.gallery-strip span,.gallery-modal span{font-size:10px;font-weight:800;color:var(--primary-color);text-transform:uppercase}.gallery-strip strong{margin:5px 0}.gallery-strip p{font-size:12px;flex:1}.gallery-modal{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:18px}.gallery-modal>button{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:5px}.gallery-modal>button.selected{border-color:var(--primary-color);box-shadow:0 0 0 1px var(--primary-color)}
       .timeline{background:var(--card-background-color,#fff);border-radius:16px;border:1px solid var(--divider-color,#ddd);padding:4px 18px}.history-row{display:flex;gap:13px;align-items:center;padding:14px 0;border-bottom:1px solid var(--divider-color,#ddd)}.history-row:last-child{border:0}.history-row p{margin:4px 0 0;font-size:13px}.check{display:grid;place-items:center;border-radius:50%;width:34px;height:34px;background:#daf5df;color:#17752a;font-weight:800}
       .settings-card{max-width:760px;margin-bottom:14px}.settings-card>p{margin-top:6px}.info-row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--divider-color,#ddd);font-size:14px}.settings-card>.danger-button{margin-top:14px}.settings-heading{display:flex;justify-content:space-between;align-items:start;gap:12px}.settings-heading p{margin:5px 0}.health-summary{padding:10px 12px;border-radius:9px;background:#daf5df;color:#17752a;font-weight:700}.health-summary.warning{background:#fff1bf;color:#765600}.health-summary.critical{background:#fee2e2;color:#991b1b}.health-list{display:grid;gap:7px;margin-top:10px}.health-list>div{display:flex;gap:10px;padding:9px;border-left:4px solid var(--primary-color);background:var(--secondary-background-color)}.health-list>.warning{border-color:#f59e0b}.health-list>.critical{border-color:var(--error-color)}.health-list strong{text-transform:uppercase;font-size:10px}.decision-line{display:grid;gap:5px;padding:12px;margin-bottom:9px;border-left:4px solid #25a244;background:var(--secondary-background-color)}.decision-line.blocked{border-color:var(--error-color)}

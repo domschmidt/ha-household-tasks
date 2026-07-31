@@ -1,7 +1,7 @@
 {
   "domain": "household_tasks",
   "name": "Household Tasks",
-  "after_dependencies": ["brother", "calendar", "conversation", "frontend", "ipp", "local_todo", "mobile_app", "todo"],
+  "after_dependencies": ["brother", "calendar", "conversation", "frontend", "ipp", "mobile_app"],
   "codeowners": ["@domschmidt"],
   "config_flow": true,
   "dependencies": ["frontend", "http", "intent"],

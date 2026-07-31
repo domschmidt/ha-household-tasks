@@ -26,9 +26,23 @@ async def _async_system_health_info(hass: HomeAssistant) -> dict[str, Any]:
         for entry in hass.config_entries.async_entries(DOMAIN)
     ]
     engines = [engine for engine in engines if engine is not None]
+    occurrences = [
+        occurrence
+        for engine in engines
+        for occurrence in engine.state.get("occurrences", {}).values()
+    ]
     return {
         "version": INTEGRATION_VERSION,
         "configured_entries": len(engines),
         "people": sum(len(engine.people) for engine in engines),
         "task_definitions": sum(len(engine.tasks) for engine in engines),
+        "task_schema_version": max(
+            (engine.state.get("task_schema_version", 1) for engine in engines),
+            default=0,
+        ),
+        "task_occurrences": len(occurrences),
+        "open_tasks": sum(
+            occurrence.get("status") not in {"completed", "cancelled"}
+            for occurrence in occurrences
+        ),
     }

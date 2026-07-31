@@ -6,7 +6,6 @@ from copy import deepcopy
 from typing import Any
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "todo_entity": "todo.haushalt",
     "scan_interval_seconds": 60,
     "catch_up_days": 7,
     "notify_on_create": False,
@@ -52,8 +51,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
-def initial_config(todo_entity: str) -> dict[str, Any]:
+def initial_config() -> dict[str, Any]:
     """Return an isolated, person-free initial configuration."""
-    config = deepcopy(DEFAULT_CONFIG)
-    config["todo_entity"] = todo_entity
-    return config
+    return deepcopy(DEFAULT_CONFIG)

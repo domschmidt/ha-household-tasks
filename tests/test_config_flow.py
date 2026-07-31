@@ -10,32 +10,21 @@ pytestmark = pytest.mark.usefixtures("mock_frontend_loaded")
 
 
 async def test_create_config_entry(hass):
-    """A selected to-do entity creates the single config entry."""
+    """The native store is installed without external configuration."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN,
         context={"source": config_entries.SOURCE_USER},
     )
-    assert result["type"] is data_entry_flow.FlowResultType.FORM
-    assert result["step_id"] == "user"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {"todo_entity": "todo.household"},
-    )
     assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
     assert result["title"] == "Household Tasks"
-    assert result["data"] == {"todo_entity": "todo.household"}
+    assert result["data"] == {}
 
 
 async def test_only_one_config_entry_is_allowed(hass):
     """A second config flow aborts cleanly."""
-    first = await hass.config_entries.flow.async_init(
+    await hass.config_entries.flow.async_init(
         DOMAIN,
         context={"source": config_entries.SOURCE_USER},
-    )
-    await hass.config_entries.flow.async_configure(
-        first["flow_id"],
-        {"todo_entity": "todo.household"},
     )
 
     result = await hass.config_entries.flow.async_init(
@@ -46,11 +35,11 @@ async def test_only_one_config_entry_is_allowed(hass):
     assert result["reason"] == "single_instance_allowed"
 
 
-async def test_reconfigure_todo_entity(hass):
-    """The selected native to-do list can be changed without reinstalling."""
+async def test_reconfigure_is_not_needed_for_native_store(hass):
+    """The native store exposes no obsolete external-list selector."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"todo_entity": "todo.household"},
+        data={},
     )
     entry.add_to_hass(hass)
 
@@ -61,13 +50,15 @@ async def test_reconfigure_todo_entity(hass):
             "entry_id": entry.entry_id,
         },
     )
-    assert result["type"] is data_entry_flow.FlowResultType.FORM
-    assert result["step_id"] == "reconfigure"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {"todo_entity": "todo.family"},
-    )
     assert result["type"] is data_entry_flow.FlowResultType.ABORT
-    assert result["reason"] == "reconfigure_successful"
-    assert entry.data == {"todo_entity": "todo.family"}
+    assert result["reason"] == "native_store_no_reconfigure"
+
+
+async def test_migration_removes_legacy_entry_data(hass):
+    """Version-one entries migrate without discarding task-store data."""
+    entry = MockConfigEntry(domain=DOMAIN, data={"legacy_entity": "old"}, version=1)
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    assert entry.version == 2
+    assert entry.data == {}

@@ -15,7 +15,6 @@ from custom_components.household_tasks.system_health import _async_system_health
 def test_redact_recursively_removes_household_identifiers():
     """Sensitive identifiers are removed without destroying useful structure."""
     source = {
-        "todo_entity": "todo.private",
         "people": [
             {
                 "name": "Example person",
@@ -35,7 +34,6 @@ def test_redact_recursively_removes_household_identifiers():
 
     result = _redact(source)
 
-    assert result["todo_entity"] == "**REDACTED**"
     assert result["people"][0]["user_id"] == "**REDACTED**"
     assert result["people"][0]["nested"]["tag_id"] == "**REDACTED**"
     assert result["people"][0]["name"] == "Example person"
@@ -49,34 +47,45 @@ async def test_diagnostics_cover_loaded_and_unloaded_entries(hass):
     """Diagnostics expose counts while redacting household identifiers."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"todo_entity": "todo.private"},
+        data={},
     )
     entry.add_to_hass(hass)
 
     unloaded = await async_get_config_entry_diagnostics(hass, entry)
     assert unloaded == {
-        "entry": {"todo_entity": "**REDACTED**"},
+        "entry": {},
         "loaded": False,
     }
 
     entry.runtime_data = SimpleNamespace(
         people={"alex": {"name": "Alex"}},
         tasks={"laundry": {"name": "Laundry"}},
-        state={"occurrences": {"private-id": {"user_id": "private-user"}}},
+        state={
+            "occurrences": {"private-id": {"user_id": "private-user"}},
+            "task_schema_version": 2,
+        },
     )
     loaded = await async_get_config_entry_diagnostics(hass, entry)
     assert loaded["loaded"]
     assert loaded["integration"]["people_count"] == 1
-    assert loaded["integration"]["todo_entity"] == "**REDACTED**"
+    assert loaded["integration"]["occurrence_count"] == 1
+    assert loaded["integration"]["task_schema_version"] == 2
     assert loaded["state"]["occurrences"]["private-id"]["user_id"] == "**REDACTED**"
 
 
 async def test_system_health_summarizes_loaded_entries(hass):
     """System health reports only aggregate, non-identifying counts."""
-    entry = MockConfigEntry(domain=DOMAIN, data={"todo_entity": "todo.private"})
+    entry = MockConfigEntry(domain=DOMAIN, data={})
     entry.runtime_data = SimpleNamespace(
         people={"alex": {}},
         tasks={"laundry": {}, "dishes": {}},
+        state={
+            "task_schema_version": 2,
+            "occurrences": {
+                "open": {"status": "in_progress"},
+                "done": {"status": "completed"},
+            },
+        },
     )
     entry.add_to_hass(hass)
 
@@ -86,4 +95,7 @@ async def test_system_health_summarizes_loaded_entries(hass):
         "configured_entries": 1,
         "people": 1,
         "task_definitions": 2,
+        "task_schema_version": 2,
+        "task_occurrences": 2,
+        "open_tasks": 1,
     }

@@ -1,6 +1,6 @@
 # Household Tasks
 
-Die Integration erzeugt native Home-Assistant-To-dos, verschickt
+Die Integration verwaltet eigene, versionierte Aufgaben, verschickt
 Push-Nachrichten und verarbeitet individuelle Eskalationsregeln. Personen,
 Aufgabenvorlagen und Regeln werden ausschließlich über die UI verwaltet und
 von Home Assistant intern gespeichert.
@@ -15,7 +15,7 @@ Empfohlen wird die Installation über HACS:
 2. **Household Tasks** herunterladen und Home Assistant neu starten.
 3. **Einstellungen > Geräte & Dienste > Integration hinzufügen** öffnen.
 4. Nach **Household Tasks** suchen.
-5. Die native To-do-Liste für den Haushalt auswählen.
+5. **Household Tasks** bestätigen; eine externe Aufgabenliste ist nicht nötig.
 6. Anschließend erscheint **Aufgaben** in der Seitenleiste.
 
 Bei einer manuellen Installation wird ausschließlich der Ordner
@@ -37,9 +37,10 @@ Das Seitenleisten-Panel enthält:
 - **Einstellungen**: globale Eskalationsregeln, Druckerüberwachung und
   Ausgangswerte
 
-Alle Benutzer mit Steuerberechtigung für die ausgewählte To-do-Entität können
-Aufgaben erledigen, Schnellaufgaben hinzufügen und aktive Vorlagen sofort
-auslösen. Nur Administratoren dürfen Personen, Vorlagen und Regeln verändern.
+Administratoren und Benutzer, die in Household Tasks mit einer Person verknüpft
+sind, können Aufgaben erledigen, bearbeiten, übernehmen, Schnellaufgaben
+hinzufügen und aktive Vorlagen sofort auslösen. Nur Administratoren dürfen
+Personen, Vorlagen und Regeln verändern.
 Jedes Konfigurationsfeld besitzt einen direkt zugeordneten Hilfetext. Entitäten,
 Benutzer, Geräte, Benachrichtigungsaktionen, Kalender und NFC-Tags werden aus
 Home Assistant vorgeschlagen, damit keine technischen IDs blind eingegeben
@@ -62,8 +63,8 @@ Der Aufgabeneditor unterstützt:
 ### Abhängige Aufgaben
 
 Eine Vorlage kann nach ihrer Erledigung eine oder mehrere andere Vorlagen
-erzeugen. Jede Folgeaufgabe bleibt ein eigenständiges natives Home-Assistant-
-To-do. Pro Folgeaufgabe kann eine Verzögerung im Format `HH:MM:SS` hinterlegt
+erzeugen. Jede Folgeaufgabe bleibt eine eigenständige Household-Tasks-Aufgabe.
+Pro Folgeaufgabe kann eine Verzögerung im Format `HH:MM:SS` hinterlegt
 werden. So lassen sich beispielsweise diese Ketten abbilden:
 
 `Waschmaschine starten` → `Wäsche aufhängen` → `Wäsche abnehmen`
@@ -71,6 +72,28 @@ werden. So lassen sich beispielsweise diese Ketten abbilden:
 Vorhandene Vorlagen werden im Editor ausgewählt. Fehlt die gewünschte
 Folgevorlage, kann sie dort direkt angelegt und ausgewählt werden, ohne den
 aktuellen Entwurf zu verlassen.
+
+Zusätzlich können Vorlagen im Expertenbereich echte Voraussetzungen wählen.
+Eine daraus erzeugte Aufgabe erhält den Status **Blockiert**, solange eine
+offene Aufgabe der Voraussetzung existiert. Nach deren Abschluss oder Abbruch
+wird sie automatisch **Offen**. Der Gesundheitscheck verhindert fehlende oder
+zyklische Verweise.
+
+### Status, Checklisten und Aufgabenakte
+
+Jede Aufgabe besitzt einen klaren Lebenszyklus: **Offen**, **In Arbeit**,
+**Wartet**, **Blockiert**, **Erledigt** oder **Abgebrochen**. Das Kontextmenü der
+Aufgabenkarte ändert den Status. Veraltete Browserstände können dank der
+Revisionsnummer keine neueren Änderungen unbemerkt überschreiben.
+
+Eine Vorlage kann eine Checkliste mit einem Schritt pro Zeile enthalten. Jeder
+Schritt wird direkt auf der Aufgabenkarte abgehakt und speichert Zeitpunkt und
+handelnde Person. Standardmäßig bleibt **Erledigt** deaktiviert, bis alle
+Schritte abgeschlossen sind; diese Pflicht lässt sich pro Vorlage abschalten.
+
+**Verlauf anzeigen** öffnet die Aufgabenakte mit Erstellung, Statuswechseln,
+Checklistenfortschritt, Übernahmen und Abschluss. Der lokale Ereignisverlauf ist
+auf 2.000 Einträge begrenzt.
 
 ### Zustandsbasierte Aufgaben
 
@@ -97,7 +120,7 @@ Jede Aufgabenvorlage kann auf eine von vier Arten verteilt werden:
 - **Fair**: Gewählt wird zunächst die Person mit den bislang wenigsten
   Zuweisungen. Bei Gleichstand entscheidet die geringere Zahl aktuell offener
   Aufgaben, danach die Reihenfolge im Editor.
-- **Offen**: Das To-do wird als `[Offen] Aufgabe` angelegt. Alle ausgewählten
+- **Offen**: Die Aufgabe wird ohne zuständige Person angelegt. Alle ausgewählten
   Personen – oder bei leerer Auswahl alle – erhalten **Übernehmen**. Erst die
   Übernahme setzt den Personennamen, zählt die Zuweisung und startet die
   persönliche Bearbeitung.
@@ -166,7 +189,7 @@ werden Person, Fälligkeit, optionale Notiz und die Erinnerungsart gewählt:
 - individuelle Eskalationszeiten
 - keine Push-Erinnerungen
 
-Die Aufgabe erscheint sofort als natives To-do, erzeugt aber keine dauerhafte
+Die Aufgabe erscheint sofort im eigenen Aufgabenspeicher, erzeugt aber keine dauerhafte
 Vorlage. Eine hinterlegte Home-Assistant-Benutzer-ID sorgt dafür, dass im
 Dialog automatisch die eigene Person als **(Ich)** vorausgewählt wird.
 
@@ -200,7 +223,7 @@ Administratoren können Konfigurationen prüfen, bevor sie produktiv wirken:
 - NFC-Zuordnungen zeigen, ob der Tag in Home Assistant registriert ist und wann
   er zuletzt gescannt wurde.
 
-Diese Vorschauen verändern weder To-dos noch Verlauf oder Punktestand. Nur die
+Diese Vorschauen verändern weder Aufgaben noch Verlauf oder Punktestand. Nur die
 Testbenachrichtigung sendet bewusst eine Nachricht.
 
 ### Wettervorhersage, Verteilung je Person und Saisonsperren
@@ -220,7 +243,7 @@ Für „Frostschutz beim eigenen Auto prüfen“ wird empfohlen:
 - Saisonmonate Oktober bis März und
 - **Nur einmal je Saison und Zielperson**.
 
-Jede ausgewählte Person erhält ein eigenes To-do und kann es unabhängig
+Jede ausgewählte Person erhält eine eigene Aufgabe und kann sie unabhängig
 erledigen. Die Saisonsperre gehört weiterhin zur ursprünglichen Zielperson,
 auch wenn eine aktive Haushaltsübergabe die Aufgabe vorübergehend jemand
 anderem zuweist. Die Wintersaison über den Jahreswechsel erhält einen
@@ -253,9 +276,7 @@ erledigten Aufgaben.
 
 Bei **Erledigt** aus einer Push-Nachricht wird der Punkt der Person zugerechnet,
 die den Button erhalten und gedrückt hat. Bei einem Abschluss im Panel wird die
-hinterlegte Home-Assistant-Benutzer-ID verwendet. Wird ein To-do direkt in der
-nativen Liste erledigt und Home Assistant liefert keinen Benutzerkontext, zählt
-der Punkt für die aktuell zuständige Person. Automatisch als behoben erkannte
+hinterlegte Home-Assistant-Benutzer-ID verwendet. Automatisch als behoben erkannte
 Druckerprobleme zählen nicht.
 
 ## Auswertung
@@ -290,7 +311,7 @@ Kalenderwoche wird höchstens eine Zusammenfassung versendet.
 
 Administratoren können unter **Einstellungen > Konfiguration sichern** ein
 versioniertes JSON-Dokument exportieren und wieder importieren. Es enthält
-Personen, Aufgabenvorlagen, Standardregeln und Monitore. Laufende To-dos,
+Personen, Aufgabenvorlagen, Standardregeln und Monitore. Laufende Aufgaben,
 Verlauf, Punktestand und Rotationspositionen bleiben beim Import unverändert.
 Ein Import wird vollständig validiert, bevor er die vorhandene Konfiguration
 ersetzt.
@@ -299,7 +320,7 @@ ersetzt.
 
 Auf dem iPhone stehen für jede Erinnerung diese Aktionen zur Verfügung:
 
-- **Erledigt**: schließt das native Home-Assistant-To-do ab.
+- **Erledigt**: schließt die Household-Tasks-Aufgabe ab.
 - **Heute Abend**: verschiebt Aufgabe und nächste Erinnerung auf 18 Uhr. Ist
   18 Uhr bereits vorbei, wird sie um zwei Stunden verschoben.
 - **Morgen**: verschiebt Aufgabe und nächste Erinnerung auf morgen um 9 Uhr.
@@ -310,8 +331,7 @@ Auf dem iPhone stehen für jede Erinnerung diese Aktionen zur Verfügung:
   Personen erhalten sofort einen Hilferuf mit **Ich helfe**. Nach einer Zusage
   erfährt die zuständige Person, wer unterstützt.
 
-Ein Tipp auf die Nachricht selbst öffnet weiterhin die offizielle
-Home-Assistant-To-do-Ansicht.
+Ein Tipp auf die Nachricht selbst öffnet die Household-Tasks-Seitenleiste.
 
 ## Druckerprobleme
 
@@ -351,9 +371,12 @@ konfigurierten Fälligkeit gilt sie am selben Tag, danach am Folgetag.
 
 ## Datenspeicherung
 
-Die Integration verwendet den internen Home-Assistant-Speicher. Dateien unter
-`.storage` niemals von Hand bearbeiten. Eine Home-Assistant-Sicherung enthält
-sowohl Konfiguration als auch Aufgabenstatus.
+Die Integration verwendet Home Assistants atomaren internen Speicher als
+einzige Datenquelle. Dateien unter `.storage` niemals von Hand bearbeiten. Eine
+Home-Assistant-Sicherung enthält Konfiguration, Aufgabenstatus, Checklisten und
+den begrenzten Ereignisverlauf. Beim Upgrade werden ältere, zuvor gespiegelte
+Aufgaben automatisch und idempotent in das native Schema migriert; externe
+Listen-IDs werden danach nicht mehr verwendet.
 
 Die mitgelieferte Ausgangskonfiguration enthält keine Namen, Benutzer-IDs,
 Geräte-, Personen- oder Benachrichtigungsentitäten. Eine neue Installation
@@ -362,7 +385,7 @@ entstehen ausschließlich durch Eingaben in der lokalen UI.
 
 **Auf Ausgangswerte zurücksetzen** verwirft angepasste Personen, Vorlagen und
 Standardregeln und stellt den leeren, personenbezogen neutralen Zustand wieder
-her. Bereits erzeugte To-dos und ihr Verlauf bleiben erhalten.
+her. Bereits erzeugte Aufgaben und ihr Verlauf bleiben erhalten.
 
 ## Komfort- und Betriebsfunktionen
 
@@ -426,8 +449,9 @@ Kopf des Panels **Rückgängig**. Der Verlauf ist absichtlich auf die letzten
 
 ### Gesundheitscheck und Mobilansicht
 
-Der Gesundheitscheck unter **Einstellungen** meldet eine fehlende To-do-Liste,
-nicht verfügbare Anwesenheits- oder Saisonentitäten, ungültige
+Der Gesundheitscheck unter **Einstellungen** meldet beschädigte Statuswerte,
+verwaiste Abhängigkeiten, doppelte Checklisten-IDs, nicht verfügbare
+Anwesenheits- oder Saisonentitäten, ungültige
 Benachrichtigungsdienste, nicht registrierte NFC-Tags und zyklische
 Folgeaufgaben. Auf schmalen Displays zeigt **Jetzt sinnvoll** bis zu drei
 Aktionen, gewichtet nach eigener Zuständigkeit, Priorität und Fälligkeit.
@@ -456,7 +480,7 @@ Müll morgen 18 Uhr an Alex, dringend, 2 Punkte
 
 Name, Person, Termin, Priorität und Punkte werden ausschließlich lokal
 extrahiert und zunächst in die normalen Formularfelder übernommen. Erst ein
-weiterer Klick auf **Aufgabe hinzufügen** erzeugt das To-do. Unklare Werte
+weiterer Klick auf **Aufgabe hinzufügen** erzeugt die Aufgabe. Unklare Werte
 bleiben sichtbar und können korrigiert werden.
 
 ## Autodiscovery und aktionsfähige Diagnose

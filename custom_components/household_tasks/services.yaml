@@ -14,6 +14,62 @@ scan_now:
   name: Scan now
   description: Immediately checks schedules, calendars, and escalations.
 
+set_status:
+  name: Set task status
+  description: Changes the lifecycle status of one native Household Tasks occurrence.
+  fields:
+    occurrence_id:
+      name: Occurrence ID
+      description: Stable occurrence identifier exposed by the panel and task events.
+      required: true
+      selector:
+        text:
+    status:
+      name: Status
+      required: true
+      selector:
+        select:
+          options:
+            - open
+            - in_progress
+            - waiting
+            - blocked
+            - completed
+            - cancelled
+    expected_revision:
+      name: Expected revision
+      description: Optional optimistic-lock revision that prevents overwriting newer changes.
+      selector:
+        number:
+          min: 1
+          mode: box
+
+set_checklist_item:
+  name: Set checklist item
+  description: Checks or reopens one structured checklist item.
+  fields:
+    occurrence_id:
+      name: Occurrence ID
+      required: true
+      selector:
+        text:
+    item_id:
+      name: Checklist item ID
+      required: true
+      selector:
+        text:
+    completed:
+      name: Completed
+      required: true
+      selector:
+        boolean:
+    expected_revision:
+      name: Expected revision
+      selector:
+        number:
+          min: 1
+          mode: box
+
 set_handover:
   name: Set household handover
   description: Temporarily transfers current and future tasks to another person.

@@ -11,36 +11,9 @@ from custom_components.household_tasks.bootstrap import initial_config
 from custom_components.household_tasks.engine import HouseholdTaskEngine
 
 
-async def _engine_with_todo(hass, tasks, people=None):
-    """Build a real engine against an in-memory Home Assistant to-do service."""
-    items = []
-
-    async def get_items(_call):
-        return {
-            "todo.household": {
-                "items": [item for item in items if item["status"] == "needs_action"]
-            }
-        }
-
-    async def add_item(call):
-        items.append(
-            {
-                "uid": f"item-{len(items) + 1}",
-                "summary": call.data["item"],
-                "due": call.data["due_datetime"],
-                "status": "needs_action",
-            }
-        )
-
-    hass.services.async_register(
-        "todo",
-        "get_items",
-        get_items,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register("todo", "add_item", add_item)
-    hass.states.async_set("todo.household", "0")
-    config = initial_config("todo.household")
+async def _native_engine(hass, tasks, people=None):
+    """Build a real engine backed only by the native task store."""
+    config = initial_config()
     config["people"] = people or {
         "alex": {
             "name": "Alex",
@@ -50,7 +23,7 @@ async def _engine_with_todo(hass, tasks, people=None):
     config["tasks"] = tasks
     engine = HouseholdTaskEngine(hass, config)
     engine._validate_config()
-    return engine, items
+    return engine, []
 
 
 def _first_frost_task():
@@ -115,7 +88,7 @@ async def test_diamond_follow_up_chain_creates_shared_target_once(hass):
         ),
         "finish": _manual("Finish"),
     }
-    engine, _items = await _engine_with_todo(hass, tasks)
+    engine, _items = await _native_engine(hass, tasks)
 
     await engine.async_create_manual("root")
     root_id, root = next(iter(engine.state["occurrences"].items()))
@@ -174,7 +147,7 @@ async def test_weather_trigger_combines_attributes_edges_and_open_deduplication(
             ],
         },
     }
-    engine, _items = await _engine_with_todo(hass, {"ice": task})
+    engine, _items = await _native_engine(hass, {"ice": task})
     now = datetime(2026, 1, 10, 6, 0, tzinfo=UTC)
     hass.states.async_set(
         "weather.home",
@@ -231,7 +204,7 @@ async def test_weather_season_and_vacation_policies_compose_safely(hass):
         "season": {"months": [11, 12, 1, 2]},
         "modes": {"vacation": "pause"},
     }
-    engine, _items = await _engine_with_todo(hass, {"plants": task})
+    engine, _items = await _native_engine(hass, {"plants": task})
     hass.states.async_set("sensor.outside_temperature", "-3")
     engine.state["household_mode"] = {
         "mode": "vacation",
@@ -297,7 +270,7 @@ async def test_complex_weather_configuration_validation_is_atomic(
         },
     }
     mutation(task)
-    config = initial_config("todo.household")
+    config = initial_config()
     config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
     config["tasks"] = {"weather": task}
     engine = HouseholdTaskEngine(hass, config)
@@ -327,7 +300,7 @@ async def test_first_frost_fans_out_once_per_person_and_winter(hass):
         "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
         "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
     }
-    engine, _items = await _engine_with_todo(
+    engine, _items = await _native_engine(
         hass, {"first_frost": _first_frost_task()}, people
     )
 
@@ -379,7 +352,7 @@ async def test_forecast_lead_time_may_start_before_target_season(hass):
         "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
         "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
     }
-    engine, _items = await _engine_with_todo(
+    engine, _items = await _native_engine(
         hass, {"first_frost": _first_frost_task()}, people
     )
 
@@ -416,7 +389,7 @@ async def test_forecast_scan_reuses_provider_data_across_rules(hass):
         "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
         "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
     }
-    engine, _items = await _engine_with_todo(
+    engine, _items = await _native_engine(
         hass,
         {
             "cars": _first_frost_task(),
@@ -453,7 +426,7 @@ async def test_forecast_preview_is_side_effect_free_and_explains_each_target(has
         "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
     }
     task = _first_frost_task()
-    engine, _items = await _engine_with_todo(hass, {"first_frost": task}, people)
+    engine, _items = await _native_engine(hass, {"first_frost": task}, people)
     engine.state["seasonal_executions"]["first_frost|2026-2027|alex"] = (
         "2026-10-01T18:00:00+00:00"
     )
@@ -494,7 +467,7 @@ async def test_seasonal_reset_is_scoped_persistent_and_undoable(hass):
         "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
         "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
     }
-    engine, _items = await _engine_with_todo(
+    engine, _items = await _native_engine(
         hass,
         {
             "first_frost": _first_frost_task(),
@@ -546,7 +519,7 @@ async def test_forecast_configuration_validation_is_actionable(hass, mutation, m
     """Invalid forecast rules fail before they can reach the runtime scanner."""
     task = _first_frost_task()
     mutation(task)
-    config = initial_config("todo.household")
+    config = initial_config()
     config["people"] = {
         "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
         "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
@@ -560,7 +533,7 @@ async def test_forecast_configuration_validation_is_actionable(hass, mutation, m
 
 async def test_advanced_task_operations_cover_success_and_failure_paths(hass):
     """Favorites, batches, stacks, moves, and attachments remain transactional."""
-    engine, items = await _engine_with_todo(
+    engine, _items = await _native_engine(
         hass,
         {"laundry": _manual("Laundry"), "dishes": _manual("Dishes")},
     )
@@ -648,7 +621,7 @@ async def test_advanced_task_operations_cover_success_and_failure_paths(hass):
     )
     created = await engine.async_launch_task_stack("evening")
     assert len(created) == 2
-    assert len(items) == 3
+    assert len(engine.state["occurrences"]) == 3
     await engine.async_save_task_stack("evening", None)
     with pytest.raises(vol.Invalid, match="Unbekannter Aufgabenstapel"):
         await engine.async_launch_task_stack("evening")
@@ -672,9 +645,7 @@ async def test_modes_gallery_discovery_and_undo_are_explainable(hass):
         "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
         "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
     }
-    engine, _items = await _engine_with_todo(
-        hass, {"laundry": _manual("Laundry")}, people
-    )
+    engine, _items = await _native_engine(hass, {"laundry": _manual("Laundry")}, people)
     hass.states.async_set(
         "sensor.phone_battery",
         "18",
@@ -764,7 +735,7 @@ async def test_modes_gallery_discovery_and_undo_are_explainable(hass):
 
 def test_device_manual_urls_require_https(hass):
     """Device records never create downgrade links to insecure manuals."""
-    config = initial_config("todo.household")
+    config = initial_config()
     config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
     config["tasks"] = {
         "valid": {
@@ -786,7 +757,7 @@ def test_device_manual_urls_require_https(hass):
 
 def test_configuration_health_reports_actionable_combined_failures(hass):
     """The health report explains independent failures in one deterministic pass."""
-    config = initial_config("todo.missing")
+    config = initial_config()
     config["people"] = {
         "alex": {
             "name": "Alex",
@@ -828,7 +799,6 @@ def test_configuration_health_reports_actionable_combined_failures(hass):
 
     assert health["status"] == "critical"
     assert {
-        "todo_missing",
         "presence_missing",
         "notify_missing",
         "forecast_service_missing",
@@ -850,7 +820,7 @@ def test_configuration_health_reports_actionable_combined_failures(hass):
 
 def test_configuration_validation_aggregates_complex_rule_errors(hass):
     """One validation pass reports independent expert-rule mistakes together."""
-    config = initial_config("todo.household")
+    config = initial_config()
     config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
     config["tasks"] = {
         "forecast": {
@@ -943,3 +913,135 @@ def test_configuration_validation_aggregates_complex_rule_errors(hass):
     assert "weather rule must be a mapping" in message
     assert "resource monitors must be a mapping" in message
     assert "Notification digest settings must be a mapping" in message
+
+
+async def test_native_checklist_dependency_history_and_revision_conflicts(hass):
+    """Complex native task state remains consistent across chained writes."""
+    tasks = {
+        "prepare": {
+            **_manual("Prepare workspace"),
+            "checklist": [
+                {"id": "tools", "title": "Get tools"},
+                {"id": "cover", "title": "Cover floor"},
+            ],
+        },
+        "paint": {
+            **_manual("Paint room"),
+            "depends_on": ["prepare"],
+        },
+        "optional_checklist": {
+            **_manual("Optional checklist"),
+            "checklist": [{"id": "optional", "title": "Optional step"}],
+            "require_checklist_completion": False,
+        },
+    }
+    engine, _ = await _native_engine(hass, tasks)
+
+    await engine.async_create_manual("prepare")
+    await engine.async_create_manual("paint")
+    await engine.async_create_manual("optional_checklist")
+    prepare_id = next(
+        occurrence_id
+        for occurrence_id, item in engine.state["occurrences"].items()
+        if item["task_id"] == "prepare"
+    )
+    paint_id = next(
+        occurrence_id
+        for occurrence_id, item in engine.state["occurrences"].items()
+        if item["task_id"] == "paint"
+    )
+    optional_id = next(
+        occurrence_id
+        for occurrence_id, item in engine.state["occurrences"].items()
+        if item["task_id"] == "optional_checklist"
+    )
+    prepare = engine.state["occurrences"][prepare_id]
+    paint = engine.state["occurrences"][paint_id]
+
+    assert paint["status"] == "blocked"
+    with pytest.raises(vol.Invalid, match="Abhängigkeiten"):
+        await engine.async_complete_occurrence(paint_id)
+    with pytest.raises(vol.Invalid, match="Checklistenpunkt"):
+        await engine.async_complete_occurrence(prepare_id)
+
+    first_revision = prepare["revision"]
+    await engine.async_set_checklist_item(
+        prepare_id,
+        "tools",
+        True,
+        expected_revision=first_revision,
+    )
+    with pytest.raises(vol.Invalid, match="zwischenzeitlich"):
+        await engine.async_set_checklist_item(
+            prepare_id,
+            "cover",
+            True,
+            expected_revision=first_revision,
+        )
+    await engine.async_set_checklist_item(
+        prepare_id,
+        "cover",
+        True,
+        expected_revision=prepare["revision"],
+    )
+    await engine.async_set_occurrence_status(
+        prepare_id,
+        "completed",
+        expected_revision=prepare["revision"],
+    )
+
+    assert prepare["status"] == "completed"
+    assert paint["status"] == "open"
+    assert paint["revision"] == 2
+    assert {event["type"] for event in engine.task_history(prepare_id)} >= {
+        "task_created",
+        "checklist_item_completed",
+        "task_completed",
+    }
+
+    with pytest.raises(vol.Invalid, match="nicht verändert"):
+        await engine.async_set_occurrence_status(prepare_id, "open")
+    with pytest.raises(vol.Invalid, match="nicht verändert"):
+        await engine.async_set_checklist_item(prepare_id, "tools", False)
+    with pytest.raises(vol.Invalid, match="nicht verändert"):
+        await engine.async_set_occurrence_dependencies(prepare_id, [])
+
+    await engine.async_set_occurrence_status(
+        paint_id,
+        "cancelled",
+        expected_revision=paint["revision"],
+    )
+    assert paint["status"] == "cancelled"
+    assert paint["resolution_reason"] == "cancelled"
+    with pytest.raises(vol.Invalid, match="nicht verändert"):
+        await engine.async_set_occurrence_status(paint_id, "open")
+
+    await engine.async_complete_occurrence(optional_id)
+    assert engine.state["occurrences"][optional_id]["status"] == "completed"
+
+
+async def test_native_runtime_dependencies_reject_cycles_and_manual_blocked_status(
+    hass,
+):
+    """Only the dependency graph may determine blocked state and it stays acyclic."""
+    tasks = {
+        "one": _manual("One"),
+        "two": _manual("Two"),
+    }
+    engine, _ = await _native_engine(hass, tasks)
+    await engine.async_create_manual("one")
+    await engine.async_create_manual("two")
+    ids = {
+        occurrence["task_id"]: occurrence_id
+        for occurrence_id, occurrence in engine.state["occurrences"].items()
+    }
+
+    await engine.async_set_occurrence_dependencies(ids["one"], [ids["two"]])
+    assert engine.state["occurrences"][ids["one"]]["status"] == "blocked"
+
+    with pytest.raises(vol.Invalid, match="Zyklus"):
+        await engine.async_set_occurrence_dependencies(ids["two"], [ids["one"]])
+    with pytest.raises(vol.Invalid, match="ausschließlich"):
+        await engine.async_set_occurrence_status(ids["two"], "blocked")
+    with pytest.raises(vol.Invalid, match="blockieren"):
+        await engine.async_set_occurrence_status(ids["one"], "in_progress")

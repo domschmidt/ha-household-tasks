@@ -20,7 +20,6 @@ class _Connection:
 
 def _fake_engine() -> MagicMock:
     engine = MagicMock()
-    engine.todo_entity = "todo.household"
     engine.ui_data.side_effect = lambda: {"revision": len(engine.ui_data.mock_calls)}
     engine._person_for_context.return_value = "alex"
     engine.preview_smart_task.return_value = {"name": "Laundry"}
@@ -43,6 +42,10 @@ def _fake_engine() -> MagicMock:
     engine.async_add_attachment = AsyncMock()
     engine.async_delete_attachment = AsyncMock()
     engine.async_complete_occurrence = AsyncMock()
+    engine.async_set_occurrence_status = AsyncMock()
+    engine.async_set_checklist_item = AsyncMock()
+    engine.async_set_occurrence_dependencies = AsyncMock()
+    engine.task_history.return_value = [{"type": "task_created"}]
     engine.async_claim_occurrence = AsyncMock()
     engine.async_set_household_mode = AsyncMock()
     engine.async_install_gallery_template = AsyncMock()
@@ -216,9 +219,49 @@ async def test_websocket_adapters_forward_advanced_panel_actions(hass):
         await _call(
             ui.websocket_decline, hass, connection, {"id": 24, "occurrence_id": "one"}
         )
+        await _call(
+            ui.websocket_set_status,
+            hass,
+            connection,
+            {
+                "id": 25,
+                "occurrence_id": "one",
+                "status": "in_progress",
+                "expected_revision": 2,
+            },
+        )
+        await _call(
+            ui.websocket_set_checklist_item,
+            hass,
+            connection,
+            {
+                "id": 26,
+                "occurrence_id": "one",
+                "item_id": "tools",
+                "completed": True,
+                "expected_revision": 3,
+            },
+        )
+        await _call(
+            ui.websocket_set_dependencies,
+            hass,
+            connection,
+            {
+                "id": 27,
+                "occurrence_id": "one",
+                "dependencies": ["zero"],
+                "expected_revision": 4,
+            },
+        )
+        await _call(
+            ui.websocket_task_history,
+            hass,
+            connection,
+            {"id": 28, "occurrence_id": "one"},
+        )
 
     assert [message_id for message_id, _result in connection.results] == list(
-        range(1, 25)
+        range(1, 29)
     )
     assert connection.results[0][1]["seasonal_reset_count"] == 2
     assert connection.results[2][1]["bulk_result"] == {"completed": ["one"]}
@@ -227,6 +270,10 @@ async def test_websocket_adapters_forward_advanced_panel_actions(hass):
     assert connection.results[7][1]["move_result"] == {"kind": "datetime"}
     assert connection.results[9][1]["stack_created"] == ["occurrence-1"]
     assert connection.results[18][1]["undone"] == "Aufgabe wiederherstellen"
+    assert connection.results[27][1] == [{"type": "task_created"}]
+    engine.async_set_occurrence_dependencies.assert_awaited_once_with(
+        "one", ["zero"], expected_revision=4
+    )
     engine.async_set_household_mode.assert_awaited_once_with(
         "vacation",
         policy="delegate",

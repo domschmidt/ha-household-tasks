@@ -1,22 +1,14 @@
 {
   "config": {
     "abort": {
-      "single_instance_allowed": "Household Tasks is already configured."
+      "single_instance_allowed": "Household Tasks is already configured.",
+      "native_store_no_reconfigure": "Household Tasks stores tasks internally and has no external task list to configure."
     },
     "step": {
       "user": {
         "title": "Set up Household Tasks",
-        "description": "Select the native Home Assistant to-do list used for household tasks.",
-        "data": {
-          "todo_entity": "To-do list"
-        }
-      },
-      "reconfigure": {
-        "title": "Change to-do list",
-        "description": "Select the native Home Assistant to-do list Household Tasks should use.",
-        "data": {
-          "todo_entity": "To-do list"
-        }
+        "description": "Household Tasks manages complex tasks in its own versioned local store. No external to-do list is required.",
+        "data": {}
       }
     }
   },
@@ -27,9 +19,6 @@
     "invalid_task": {
       "message": "Task {task_id} does not exist or is disabled."
     },
-    "todo_unavailable": {
-      "message": "The configured to-do entity {entity_id} is not available."
-    },
     "admin_required": {
       "message": "Only a Home Assistant administrator may change household handovers."
     }
@@ -39,7 +28,10 @@
       "version": "Version",
       "configured_entries": "Configured entries",
       "people": "People",
-      "task_definitions": "Task definitions"
+      "task_definitions": "Task definitions",
+      "task_schema_version": "Task schema version",
+      "task_occurrences": "Task occurrences",
+      "open_tasks": "Open tasks"
     }
   },
   "services": {
@@ -87,6 +79,25 @@
           "name": "From person",
           "description": "Internal ID whose handover should end."
         }
+      }
+    },
+    "set_status": {
+      "name": "Set task status",
+      "description": "Changes the lifecycle status of one native task occurrence.",
+      "fields": {
+        "occurrence_id": { "name": "Occurrence ID", "description": "Stable task occurrence identifier." },
+        "status": { "name": "Status", "description": "New lifecycle status." },
+        "expected_revision": { "name": "Expected revision", "description": "Optional optimistic-lock revision." }
+      }
+    },
+    "set_checklist_item": {
+      "name": "Set checklist item",
+      "description": "Checks or reopens one structured checklist item.",
+      "fields": {
+        "occurrence_id": { "name": "Occurrence ID", "description": "Stable task occurrence identifier." },
+        "item_id": { "name": "Checklist item ID", "description": "Stable item identifier from the occurrence." },
+        "completed": { "name": "Completed", "description": "Whether the item is completed." },
+        "expected_revision": { "name": "Expected revision", "description": "Optional optimistic-lock revision." }
       }
     }
   }
