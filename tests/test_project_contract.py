@@ -67,6 +67,8 @@ class ProjectContractTests(unittest.TestCase):
             "_renderMobileQuickActions(",
             "_renderMine(",
             "_renderWeek(",
+            "week_preview",
+            'class="week-preview"',
             "_bindBulkActions(",
             "_showDiscoveryInstall(",
             "_showTodayPlanner(",

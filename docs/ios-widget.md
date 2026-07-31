@@ -1,159 +1,234 @@
 # Official Home Assistant iOS widget
 
-Household Tasks integrates with the widgets shipped by the official Home
-Assistant Companion App. This route requires no Apple Developer account, no
-separate access token, and does not open Scriptable.
+Household Tasks integrates with the **Custom Widget (BETA)** included in the
+official Home Assistant Companion App. It requires no Apple Developer account,
+no separate access token, and no Scriptable installation.
 
-## What the integration creates
+This guide deliberately separates the two configuration stages that iOS makes
+easy to confuse:
 
-For every configured household person, Home Assistant creates:
+1. create and populate a widget configuration inside the Home Assistant app;
+2. add a Home Assistant widget to the iOS Home Screen and select that saved
+   configuration.
 
-- a sensor named `<person> task inbox`, whose state is the next task title and
-  whose attributes contain bounded counts plus a three-task preview;
-- a button named `<person> task actions`, which sends an actionable notification
-  for the exact occurrence currently selected by the server.
+The four recipes below list every item in the order in which it must be added.
 
-The notification offers only actions that are valid for that occurrence, such
-as complete, claim, snooze, or request help. Action identifiers contain the
-stable occurrence ID, so a delayed tap cannot affect a different task that has
-since moved to the top of the list.
+## What can and cannot match the concept images
 
-The sensor projection is person-scoped and excludes notification service names,
-presence entities, access tokens, and integration configuration. A non-admin
-Home Assistant context may request actions only for its linked household person.
-Like all Home Assistant entity states, inbox sensor values are visible to users
-who have access to those entities. Administrators of shared installations should
-restrict the generated person sensors to the intended users or omit sensitive
-details from task titles.
+The images in this guide are design concepts. The official Custom Widget uses
+an automatic grid of equal-sized entity tiles. The current editor lets you
+choose the entity, item order, icon, colors, display text, tap action, and
+confirmation behavior. It does **not** provide arbitrary row spans, free-form
+headers, avatars, badges, or typography.
 
-## Prerequisites
+Consequently, the recipes reproduce the behavior and information hierarchy of
+the images, not their pixel-perfect geometry:
 
-1. Install and connect the official Home Assistant Companion App on the iPhone.
-2. In Household Tasks, edit the person and select the matching Home Assistant
-   user plus the iPhone's `notify.mobile_app_*` action.
-3. Reload Household Tasks or restart Home Assistant after updating from a
-   release that did not yet include the widget entities.
+- item order determines the grid position;
+- iOS determines the number of visible items for the selected widget size;
+- a wide “next task” row becomes a normal entity tile;
+- labels such as “once per season” are explanatory text in the image, not a
+  separate entity supplied by Household Tasks;
+- a shared action tile must be replaced by one action tile per person.
 
-## Inspiration: four useful widget layouts
+Use a **Large** system widget for the complete recipes. If the selected iOS or
+Companion App version does not show every item, create two smaller widget
+configurations instead of dropping an action tile.
 
-The following images are realistic configuration concepts, not screenshots of
-a separate Household Tasks app. Colors, spacing, and typography vary slightly
-between Home Assistant Companion App and iOS releases, but every concept uses
-entity tiles and actions supported by the official Custom Widget.
+## 1. Verify the prerequisites in Home Assistant
 
-### 1. My day: the practical default
+Do this before opening the widget editor. Missing server-side entities cannot
+be repaired from the iPhone widget screen.
 
-![My day widget with next task, due counts, actions, and navigation](images/ios-widget-my-day.webp)
+1. Install and open the official Home Assistant Companion App on the iPhone.
+2. Connect the app to the same Home Assistant server on which Household Tasks
+   is installed and allow notifications.
+3. In **Household Tasks > People**, create or edit the intended person.
+4. Select the matching Home Assistant user.
+5. Select that iPhone's `notify.mobile_app_*` action and save the person.
+6. Open **Settings > Devices & services > Entities** in Home Assistant.
+7. Filter the list by the **Household Tasks** integration.
 
-Best for one person's everyday Home Screen. Use the person's `task inbox`
-sensor as the wide next-task tile, the existing `Tasks due today` and `Overdue
-tasks` aggregate sensors as count tiles, and the person's `task actions` button
-as the notification tile. Configure the last tile to navigate to
-`/haushaltsaufgaben`.
+For a person called Alex, expect entities similar to these:
 
-Good use cases:
+| Purpose | Typical display name | Example entity ID |
+| --- | --- | --- |
+| Personal next task | `Alex task inbox` | `sensor.household_tasks_alex` |
+| Personal actions | `Alex task actions` | `button.household_tasks_alex_actions` |
+| All active tasks | `Open tasks` | `sensor.open_tasks` |
+| Due today | `Tasks due today` | `sensor.tasks_due_today` |
+| Overdue | `Overdue tasks` | `sensor.overdue_tasks` |
+| Blocked | `Blocked tasks` | `sensor.blocked_tasks` |
 
-- see the next sensible task before leaving home;
-- notice overdue work without opening a dashboard;
-- request safe, occurrence-bound actions with one tap;
-- jump into the full task list only when planning is necessary.
+Entity IDs are examples. Home Assistant may append a suffix when an ID already
+exists. Copy the exact IDs from the entity list instead of typing the examples
+blindly.
 
-### 2. Household status: calm operational overview
+If the personal sensor and button do not exist, confirm that the person is
+actually saved in Household Tasks, then reload the Household Tasks integration
+or restart Home Assistant. The integration creates no personal widget entities
+while the Household Tasks people list is empty.
 
-![Household status widget with open, today, overdue, and blocked counts](images/ios-widget-household-status.webp)
+## 2. Create a reusable widget configuration in the app
 
-This is the simplest shared widget and uses only the four aggregate entities
-created by Household Tasks: `Open tasks`, `Tasks due today`, `Overdue tasks`,
-and `Blocked tasks`. It contains no task titles, making it a good fit for shared
-iPads, wall displays, and less private Home Screens.
+The wording can vary slightly with the app language, but the path and fields
+are the same.
 
-Good use cases:
+1. Open the Home Assistant app on the iPhone.
+2. Open **Settings > Companion App > Widgets**.
+3. Under **Custom Widgets (BETA)**, tap **Create**.
+4. Give the configuration a recognizable name, for example `Household – My
+   day`.
+5. Tap **Add item**.
+6. Select the entity listed in the chosen recipe below.
+7. Open that item and configure **Display text**, **Icon**, **Icon color**,
+   optional custom colors, **On tap**, and **Require confirmation** exactly as
+   shown in the recipe.
+8. Tap **Add** to return to the item list.
+9. Repeat for every recipe row, from top to bottom.
+10. Reorder items with the drag handles if necessary. The first item occupies
+    the first grid position.
+11. Tap **Save**.
 
-- morning overview for the whole household;
-- spot dependency problems before they become overdue;
-- a low-distraction status widget for a shared device;
-- a quick signal that the weekly review is needed.
+### Tap-action reference
 
-### 3. Season and weather: context before chores
+| Tap action | Use it for | Result |
+| --- | --- | --- |
+| **Default** | A `button.*task_actions` entity | Presses the button and asks Household Tasks to send fresh actions for the current task. |
+| **Navigate** | Inbox and count sensors | Opens `/haushaltsaufgaben` in the Home Assistant app. |
+| **Nothing** | Display-only sensor tile | Refreshes the widget without opening another screen. |
+| **Run script** | An existing HA script | Runs the selected script; this is not required by the standard recipes. |
 
-![Season and weather widget with frost forecast and personal tasks](images/ios-widget-season-weather.webp)
+Use confirmation for action buttons when accidental taps matter. Confirmation
+is unnecessary for read-only sensors and navigation tiles.
 
-Combine an existing Home Assistant weather or forecast sensor with the
-Household Tasks inbox sensors. This layout is especially useful for seasonal
-rules that create one occurrence per person, such as checking frost protection
-for each person's car. The small seasonal badge can be static display text; the
-one-per-season guarantee remains server-side in Household Tasks.
+## 3. Add the saved configuration to the iOS Home Screen
 
-Other combinations:
+Saving the configuration in the Companion App does not add it to the Home
+Screen automatically.
 
-- heat forecast plus watering and pet-cooling tasks;
-- storm warning plus windows, awnings, and garden furniture;
-- high pollen count plus ventilation and filter checks;
-- heavy rain plus basement drain and window-well inspection;
-- first snow plus clearing paths and preparing grit.
+1. Return to the iOS Home Screen.
+2. Long-press an empty area until the icons start moving.
+3. Tap **+**, search for **Home Assistant**, and select it.
+4. Swipe to the **Custom Widget** in the desired size. Choose **Large** for the
+   complete recipes below.
+5. Tap **Add Widget**.
+6. Long-press the new widget and choose **Edit Widget**.
+7. In **Widget**, select the configuration saved in the previous section.
+8. Enable **Show states** so task titles and counts are visible.
+9. Enable **Show last update time** only if the additional footer is useful.
+10. Leave edit mode and tap each tile once to verify its behavior.
 
-For one shared action tile, create a Home Assistant script that presses the
-desired person's `task actions` button. Otherwise add one action tile per
-person, as in the family layout below.
+If the widget shows fewer items than configured, the selected size has reached
+its item limit. Use a larger widget or split the recipe into two configurations.
 
-### 4. Family actions: personal lanes without an app
+## Recipe A: My day
 
-![Family widget with Alex and Sam task lanes and action buttons](images/ios-widget-family-actions.webp)
+![My day widget concept](images/ios-widget-my-day.webp)
 
-Add each person's `task inbox` sensor next to their matching `task actions`
-button. Everyone sees the division of work, while pressing an action tile sends
-the notification only to that person's configured Companion App device.
+Recommended configuration name: `Household – My day`
 
-Good use cases:
+Add these five items in this exact order:
 
-- couples with separate responsibilities;
-- parent and teenager task lanes;
-- temporary household handovers during vacation or illness;
-- shared chores where each person needs an independent occurrence;
-- guest mode with a deliberately reduced set of visible tasks.
+| # | Entity | Display text | Icon | Color | On tap | Confirmation |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `sensor.household_tasks_alex` | `Next task` | `mdi:clipboard-account-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 2 | `sensor.tasks_due_today` | `Today` | `mdi:calendar-today` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 3 | `sensor.overdue_tasks` | `Overdue` | `mdi:clock-alert-outline` | Red | **Navigate** → `/haushaltsaufgaben` | Off |
+| 4 | `button.household_tasks_alex_actions` | `Actions` | `mdi:bell-outline` | Blue | **Default** | On |
+| 5 | `sensor.open_tasks` | `All tasks` | `mdi:format-list-checks` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
 
-### More combinations worth trying
+Replace `alex` with the real person entity IDs. Item 1 displays the next task
+title as its state. Item 4 sends an actionable notification for that current
+task; it does not complete a task immediately.
 
-- **Maintenance cockpit:** next task, blocked count, printer/resource warning,
-  and a direct link to configuration health.
-- **Evening reset:** open count, tomorrow count, quick actions, and a navigation
-  tile to the weekly planner.
-- **Away mode:** household mode helper, handover status, security-related tasks,
-  and the intended recipient's action button.
-- **Care routine:** medication or pet-care task, presence state, next due time,
-  and a deliberately confirmation-protected action tile.
-- **Minimal Lock Screen:** one inbox sensor showing only the next task; keep
-  sensitive descriptions out of titles.
+The concept image shows the first item as a wide row. The official widget will
+render it as the first normal grid tile.
 
-## Create the widget
+## Recipe B: Household status
 
-1. In the Home Assistant iOS App, open **Settings > Companion App > Widgets**.
-2. Select **Create** under **Custom Widgets (BETA)**.
-3. Add the person's `task inbox` sensor as the first item. Configure its tap
-   action as **Navigate** to `/haushaltsaufgaben`, or **Nothing** for a purely
-   glanceable tile.
-4. Add the person's `task actions` button as the second item and keep its tap
-   action on **Default**. Optional confirmation protects against accidental
-   taps.
-5. Save the custom widget, add a Home Assistant widget to the iOS Home Screen,
-   then select the saved configuration in the widget settings.
+![Household status widget concept](images/ios-widget-household-status.webp)
 
-Tapping the action tile asks Home Assistant to send a fresh notification for
-the current next task. Pressing **Complete**, **This evening**, **Tomorrow**,
-**Claim**, or **Request help** in that notification runs in the background and
-does not open the Home Assistant or Scriptable app.
+Recommended configuration name: `Household – Status`
 
-Home Assistant documents the current widget editor and supported sizes at
-<https://companion.home-assistant.io/docs/integrations/ios-widgets/>. Interactive
-notification behavior is documented at
-<https://companion.home-assistant.io/docs/notifications/actionable-notifications/>.
+Add these four items in this exact order:
+
+| # | Entity | Display text | Icon | Color | On tap | Confirmation |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `sensor.open_tasks` | `Open` | `mdi:clipboard-text-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 2 | `sensor.tasks_due_today` | `Today` | `mdi:calendar-today` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 3 | `sensor.overdue_tasks` | `Overdue` | `mdi:clock-alert-outline` | Red | **Navigate** → `/haushaltsaufgaben` | Off |
+| 4 | `sensor.blocked_tasks` | `Blocked` | `mdi:lock-outline` | Amber | **Navigate** → `/haushaltsaufgaben` | Off |
+
+This is the easiest recipe to reproduce because it uses exactly four uniform
+tiles and contains no personal task title.
+
+## Recipe C: Season and weather
+
+![Season and weather widget concept](images/ios-widget-season-weather.webp)
+
+Recommended configuration name: `Household – Weather`
+
+The official widget can display only entity states. To reproduce the
+“temperature tomorrow” tile, select an existing forecast sensor from the local
+weather integration or create a Home Assistant template sensor that exposes
+tomorrow's minimum temperature. Household Tasks does not create this weather
+sensor.
+
+Add these five items in this exact order:
+
+| # | Entity | Display text | Icon | Color | On tap | Confirmation |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Your forecast temperature sensor | `Tomorrow` | `mdi:thermometer-low` | Blue | **Nothing** | Off |
+| 2 | `sensor.household_tasks_alex` | `Alex` | `mdi:car-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 3 | `sensor.household_tasks_sam` | `Sam` | `mdi:car-outline` | Green | **Navigate** → `/haushaltsaufgaben` | Off |
+| 4 | `button.household_tasks_alex_actions` | `Alex actions` | `mdi:bell-outline` | Blue | **Default** | On |
+| 5 | `button.household_tasks_sam_actions` | `Sam actions` | `mdi:bell-outline` | Green | **Default** | On |
+
+Omit item 1 if no suitable forecast sensor exists. The “once per season” badge
+in the concept image is enforced by the Household Tasks rule engine but is not
+currently exposed as a separate widget entity.
+
+There is intentionally no shared action button: each generated action button
+is bound to one person's inbox and notification destination.
+
+## Recipe D: Family actions
+
+![Family actions widget concept](images/ios-widget-family-actions.webp)
+
+Recommended configuration name: `Household – Family`
+
+Add these four items in this exact order:
+
+| # | Entity | Display text | Icon | Color | On tap | Confirmation |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `sensor.household_tasks_alex` | `Alex` | `mdi:clipboard-account-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 2 | `button.household_tasks_alex_actions` | `Alex actions` | `mdi:bell-outline` | Blue | **Default** | On |
+| 3 | `sensor.household_tasks_sam` | `Sam` | `mdi:clipboard-account-outline` | Green | **Navigate** → `/haushaltsaufgaben` | Off |
+| 4 | `button.household_tasks_sam_actions` | `Sam actions` | `mdi:bell-outline` | Green | **Default** | On |
+
+The official grid produces two functional person lanes when it places items 1
+and 2 in the first row and items 3 and 4 in the second. It cannot render the
+large circular avatars shown in the concept image.
+
+## What happens when an action tile is tapped
+
+The action tile presses the person's Household Tasks button. The server selects
+the current next task and sends a fresh actionable notification. Depending on
+the task state, that notification can offer actions such as **Complete**,
+**This evening**, **Tomorrow**, **Claim**, or **Request help**.
+
+These notification actions use the immutable task occurrence ID. A delayed tap
+therefore cannot accidentally modify a different task that has since moved to
+the top of the person's inbox.
 
 ## Refresh behavior
 
-iOS controls widget refresh scheduling and may show a cached sensor value for
-roughly 15 minutes. The action button always selects the current task on the
-server, regardless of the displayed cache. For important changes, an optional
-automation can ask the Companion App to refresh its widgets:
+iOS controls widget refresh scheduling and may display a cached sensor value
+for roughly 15 minutes. The action button still selects the current task on the
+server, regardless of the title currently cached by the widget.
+
+For important changes, an optional automation can request a widget refresh:
 
 ```yaml
 alias: Refresh Household Tasks iOS widget
@@ -168,16 +243,49 @@ actions:
       message: update_widgets
 ```
 
-Replace `notify.mobile_app_iphone` with the person's actual Companion App
-notification action. iOS may still defer refreshes, and frequent update requests
-can increase battery use.
+Replace `notify.mobile_app_iphone` with the actual Companion App notification
+action. iOS can still defer updates, and excessive refresh requests increase
+battery use.
 
-## Troubleshooting
+## Troubleshooting checklist
 
-- **No person entities:** verify the person exists, then reload the integration.
-- **Action button unavailable:** the configured `notify.mobile_app_*` action is
-  missing. Open the Companion App once and restart Home Assistant if necessary.
-- **Permission error:** link the logged-in Home Assistant user to the intended
-  Household Tasks person. Administrators may target every configured person.
-- **Notification opens an app:** use the background task buttons, not the
-  notification body or its **Open task** action.
+### The personal inbox or action entity is missing in Home Assistant
+
+- Confirm that at least one person is saved under **Household Tasks > People**.
+- Confirm that the person is linked to a Home Assistant user.
+- Reload Household Tasks or restart Home Assistant.
+- Search the complete entity list by integration, not only by an assumed entity
+  ID.
+
+### The entities exist in Home Assistant but not in the app editor
+
+- Open the Home Assistant app and select the correct server.
+- Pull to refresh or completely close and reopen the app.
+- Reopen **Settings > Companion App > Widgets** and create a new configuration.
+- Confirm that the Home Assistant user can access the personal sensor and
+  button entities.
+
+### The action tile is unavailable
+
+- Open the Companion App once and allow notifications.
+- Confirm that the person's configured `notify.mobile_app_*` action still
+  exists.
+- Restart Home Assistant after registering a new mobile device.
+
+### Tapping a tile opens the wrong screen
+
+- Use **Default** only for the `button.*task_actions` entity.
+- Use **Navigate** with `/haushaltsaufgaben` for inbox and count sensors.
+- Use **Nothing** for a display-only weather tile.
+
+### The layout does not match the image
+
+- Confirm the items are in the documented order.
+- Use the Large system widget.
+- Remember that iOS controls the uniform grid; wide rows, avatars, headers, and
+  badges in the concept images are not configurable in the official widget.
+
+The current widget editor and supported sizes are documented in the
+[official Home Assistant Companion documentation](https://companion.home-assistant.io/docs/integrations/ios-widgets/).
+Interactive notification behavior is documented under
+[Actionable Notifications](https://companion.home-assistant.io/docs/notifications/actionable-notifications/).

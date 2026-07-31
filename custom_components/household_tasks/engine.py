@@ -1380,6 +1380,7 @@ class HouseholdTaskEngine:
             "scores": deepcopy(self.state.get("scores", {})),
             "handovers": deepcopy(self.state.get("handovers", {})),
             "occurrences": occurrences,
+            "week_preview": self.week_preview(),
             "task_store": {
                 "schema_version": self.state.get("task_schema_version"),
                 "journal_entries": len(self.state.get("task_events", [])),
@@ -1409,6 +1410,116 @@ class HouseholdTaskEngine:
                 now=dt_util.now(),
             ),
         }
+
+    def week_preview(
+        self,
+        now: datetime | None = None,
+        *,
+        days: int = 7,
+    ) -> list[dict[str, Any]]:
+        """Project deterministic schedules without creating task occurrences."""
+        reference = dt_util.as_local(now or dt_util.utcnow())
+        zone = ZoneInfo(self.hass.config.time_zone)
+        start = datetime.combine(reference.date(), time.min, zone)
+        end = datetime.combine(
+            reference.date() + timedelta(days=max(1, days) - 1),
+            time.max,
+            zone,
+        )
+        existing = set(self.state["occurrences"])
+        projected_seasonal_keys: set[str] = set()
+        preview: list[dict[str, Any]] = []
+
+        for task_id, task in self.tasks.items():
+            if not task.get("enabled", True):
+                continue
+            schedule = task.get("schedule", {})
+            if schedule.get("type") not in {
+                "weekly",
+                "monthly",
+                "yearly",
+                "interval_months",
+            }:
+                continue
+            for due in self._scheduled_times(
+                schedule,
+                start - timedelta(microseconds=1),
+                end,
+            ):
+                targets: list[str | None] = [None]
+                if task.get("assignment", {}).get("type") == "per_person":
+                    targets = self._fanout_targets(task)
+                for target_person in targets:
+                    occurrence_id = self._occurrence_id(
+                        task_id,
+                        due,
+                        manual=False,
+                        target_person=target_person,
+                    )
+                    if occurrence_id in existing:
+                        continue
+                    repetition = self._seasonal_execution_decision(
+                        task_id,
+                        task,
+                        due,
+                        target_person,
+                    )
+                    seasonal_key = repetition.get("ledger_key")
+                    if not repetition["allowed"] or (
+                        seasonal_key in projected_seasonal_keys
+                    ):
+                        continue
+                    if seasonal_key:
+                        projected_seasonal_keys.add(seasonal_key)
+                    assignee, assignment_pending = self._preview_assignee(
+                        task,
+                        target_person,
+                        due,
+                    )
+                    conditional = bool(
+                        assignment_pending
+                        or task.get("weather", {}).get("conditions")
+                        or task.get("season")
+                        or (
+                            task.get("assignment", {}).get("type") == "per_person"
+                            and schedule.get("skip_if_open", True)
+                        )
+                        or self._current_household_mode().get("mode") != "normal"
+                    )
+                    preview.append(
+                        {
+                            "id": f"preview-{occurrence_id}",
+                            "task_id": task_id,
+                            "title": str(task.get("name", task_id)),
+                            "assignee": assignee,
+                            "due": due.isoformat(),
+                            "schedule_type": schedule["type"],
+                            "read_only": True,
+                            "conditional": conditional,
+                            "assignment_pending": assignment_pending,
+                        }
+                    )
+
+        return sorted(preview, key=lambda item: (item["due"], item["task_id"]))
+
+    def _preview_assignee(
+        self,
+        task: dict[str, Any],
+        target_person: str | None,
+        due: datetime,
+    ) -> tuple[str | None, bool]:
+        """Return a side-effect-free assignee estimate for a projected task."""
+        if target_person is not None:
+            return self._active_handover_target(target_person, due), False
+        assignment_type = task.get("assignment", {}).get("type", "fixed")
+        if assignment_type == "fixed":
+            assignee = task.get("assignee")
+            if assignee in self.people:
+                return self._active_handover_target(assignee, due), False
+            return None, False
+        if assignment_type == "open":
+            return None, False
+        return None, True
 
     def _current_household_mode(self) -> dict[str, Any]:
         """Return the active mode and expire temporary modes when necessary."""

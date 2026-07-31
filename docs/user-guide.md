@@ -467,7 +467,13 @@ einem Tipp erzeugt werden.
 In **Meine Aufgaben** und im **Wochenplan** lassen sich mehrere Vorkommen
 auswählen und gemeinsam erledigen, auf morgen verschieben oder als Hilferuf
 verteilen. Der Wochenplan gruppiert die nächsten sieben Tage und zeigt dadurch
-Überlastungen frühzeitig. Der schwebende Plus-Button öffnet abhängig von der
+Überlastungen frühzeitig. Noch nicht erzeugte Aufgaben aus wöchentlichen,
+monatlichen, jährlichen und mehrmonatigen Zeitplänen erscheinen dort als
+gestrichelte **Vorschau**. Diese Einträge sind bewusst schreibgeschützt:
+Zuweisung, Bedingungen und offene Vorgänger werden erst bei der tatsächlichen
+Erzeugung abschließend ausgewertet. Bereits erzeugte Aufgaben ersetzen ihre
+Vorschau automatisch und können weiterhin ausgewählt oder verschoben werden.
+Der schwebende Plus-Button öffnet abhängig von der
 aktuellen Ansicht eine Schnellaufgabe, neue Vorlage oder Person.
 
 ## Smarte Schnellerfassung
@@ -617,7 +623,12 @@ Aufgabe und ein Aktionsknopf angelegt. Der Knopf sendet eine aktuelle,
 aufgabenspezifische Benachrichtigung; deren Aktionen werden im Hintergrund
 ausgeführt und öffnen weder Home Assistant noch Scriptable. Einrichtung,
 Berechtigungen und optionale Aktualisierungsautomation sind unter
-[`docs/ios-widget.md`](ios-widget.md) beschrieben.
+[`docs/ios-widget.md`](ios-widget.md) beschrieben. Die Anleitung enthält eine
+Prüfliste für die erzeugten Entitäten, trennt App-Editor und iOS-Home-Screen
+klar voneinander und gibt für alle vier Beispielbilder die exakte Reihenfolge,
+Beschriftung, Symbole, Farben und Tap-Aktionen an. Die Bilder sind Designkonzepte;
+Abweichungen durch das automatisch erzeugte, gleichmäßige iOS-Kachelraster sind
+dort ausdrücklich dokumentiert.
 
 Scriptable bleibt als optionale, flexiblere Anzeige verfügbar. Interaktive
 Widget-Taps öffnen technisch bedingt jedoch immer die Scriptable-App.
