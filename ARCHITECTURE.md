@@ -24,6 +24,10 @@ Config entry
 The sidebar panel uses the authenticated WebSocket API. Small external clients
 use a separate, versioned REST API that returns only a person-scoped task
 projection; the included Scriptable iOS/iPadOS widget is its first consumer.
+The preferred no-cost iOS path stays inside Home Assistant: per-person sensor
+entities expose a bounded widget projection, while a button entity sends an
+occurrence-bound actionable notification through the configured Companion App.
+This avoids distributing or storing an additional client credential.
 
 Pure domain modules contain scheduling, assignment, weather, forecasting,
 analytics, import/export, productivity, NFC, and integrity logic. `engine.py`

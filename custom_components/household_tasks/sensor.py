@@ -23,19 +23,33 @@ async def async_setup_entry(
 ) -> None:
     """Create aggregate sensors for one integration entry."""
     engine: HouseholdTaskEngine = entry.runtime_data
-    async_add_entities(
-        [
-            HouseholdTaskCountSensor(entry, engine, "open", "Open tasks", _open),
-            HouseholdTaskCountSensor(
-                entry, engine, "due_today", "Tasks due today", _due_today
-            ),
-            HouseholdTaskCountSensor(
-                entry, engine, "overdue", "Overdue tasks", _overdue
-            ),
-            HouseholdTaskCountSensor(
-                entry, engine, "blocked", "Blocked tasks", _blocked
-            ),
-        ]
+    entities: list[SensorEntity] = [
+        HouseholdTaskCountSensor(entry, engine, "open", "Open tasks", _open),
+        HouseholdTaskCountSensor(
+            entry, engine, "due_today", "Tasks due today", _due_today
+        ),
+        HouseholdTaskCountSensor(entry, engine, "overdue", "Overdue tasks", _overdue),
+        HouseholdTaskCountSensor(entry, engine, "blocked", "Blocked tasks", _blocked),
+    ]
+    known_people: set[str] = set()
+
+    @callback
+    def add_person_sensors(_event: Event | None = None) -> None:
+        new_people = sorted(set(engine.people) - known_people)
+        if not new_people:
+            return
+        known_people.update(new_people)
+        async_add_entities(
+            [
+                HouseholdTaskPersonWidgetSensor(entry, engine, person)
+                for person in new_people
+            ]
+        )
+
+    async_add_entities(entities)
+    add_person_sensors()
+    entry.async_on_unload(
+        hass.bus.async_listen(f"{DOMAIN}_updated", add_person_sensors)
     )
 
 
@@ -100,6 +114,87 @@ class HouseholdTaskCountSensor(SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         """Refresh when the engine persists a change."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self.hass.bus.async_listen(f"{DOMAIN}_updated", self._handle_update)
+        )
+
+    @callback
+    def _handle_update(self, _event: Event) -> None:
+        self.async_write_ha_state()
+
+
+class HouseholdTaskPersonWidgetSensor(SensorEntity):
+    """Expose a compact person-scoped feed for the official HA iOS widget."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:clipboard-account-outline"
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        engine: HouseholdTaskEngine,
+        person_id: str,
+    ) -> None:
+        self._engine = engine
+        self._person_id = person_id
+        person_name = engine.people[person_id].get("name", person_id)
+        self._attr_name = f"{person_name} task inbox"
+        self._attr_unique_id = f"{entry.entry_id}_ios_widget_{person_id}"
+        self._attr_suggested_object_id = f"household_tasks_{person_id}"
+
+    @property
+    def available(self) -> bool:
+        """Return whether the configured household person still exists."""
+        return self._person_id in self._engine.people
+
+    def _feed(self) -> dict[str, Any] | None:
+        if not self.available:
+            return None
+        from .client_api import build_client_feed
+
+        return build_client_feed(self._engine, self._person_id)
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the next task title for a glanceable widget state."""
+        feed = self._feed()
+        if feed is None:
+            return None
+        tasks = feed["tasks"]
+        return str(tasks[0]["title"])[:255] if tasks else "All done"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return a bounded, secret-free preview for templates and widgets."""
+        feed = self._feed()
+        if feed is None:
+            return {}
+        tasks = feed["tasks"]
+        next_task = tasks[0] if tasks else None
+        return {
+            **feed["summary"],
+            "person_id": self._person_id,
+            "person_name": feed["person"]["name"],
+            "household_mode": feed["household_mode"],
+            "next_task_id": next_task["id"] if next_task else None,
+            "next_due": next_task["due"] if next_task else None,
+            "next_status": next_task["status"] if next_task else None,
+            "next_priority": next_task["priority"] if next_task else None,
+            "preview": [
+                {
+                    "id": task["id"],
+                    "title": str(task["title"])[:160],
+                    "due": task["due"],
+                    "status": task["status"],
+                    "overdue": task["overdue"],
+                }
+                for task in tasks[:3]
+            ],
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Refresh when tasks or person configuration changes."""
         await super().async_added_to_hass()
         self.async_on_remove(
             self.hass.bus.async_listen(f"{DOMAIN}_updated", self._handle_update)

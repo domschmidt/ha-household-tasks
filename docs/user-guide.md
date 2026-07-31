@@ -609,7 +609,20 @@ Sturmsicherung, Starkregen-/Fensterprüfung, Glatteisvorsorge, Lüften bei hoher
 Feuchte, UV-Schutz, Schneeräumen und Hitzeschutz für Haustiere. Vorlagen werden
 erst nach Auswahl einer konkreten lokalen Entität aktiviert.
 
-## iPhone- und iPad-Widget mit Scriptable
+## iPhone- und iPad-Widgets
+
+Die empfohlene kostenlose iOS-Anbindung verwendet das offizielle
+Home-Assistant-Custom-Widget. Pro Person werden ein Sensor mit der nächsten
+Aufgabe und ein Aktionsknopf angelegt. Der Knopf sendet eine aktuelle,
+aufgabenspezifische Benachrichtigung; deren Aktionen werden im Hintergrund
+ausgeführt und öffnen weder Home Assistant noch Scriptable. Einrichtung,
+Berechtigungen und optionale Aktualisierungsautomation sind unter
+[`docs/ios-widget.md`](ios-widget.md) beschrieben.
+
+Scriptable bleibt als optionale, flexiblere Anzeige verfügbar. Interaktive
+Widget-Taps öffnen technisch bedingt jedoch immer die Scriptable-App.
+
+### Scriptable
 
 Unter `clients/scriptable` liegt ein eigenständiger Scriptable-Client. Er zeigt
 offene, heute fällige, überfällige und blockierte Aufgaben als Home-Screen-

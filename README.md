@@ -366,6 +366,19 @@ branch protection, SonarQube, security scanning, and release provenance.
 
 ### iPhone and iPad client
 
+The recommended zero-cost iOS integration uses the
+[official Home Assistant Custom Widget](docs/ios-widget.md). Household Tasks
+creates a person-scoped inbox sensor and a safe action button for each person.
+The button sends task-specific actionable notifications whose completion,
+claim, snooze, and help actions execute in the background without opening
+another app. It needs neither an Apple Developer membership nor a separate
+access token.
+
+For richer standalone previews, the repository also includes an optional
+Scriptable client. Scriptable always opens its host app for interactive taps,
+so it is best treated as a display-oriented fallback rather than the primary
+iOS interaction model.
+
 The repository includes a native-feeling
 [Scriptable widget and action client](clients/scriptable/README.md). It shows
 the authenticated user's open tasks and supports completion, claiming,
