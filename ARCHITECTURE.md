@@ -21,6 +21,10 @@ Config entry
             └─ sidebar panel
 ```
 
+The sidebar panel uses the authenticated WebSocket API. Small external clients
+use a separate, versioned REST API that returns only a person-scoped task
+projection; the included Scriptable iOS/iPadOS widget is its first consumer.
+
 Pure domain modules contain scheduling, assignment, weather, forecasting,
 analytics, import/export, productivity, NFC, and integrity logic. `engine.py`
 coordinates those modules at the Home Assistant boundary. `ui.py` is a thin
@@ -81,6 +85,11 @@ status values, and checklist IDs.
 Configuration mutation, imports, monitor changes, and household administration
 require a Home Assistant administrator. Operational task actions are available
 to administrators and users explicitly linked to a configured household person.
+The external-client API verifies an optional `person_id` against the bearer
+token's Home Assistant user, so a non-administrator cannot select another
+household identity. Responses use `Cache-Control: no-store`; Scriptable stores
+credentials only in the iOS Keychain and caches only the secret-free task
+projection.
 Attachments are bounded by count, size, and MIME type. URLs require HTTPS.
 Diagnostics redact household identifiers; no telemetry or external account is
 used.

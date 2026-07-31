@@ -364,6 +364,21 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
 also complete the one-time [maintainer setup](docs/maintainer-setup.md) for
 branch protection, SonarQube, security scanning, and release provenance.
 
+### iPhone and iPad client
+
+The repository includes a native-feeling
+[Scriptable widget and action client](clients/scriptable/README.md). It shows
+the authenticated user's open tasks and supports completion, claiming,
+checklists, snoozing, status changes, and help requests. The companion REST API
+uses standard Home Assistant bearer authentication and never exposes notify
+services, presence entities, access tokens, or the complete household
+configuration.
+
+For least privilege, create a dedicated non-administrator Home Assistant user
+and link it to exactly one Household Tasks person. Scriptable stores the token
+only in the iOS Keychain and keeps merely the secret-free task response as its
+offline widget cache.
+
 ### Quality and security gates
 
 - Unit and Home Assistant config-flow tests on supported Python versions
