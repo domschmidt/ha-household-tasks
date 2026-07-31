@@ -117,6 +117,8 @@ _TASK_NOT_OPEN = "Die Aufgabe ist nicht mehr offen."
 _HELP_NEEDED = "Hilfe benötigt"
 _OPEN_TASK = "Aufgabe öffnen"
 
+PLATFORMS = [Platform.SENSOR, Platform.BUTTON]
+
 WEEKDAYS = {
     "mon": 0,
     "tue": 1,
@@ -327,7 +329,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await engine.async_setup()
     async_register_intents(hass)
     entry.runtime_data = engine
-    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     if "haushaltsaufgaben" not in hass.data.get("frontend_panels", {}):
         frontend_version = await hass.async_add_executor_job(_frontend_version)
         async_register_built_in_panel(
@@ -352,7 +354,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Household Tasks config entry."""
-    if not await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR]):
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
     engine = getattr(entry, "runtime_data", None)
     if isinstance(engine, HouseholdTaskEngine):
@@ -5067,6 +5069,98 @@ class HouseholdTaskEngine:
         if unknown:
             _LOGGER.warning("Ignoring unknown recipients: %s", sorted(unknown))
         return [person for person in recipients if person in self.people]
+
+    async def async_send_widget_actions(
+        self,
+        person_id: str,
+        context: Context | None = None,
+    ) -> str | None:
+        """Send task-specific background actions to one person's iOS device."""
+        person = self.people.get(person_id)
+        if person is None:
+            raise vol.Invalid("Die Person ist unbekannt.")
+        if context is not None and context.user_id:
+            user = await self.hass.auth.async_get_user(context.user_id)
+            linked_person = self._person_for_context(context)
+            if user is None or (not user.is_admin and linked_person != person_id):
+                raise vol.Invalid("Kein Zugriff auf diese Person.")
+
+        # Keep widget selection identical to the authenticated REST client without
+        # exposing configuration details as Home Assistant entity attributes.
+        from .client_api import build_client_feed
+
+        tasks = build_client_feed(self, person_id)["tasks"]
+        notify_action = str(person["notify"])
+        service = notify_action.removeprefix("notify.")
+        if not tasks:
+            delivered = await self._send_notification(
+                service,
+                notify_action,
+                "Household Tasks",
+                "Alles erledigt - keine offenen Aufgaben.",
+                f"household_widget_{person_id}",
+                [],
+            )
+            if not delivered:
+                raise vol.Invalid("Die Benachrichtigung konnte nicht gesendet werden.")
+            return None
+
+        task = tasks[0]
+        occurrence_id = task["id"]
+        occurrence = self.state["occurrences"][occurrence_id]
+        actions = self._notification_actions(
+            occurrence_id,
+            person_id,
+            occurrence.get("assignee"),
+            None,
+        )
+        actions = self._widget_notification_actions(actions, task["actions"])
+        message = self._widget_notification_message(task)
+        delivered = await self._send_notification(
+            service,
+            notify_action,
+            "N\u00e4chste Aufgabe",
+            message,
+            f"household_widget_{person_id}",
+            actions,
+        )
+        if not delivered:
+            raise vol.Invalid("Die Benachrichtigung konnte nicht gesendet werden.")
+        return occurrence_id
+
+    @staticmethod
+    def _widget_notification_actions(
+        actions: list[dict[str, Any]], allowed: dict[str, bool]
+    ) -> list[dict[str, Any]]:
+        """Remove notification shortcuts rejected by the current task state."""
+        blocked_prefixes: list[str] = []
+        if not allowed.get("complete"):
+            blocked_prefixes.append(ACTION_PREFIX)
+        if not allowed.get("snooze"):
+            blocked_prefixes.extend((SNOOZE_EVENING_PREFIX, SNOOZE_TOMORROW_PREFIX))
+        if not allowed.get("help"):
+            blocked_prefixes.append(HELP_PREFIX)
+        return [
+            action
+            for action in actions
+            if not str(action.get("action", "")).startswith(tuple(blocked_prefixes))
+        ]
+
+    @staticmethod
+    def _widget_notification_message(task: dict[str, Any]) -> str:
+        """Build a bounded summary for the actionable notification."""
+        details = []
+        if task["overdue"]:
+            details.append("\u00dcberf\u00e4llig")
+        elif task["due_today"]:
+            details.append("Heute f\u00e4llig")
+        checklist = task["checklist"]
+        if checklist["total"]:
+            details.append(f"Checkliste {checklist['completed']}/{checklist['total']}")
+        message = str(task["title"])[:180]
+        if details:
+            message = f"{message}\n{' \u00b7 '.join(details)}"
+        return message
 
     async def _notify(
         self,
