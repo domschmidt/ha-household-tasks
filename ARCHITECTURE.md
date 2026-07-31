@@ -1,90 +1,104 @@
 # Architecture
 
-## Design goals
+Household Tasks is a local-first Home Assistant integration with an owned task
+domain. Home Assistant supplies lifecycle, authentication, entities, events,
+services, notifications, and atomic persistence. Household Tasks is the single
+source of truth for definitions and occurrences; no external task-list entity
+is required.
 
-Household Tasks is local-first, UI-configured, restart-safe, and additive to
-Home Assistant's native to-do model. It does not replace the to-do integration:
-it orchestrates task definitions and records occurrence metadata around native
-items.
-
-## Components
+## Runtime topology
 
 ```text
-Config flow
-    │
-    ▼
-Runtime engine ──────── Home Assistant to-do entity
-    │   │   │
-    │   │   ├────────── Mobile notifications and action events
-    │   ├────────────── State, calendar, time, and NFC events
-    └────────────────── Versioned Home Assistant storage
-            ▲
-            │ WebSocket API
-            ▼
-Packaged sidebar panel
+Config entry
+  └─ HouseholdTaskEngine
+       ├─ definitions, people, rules and monitors
+       ├─ native occurrences and bounded event journal
+       ├─ scheduler, weather/state/calendar evaluation
+       ├─ assignment, escalation, NFC and notification workflows
+       ├─ Home Assistant Store (atomic local persistence)
+       ├─ Home Assistant services, events and Assist intents
+       └─ authenticated WebSocket API
+            └─ sidebar panel
 ```
 
-- `engine.py` owns lifecycle, orchestration, Home Assistant listeners, native
-  to-do synchronization, escalation, and persistence.
-- `assignment.py`, `scheduling.py`, `workflows.py`, `analytics.py`, `resources.py`,
-  `weather_rules.py`, `forecast_rules.py`, `nfc.py`, and `config_io.py` contain
-  deterministic domain logic with focused unit tests.
-- `ui.py` is the authenticated WebSocket boundary and enforces admin-only
-  mutations.
-- `frontend/` contains the packaged panel and its German/English translations.
-- `diagnostics.py` and `system_health.py` expose support data without revealing
-  household identifiers.
+Pure domain modules contain scheduling, assignment, weather, forecasting,
+analytics, import/export, productivity, NFC, and integrity logic. `engine.py`
+coordinates those modules at the Home Assistant boundary. `ui.py` is a thin
+authenticated transport adapter; the browser never writes storage directly.
 
-The engine intentionally coordinates side effects while decision logic is kept
-in small, importable modules. New business rules should be implemented in a
-pure module first and called by the engine.
+## Native task model
 
-## Data ownership
+A definition describes how future work is generated. An occurrence is the
+independent unit of work created from that definition. Each occurrence stores:
 
-The selected Home Assistant `todo` entity owns the visible to-do items.
-Household Tasks stores definitions, people mappings, counters, assignment
-reasons, schedules, occurrence linkage, handovers, resource incidents,
-seasonal execution keys, forecast decision traces, and history in Home
-Assistant's storage API. Configuration exports are schema-versioned JSON
-documents; operational seasonal locks deliberately remain outside imports.
+- stable occurrence ID and definition snapshot;
+- `open`, `in_progress`, `waiting`, `blocked`, `completed`, or `cancelled`;
+- created/updated/resolved timestamps and an incrementing revision;
+- assignee, assignment explanation, due date, priority and optional due window;
+- structured checklist items with completion actor and timestamp;
+- explicit occurrence dependencies;
+- notification, escalation, attachment and seasonal metadata.
 
-Presence-aware assignment and handover resolution happen before an occurrence
-is written to the native to-do list. Operational handover and incident history
-is deliberately separate from editable configuration, so importing definitions
-cannot silently rewrite the audit trail.
+Writes support an optional expected revision. A stale client receives a
+validation error and must reload instead of overwriting a concurrent change.
+Blocked work cannot complete until every prerequisite is terminal. Completion
+may require all checklist items. Completing or cancelling a prerequisite
+atomically releases eligible dependents.
 
-## Authorization
+## Persistence and migration
 
-The Home Assistant config flow creates one config entry. WebSocket requests are
-authenticated by Home Assistant. Mutating configuration, import, and settings
-commands require an administrator. Operational commands also validate access
-to the selected to-do entity.
+The integration uses Home Assistant's `Store` under `household_tasks.state`.
+The container version remains compatible with existing installations; an
+internal `task_schema_version` performs domain migrations after loading.
 
-## Failure model
+The version-2 migration converts legacy mirrored occurrences in place:
 
-- Storage is loaded before listeners and scheduled scans start.
-- Listener unsubscribe callbacks are retained and called on unload.
-- Imports are parsed and validated before replacing live configuration.
-- Native to-do items are not deleted during integration removal.
-- Forecast rules depend on the selected Home Assistant weather integration.
-  Service failures and missing values suppress creation and retain an
-  actionable trace; Household Tasks never contacts the provider directly.
+- external item identifiers are removed;
+- status is derived from the prior resolved flag;
+- revision and lifecycle timestamps are initialized;
+- definition checklists become occurrence-local checklist state;
+- the bounded journal receives a `store_migrated` event.
 
-## Compatibility and migrations
+Migration operates on a copy and is idempotent. Home Assistant's atomic store
+write remains the durability boundary. Operators should still take a Home
+Assistant backup before major-version upgrades.
 
-The integration version, storage version, and export schema are separate
-concepts. A change to persisted data requires a storage migration. A breaking
-user-facing change requires a major integration release and migration notes.
-The minimum supported Home Assistant version is declared in `hacs.json`.
+## Audit and observability
 
-## Testing strategy
+Every material task transition appends a structured journal event containing a
+random event ID, event type, timestamp, optional actor, occurrence ID, and safe
+details. The journal is capped at 2,000 entries. The panel exposes the history
+for each occurrence and diagnostics report schema and aggregate counts.
 
-Pure domain modules are covered by deterministic unit tests. Home Assistant
-lifecycle, config flow, service registration, authorization, and unload
-behavior belong in integration tests using
-`pytest-homeassistant-custom-component`. The branch-aware CI floor is 80% for
-the deterministic domain layer and should only move upward. A separate,
-unfiltered Python coverage report feeds SonarQube and deliberately includes the
-engine and Home Assistant boundaries. Its 39% baseline is enforced as a
-ratchet, not presented as sufficient end-state coverage. Frontend changes
-require manual light and dark theme checks until browser automation is added.
+Every successful persisted write emits `household_tasks_updated` with schema,
+open count, and total count. NFC handling additionally emits
+`household_tasks_nfc_action`. Configuration health validates entity and service
+references, duplicate definitions, dependency cycles, occurrence references,
+status values, and checklist IDs.
+
+## Security and permissions
+
+Configuration mutation, imports, monitor changes, and household administration
+require a Home Assistant administrator. Operational task actions are available
+to administrators and users explicitly linked to a configured household person.
+Attachments are bounded by count, size, and MIME type. URLs require HTTPS.
+Diagnostics redact household identifiers; no telemetry or external account is
+used.
+
+## Failure behavior
+
+- Invalid configuration is rejected before replacing active configuration.
+- Rule previews and projections are side-effect free.
+- Notification failure is isolated and does not corrupt task state.
+- Revision conflicts prevent lost updates.
+- Unknown or cyclic dependencies surface in health checks and validation.
+- Unloading removes listeners, timers, intents, and panel registration while
+  persisted state remains available for the next setup.
+
+## Quality boundaries
+
+Deterministic modules are unit tested with branch coverage. Integration tests
+exercise config-entry migration, persistence, WebSocket access, services,
+weather chains, seasonal fan-out, dependencies, checklists, NFC, notifications,
+handover, monitors, unload/reload, and failure paths. CI additionally runs Ruff,
+hassfest, HACS validation, dependency review when supported, and SonarQube.

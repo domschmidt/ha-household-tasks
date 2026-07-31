@@ -5,10 +5,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Household Tasks is a local-first Home Assistant custom integration for planning,
-assigning, completing, and evaluating recurring household work. It combines
-native Home Assistant to-do items with fair assignment, dependencies,
-completion-based recurrence, state-triggered tasks, weekly reviews, NFC tags,
-push escalation, and a multilingual management panel.
+assigning, completing, and evaluating recurring household work. Its own
+versioned task domain supports lifecycle status, checklists, dependencies,
+completion-based recurrence, state rules, weekly reviews, NFC tags, push
+escalation, and a multilingual management panel.
 
 > The repository is prepared for community use and HACS validation. Until the
 > first tagged GitHub release exists, install from a local checkout or add the
@@ -21,7 +21,9 @@ push escalation, and a multilingual management panel.
 
 ## Highlights
 
-- Native Home Assistant to-do items remain the source users interact with.
+- Native, revisioned task occurrences are the single source of truth.
+- Structured checklists, lifecycle status, blocking dependencies, and history.
+- Aggregate HA sensors for open, due-today, overdue, and blocked work.
 - Fixed, rotating, fair, or open assignment with a human-readable explanation.
 - Weekly, monthly, yearly, interval, calendar, state, and completion schedules.
 - Dependent follow-up tasks, including delayed chains.
@@ -55,7 +57,6 @@ push escalation, and a multilingual management panel.
 
 - Home Assistant 2024.10.0 or newer
 - HACS 2.0 or newer for the recommended installation path
-- One Home Assistant `todo` entity
 - The Home Assistant mobile app for actionable push notifications
 - Optional: Home Assistant tags/NFC, calendar entities, presence entities, or
   monitored device entities
@@ -69,7 +70,7 @@ push escalation, and a multilingual management panel.
    **Integration** repository until it is available in the default catalog.
 3. Search for **Household Tasks**, download it, and restart Home Assistant.
 4. Open **Settings → Devices & services → Add integration**.
-5. Select **Household Tasks** and choose the to-do list it should manage.
+5. Select **Household Tasks**. No external task-list entity is required.
 
 ### Manual
 
@@ -85,8 +86,8 @@ person to the appropriate Home Assistant user, presence entity, and mobile
 notification service. Then create reusable task definitions.
 
 Only Home Assistant administrators may change people, task definitions, rules,
-or imports. Users who can control the selected to-do entity can complete and
-claim work, create quick tasks, and manually run active definitions.
+or imports. Household members explicitly linked to a Home Assistant user may
+complete, claim, update, and create work in the panel.
 
 ## Core concepts
 
@@ -94,8 +95,16 @@ claim work, create quick tasks, and manually run active definitions.
 
 A task definition describes assignment, schedule, due time, escalation,
 dependencies, NFC behavior, and checklists. Every run creates an independent
-native Home Assistant to-do item. Runtime metadata is kept in Home Assistant's
-versioned storage, so definitions and progress survive restarts.
+native Household Tasks occurrence in Home Assistant's atomic `Store`. Each
+occurrence carries a stable ID, optimistic-lock revision, lifecycle status,
+timestamps, checklist progress, dependency references, and an immutable bounded
+event history. Definitions and progress therefore survive restarts without a
+second integration acting as a mirror or source of truth.
+
+Lifecycle status is `open`, `in_progress`, `waiting`, `blocked`, `completed`, or
+`cancelled`. A blocked occurrence cannot be completed until all referenced
+prerequisites are terminal. Completion can require every checklist item, and
+every transition is available in the per-task history.
 
 ### Assignment
 
@@ -182,8 +191,10 @@ Undo.
 
 ### Dependencies
 
-Completing one definition can create one or more follow-up definitions
-immediately or after a delay. This models workflows such as:
+Definitions can require open occurrences from other definitions to finish.
+Completing one definition can also create one or more follow-up definitions
+immediately or after a delay. Cycles and missing references are rejected or
+reported by the health check. This models workflows such as:
 
 ```text
 Start washing machine → Hang laundry → Take laundry down
@@ -219,6 +230,21 @@ action: household_tasks.scan_now
 `household_tasks.create` creates an occurrence from an active definition.
 `household_tasks.scan_now` immediately evaluates schedules and escalations.
 
+Native task state can also be controlled from automations:
+
+```yaml
+action: household_tasks.set_status
+data:
+  occurrence_id: 1234abcd
+  status: in_progress
+  expected_revision: 2
+```
+
+`household_tasks.set_checklist_item` accepts `occurrence_id`, `item_id`,
+`completed`, and an optional `expected_revision`. Successful writes emit
+`household_tasks_updated` with aggregate counts; revision conflicts fail rather
+than silently overwriting a newer panel or automation update.
+
 Temporary handovers are also automation-friendly:
 
 ```yaml
@@ -251,7 +277,7 @@ replacement for instance backups.
 
 All processing is local. The integration does not transmit telemetry or
 household data. Home Assistant diagnostics redact user, person, device, entity,
-tag, and to-do identifiers. Free-text task titles and descriptions can still
+tag, and occurrence identifiers. Free-text task titles and descriptions can still
 be sensitive; review any log or exported configuration before sharing it.
 
 Download diagnostics from **Settings → Devices & services → Household Tasks →
@@ -287,8 +313,6 @@ Never post unredacted storage files or configuration exports.
 - The management panel currently ships in German and English.
 - NFC identifies a tag and sometimes the scanner; it is not an authentication
   mechanism.
-- Completion performed directly in another to-do client may not include user
-  context. In that case, credit falls back to the assigned person.
 - The integration provides actions and an NFC event, but no custom Home
   Assistant trigger, condition, or blueprint platform.
 - Browser-level automated tests for the custom panel are not yet included.
@@ -298,10 +322,10 @@ Never post unredacted storage files or configuration exports.
 Export configuration and create a Home Assistant backup before a major-version
 upgrade. Update through HACS and restart Home Assistant.
 
-To remove the integration, delete its config entry under **Settings → Devices &
-services**, restart Home Assistant, and uninstall it in HACS. Existing native
-to-do items are intentionally not deleted automatically. Remove them manually
-if no longer required.
+To remove the integration, export configuration if needed, delete its config
+entry under **Settings → Devices & services**, restart Home Assistant, and
+uninstall it in HACS. Removing the config entry removes the integration-owned
+task store; restore it from a Home Assistant backup if required.
 
 ## Development
 

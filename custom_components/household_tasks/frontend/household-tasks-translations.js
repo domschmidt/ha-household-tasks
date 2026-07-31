@@ -90,7 +90,7 @@ const EN = {
   "Überwachung nicht aktiviert": "Monitoring disabled",
   "Konfigurationsquelle": "Configuration source",
   "Personen, Vorlagen und Eskalationen werden vollständig im Home-Assistant-Speicher verwaltet.": "People, templates and escalations are stored entirely in Home Assistant.",
-  "To-do-Liste": "To-do list",
+  "Aufgabenspeicher": "Task store",
   "Letzte Prüfung": "Last check",
   "noch nicht erfolgt": "not run yet",
   "Konfiguration sichern": "Configuration backup",

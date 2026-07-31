@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import SupportsResponse
-from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -20,25 +20,29 @@ from custom_components.household_tasks.engine import (
 pytestmark = pytest.mark.usefixtures("mock_frontend_loaded")
 
 
-async def test_setup_requires_available_todo_entity(hass):
-    """Setup is retried while the selected native to-do entity is unavailable."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={"todo_entity": "todo.household"},
-    )
+async def test_setup_uses_native_task_store(hass):
+    """Setup does not depend on another Home Assistant integration."""
+    entry = MockConfigEntry(domain=DOMAIN, data={}, version=2)
     entry.add_to_hass(hass)
 
-    with pytest.raises(ConfigEntryNotReady):
-        await async_setup_entry(hass, entry)
+    with (
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new=AsyncMock()
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        assert await async_setup_entry(hass, entry)
+        assert entry.runtime_data.state["task_schema_version"] == 2
+        await async_unload_entry(hass, entry)
 
 
 async def test_setup_and_unload_config_entry(hass):
     """Runtime data and listeners follow the config-entry lifecycle."""
-    hass.states.async_set("todo.household", "0")
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={"todo_entity": "todo.household"},
-    )
+    entry = MockConfigEntry(domain=DOMAIN, data={}, version=2)
     entry.add_to_hass(hass)
 
     with (
@@ -46,6 +50,14 @@ async def test_setup_and_unload_config_entry(hass):
         patch.object(
             HouseholdTaskEngine, "async_shutdown", new=AsyncMock()
         ) as shutdown,
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new=AsyncMock()
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            new=AsyncMock(return_value=True),
+        ),
         patch("custom_components.household_tasks.engine.async_register_built_in_panel"),
         patch("custom_components.household_tasks.engine.async_remove_panel"),
     ):
@@ -62,39 +74,7 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     hass, hass_client, hass_ws_client, unused_tcp_port
 ):
     """Exercise the complete critical path against a running HA instance."""
-    items = []
     notifications = []
-
-    async def get_items(call):
-        return {"todo.household": {"items": list(items)}}
-
-    async def add_item(call):
-        items.append(
-            {
-                "uid": f"item-{len(items) + 1}",
-                "summary": call.data["item"],
-                "due": call.data["due_datetime"],
-                "status": "needs_action",
-            }
-        )
-
-    async def update_item(call):
-        item = next(item for item in items if item["uid"] == call.data["item"])
-        if "rename" in call.data:
-            item["summary"] = call.data["rename"]
-        if "due_datetime" in call.data:
-            item["due"] = call.data["due_datetime"]
-        if "status" in call.data:
-            item["status"] = call.data["status"]
-
-    hass.services.async_register(
-        "todo",
-        "get_items",
-        get_items,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register("todo", "add_item", add_item)
-    hass.services.async_register("todo", "update_item", update_item)
     hass.services.async_register(
         "notify",
         "mobile_app_alex",
@@ -124,7 +104,6 @@ async def test_real_runtime_service_persistence_panel_and_unload(
         get_events,
         supports_response=SupportsResponse.ONLY,
     )
-    hass.states.async_set("todo.household", "0")
 
     assert await async_setup_component(
         hass,
@@ -136,10 +115,7 @@ async def test_real_runtime_service_persistence_panel_and_unload(
             }
         },
     )
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={"todo_entity": "todo.household"},
-    )
+    entry = MockConfigEntry(domain=DOMAIN, data={}, version=2)
     entry.add_to_hass(hass)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -156,7 +132,7 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     await websocket.send_json({"id": 1, "type": f"{DOMAIN}/get"})
     message = await websocket.receive_json()
     assert message["success"]
-    assert message["result"]["todo_entity"] == "todo.household"
+    assert message["result"]["task_store"]["schema_version"] == 2
 
     await engine.async_save_person(
         "alex",
@@ -277,14 +253,15 @@ async def test_real_runtime_service_persistence_panel_and_unload(
         blocking=True,
     )
 
-    assert len(items) == 1
-    assert items[0]["summary"] == "[Alex] Laundry"
+    assert len(engine.state["occurrences"]) == 1
+    occurrence = next(iter(engine.state["occurrences"].values()))
+    assert occurrence["title"] == "[Alex] Laundry"
     assert len(engine.state["occurrences"]) == 1
     assert engine.state["ui_config"]["tasks"]["laundry"]["name"] == "Laundry"
     occurrence_id = next(iter(engine.state["occurrences"]))
     move = await engine.async_move_occurrence(occurrence_id, "morgen 9 Uhr")
     assert move["kind"] == "datetime"
-    assert datetime.fromisoformat(items[0]["due"]).hour == 9
+    assert datetime.fromisoformat(occurrence["due"]).hour == 9
     attachment = await engine.async_add_attachment(
         occurrence_id,
         "proof.png",
@@ -315,45 +292,7 @@ async def test_real_runtime_service_persistence_panel_and_unload(
 
 async def test_presence_handover_and_resource_monitor_runtime(hass):
     """Exercise assignment, handover, and resource lifecycle side effects."""
-    items = []
 
-    async def get_items(call):
-        return {
-            "todo.household": {
-                "items": [item for item in items if item["status"] == "needs_action"]
-            }
-        }
-
-    async def add_item(call):
-        items.append(
-            {
-                "uid": f"item-{len(items) + 1}",
-                "summary": call.data["item"],
-                "due": call.data["due_datetime"],
-                "status": "needs_action",
-            }
-        )
-
-    async def update_item(call):
-        item = next(item for item in items if item["uid"] == call.data["item"])
-        if "rename" in call.data:
-            item["summary"] = call.data["rename"]
-        if "status" in call.data:
-            item["status"] = call.data["status"]
-
-    async def notify(call):
-        return None
-
-    hass.services.async_register(
-        "todo",
-        "get_items",
-        get_items,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register("todo", "add_item", add_item)
-    hass.services.async_register("todo", "update_item", update_item)
-    hass.services.async_register("notify", "mobile_app_alex", notify)
-    hass.services.async_register("notify", "mobile_app_sam", notify)
     hass.states.async_set("person.alex", "not_home")
     hass.states.async_set("person.sam", "home")
     hass.states.async_set(
@@ -362,7 +301,7 @@ async def test_presence_handover_and_resource_monitor_runtime(hass):
         {"unit_of_measurement": "%"},
     )
 
-    config = initial_config("todo.household")
+    config = initial_config()
     config["people"] = {
         "alex": {
             "name": "Alex",
@@ -432,7 +371,8 @@ async def test_presence_handover_and_resource_monitor_runtime(hass):
     assert engine.state["occurrences"][fixed_id]["assignment_reason"]["type"] == (
         "handover"
     )
-    await engine._process_escalations(datetime.now(UTC) + timedelta(minutes=1))
+    with patch.object(engine, "_notify", new=AsyncMock(return_value=True)):
+        await engine._process_escalations(datetime.now(UTC) + timedelta(minutes=1))
     assert engine.state["occurrences"][fixed_id]["assignee"] is None
     assert engine.state["occurrences"][fixed_id]["assignment_reason"]["type"] == (
         "escalated_open"

@@ -176,13 +176,22 @@ def season_decision(
 
 
 def dependency_cycles(tasks: dict[str, dict[str, Any]]) -> list[list[str]]:
-    """Return cycles in the completion follow-up graph."""
+    """Return cycles in the follow-up and prerequisite graph."""
     graph = {
-        task_id: [
-            str(follow_up.get("task_id"))
-            for follow_up in task.get("follow_ups", [])
-            if isinstance(follow_up, dict) and follow_up.get("task_id") in tasks
-        ]
+        task_id: list(
+            dict.fromkeys(
+                [
+                    str(follow_up.get("task_id"))
+                    for follow_up in task.get("follow_ups", [])
+                    if isinstance(follow_up, dict) and follow_up.get("task_id") in tasks
+                ]
+                + [
+                    str(dependency)
+                    for dependency in task.get("depends_on", [])
+                    if dependency in tasks
+                ]
+            )
+        )
         for task_id, task in tasks.items()
     }
     cycles: list[list[str]] = []

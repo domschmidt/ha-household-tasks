@@ -24,7 +24,6 @@ TO_REDACT = {
     "tag_id",
     "target_person",
     "to",
-    "todo_entity",
     "user_id",
 }
 
@@ -56,7 +55,8 @@ async def async_get_config_entry_diagnostics(
         "integration": {
             "people_count": len(engine.people),
             "task_count": len(engine.tasks),
-            "todo_entity": "**REDACTED**",
+            "occurrence_count": len(engine.state.get("occurrences", {})),
+            "task_schema_version": engine.state.get("task_schema_version"),
         },
         "state": _redact(engine.state),
     }

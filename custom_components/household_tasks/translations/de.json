@@ -1,22 +1,14 @@
 {
   "config": {
     "abort": {
-      "single_instance_allowed": "Haushaltsaufgaben ist bereits eingerichtet."
+      "single_instance_allowed": "Haushaltsaufgaben ist bereits eingerichtet.",
+      "native_store_no_reconfigure": "Haushaltsaufgaben speichert Aufgaben intern; es gibt keine externe Aufgabenliste zu konfigurieren."
     },
     "step": {
       "user": {
         "title": "Haushaltsaufgaben einrichten",
-        "description": "Wähle die native Home-Assistant-To-do-Liste für alle Haushaltsaufgaben.",
-        "data": {
-          "todo_entity": "To-do-Liste"
-        }
-      },
-      "reconfigure": {
-        "title": "To-do-Liste ändern",
-        "description": "Wähle die native Home-Assistant-To-do-Liste, die Haushaltsaufgaben verwenden soll.",
-        "data": {
-          "todo_entity": "To-do-Liste"
-        }
+        "description": "Haushaltsaufgaben verwaltet komplexe Aufgaben in einem eigenen versionierten lokalen Speicher. Es wird keine externe To-do-Liste benötigt.",
+        "data": {}
       }
     }
   },
@@ -27,9 +19,6 @@
     "invalid_task": {
       "message": "Die Aufgabe {task_id} existiert nicht oder ist deaktiviert."
     },
-    "todo_unavailable": {
-      "message": "Die konfigurierte To-do-Entität {entity_id} ist nicht verfügbar."
-    },
     "admin_required": {
       "message": "Nur ein Home-Assistant-Administrator darf Haushaltsübergaben ändern."
     }
@@ -39,7 +28,10 @@
       "version": "Version",
       "configured_entries": "Konfigurierte Einträge",
       "people": "Personen",
-      "task_definitions": "Aufgabendefinitionen"
+      "task_definitions": "Aufgabendefinitionen",
+      "task_schema_version": "Aufgabenschema-Version",
+      "task_occurrences": "Aufgabenvorkommen",
+      "open_tasks": "Offene Aufgaben"
     }
   },
   "services": {
@@ -87,6 +79,25 @@
           "name": "Abgebende Person",
           "description": "Interne ID, deren Übergabe beendet werden soll."
         }
+      }
+    },
+    "set_status": {
+      "name": "Aufgabenstatus setzen",
+      "description": "Ändert den Lebenszyklusstatus einer nativen Aufgabe.",
+      "fields": {
+        "occurrence_id": { "name": "Aufgaben-ID", "description": "Stabile ID des Aufgabenvorkommens." },
+        "status": { "name": "Status", "description": "Neuer Lebenszyklusstatus." },
+        "expected_revision": { "name": "Erwartete Revision", "description": "Optionale Revision zum Schutz vor Überschreiben." }
+      }
+    },
+    "set_checklist_item": {
+      "name": "Checklistenpunkt setzen",
+      "description": "Hakt einen strukturierten Checklistenpunkt ab oder öffnet ihn wieder.",
+      "fields": {
+        "occurrence_id": { "name": "Aufgaben-ID", "description": "Stabile ID des Aufgabenvorkommens." },
+        "item_id": { "name": "Punkt-ID", "description": "Stabile ID des Checklistenpunkts." },
+        "completed": { "name": "Erledigt", "description": "Ob der Punkt erledigt ist." },
+        "expected_revision": { "name": "Erwartete Revision", "description": "Optionale Revision zum Schutz vor Überschreiben." }
       }
     }
   }
