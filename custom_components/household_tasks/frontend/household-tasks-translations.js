@@ -580,6 +580,19 @@ const EN = {
   "Nur für die Vorschau; wird nicht gespeichert.": "Used only for the preview and not saved.",
   "Testdatum (optional)": "Test date (optional)",
   "Saisonsperren zurücksetzen": "Reset seasonal locks",
+  "Anwesenheit bei der Zuweisung berücksichtigen": "Consider presence during assignment",
+  "Wenn die fest zuständige Person nicht zuhause ist": "When the assigned person is not home",
+  "Warten, bis die Person zurück ist": "Wait until the person returns",
+  "An eine Ersatzperson zuweisen": "Assign to a substitute",
+  "Für Ersatzpersonen zur Übernahme öffnen": "Open for substitutes to claim",
+  "Trotzdem fest zuweisen": "Assign anyway",
+  "Mögliche Ersatzpersonen": "Eligible substitutes",
+  "Nur ausdrücklich ausgewählte und aktuell anwesende Personen werden berücksichtigt.": "Only explicitly selected people who are currently home are considered.",
+  "Nur ausdrücklich ausgewählte und aktuell anwesende Personen werden berücksichtigt. Die fest zuständige Person wird automatisch aus der Ersatzliste entfernt.": "Only explicitly selected people who are currently home are considered. The fixed owner is removed from the substitute list automatically.",
+  "Keine weitere Person vorhanden.": "No other person is available.",
+  "Auswahl unter mehreren Ersatzpersonen": "Selection among multiple substitutes",
+  "Fair nach bisheriger und offener Last": "Fair by historical and open workload",
+  "Der Reihe nach rotieren": "Rotate in order",
 };
 
 export function householdTasksLocale(hass) {

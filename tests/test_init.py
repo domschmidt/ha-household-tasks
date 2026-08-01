@@ -321,8 +321,9 @@ async def test_presence_handover_and_resource_monitor_runtime(hass):
             "assignee": "alex",
             "assignment": {
                 "type": "fixed",
-                "people": ["alex", "sam"],
                 "presence_required": True,
+                "absence_policy": "fallback",
+                "fallback_people": ["sam"],
             },
             "schedule": {"type": "manual"},
         },
@@ -358,7 +359,7 @@ async def test_presence_handover_and_resource_monitor_runtime(hass):
     await engine.async_create_manual("presence_task")
     presence_occurrence = next(iter(engine.state["occurrences"].values()))
     assert presence_occurrence["assignee"] == "sam"
-    assert presence_occurrence["assignment_reason"]["type"] == "presence"
+    assert presence_occurrence["assignment_reason"]["type"] == "absence_fallback"
 
     await engine.async_create_manual("fixed_task")
     fixed_id, _ = next(
@@ -388,3 +389,90 @@ async def test_presence_handover_and_resource_monitor_runtime(hass):
     assert engine.state["occurrences"][resource_id]["resolution_reason"] == (
         "resource_recovered"
     )
+
+
+async def test_fixed_assignment_absence_policies_are_explicit(hass):
+    """A fixed owner is never silently replaced by an arbitrary person."""
+
+    hass.states.async_set("person.alex", "not_home")
+    hass.states.async_set("binary_sensor.sam_home", "on")
+    config = initial_config()
+    config["people"] = {
+        "alex": {
+            "name": "Alex",
+            "notify": "notify.mobile_app_alex",
+            "presence": "person.alex",
+        },
+        "sam": {
+            "name": "Sam",
+            "notify": "notify.mobile_app_sam",
+            "presence": "binary_sensor.sam_home",
+        },
+    }
+    base = {
+        "enabled": True,
+        "assignee": "alex",
+        "schedule": {"type": "manual"},
+    }
+    config["tasks"] = {
+        "wait": {
+            **base,
+            "name": "Wait for Alex",
+            "assignment": {"type": "fixed", "presence_required": True},
+        },
+        "fallback": {
+            **base,
+            "name": "Use Sam",
+            "assignment": {
+                "type": "fixed",
+                "presence_required": True,
+                "absence_policy": "fallback",
+                "fallback_people": ["sam"],
+            },
+        },
+        "open": {
+            **base,
+            "name": "Let Sam claim",
+            "assignment": {
+                "type": "fixed",
+                "presence_required": True,
+                "absence_policy": "open",
+                "fallback_people": ["sam"],
+            },
+        },
+        "assigned": {
+            **base,
+            "name": "Keep Alex",
+            "assignment": {
+                "type": "fixed",
+                "presence_required": True,
+                "absence_policy": "assign_anyway",
+            },
+        },
+    }
+    engine = HouseholdTaskEngine(hass, config)
+    engine._validate_config()
+
+    for task_id in config["tasks"]:
+        await engine.async_create_manual(task_id)
+    occurrence_ids = {
+        occurrence["task_id"]: occurrence_id
+        for occurrence_id, occurrence in engine.state["occurrences"].items()
+    }
+    waiting = engine.state["occurrences"][occurrence_ids["wait"]]
+    assert waiting["assignee"] is None
+    assert waiting["status"] == "waiting"
+    assert waiting["assignment_reason"]["absence_policy"] == "wait"
+
+    fallback = engine.state["occurrences"][occurrence_ids["fallback"]]
+    assert fallback["assignee"] == "sam"
+    assert fallback["assignment_reason"]["type"] == "absence_fallback"
+
+    opened = engine.state["occurrences"][occurrence_ids["open"]]
+    assert opened["assignee"] is None
+    assert opened["status"] == "open"
+    assert opened["task"]["assignment"] == {"type": "open", "people": ["sam"]}
+
+    assigned = engine.state["occurrences"][occurrence_ids["assigned"]]
+    assert assigned["assignee"] == "alex"
+    assert assigned["assignment_reason"]["type"] == "absence_assigned"

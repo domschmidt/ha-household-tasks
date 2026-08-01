@@ -34,6 +34,20 @@
       "open_tasks": "Open tasks"
     }
   },
+  "entity": {
+    "sensor": {
+      "open_tasks": { "name": "Open tasks" },
+      "tasks_due_today": { "name": "Tasks due today" },
+      "overdue_tasks": { "name": "Overdue tasks" },
+      "blocked_tasks": { "name": "Blocked tasks" },
+      "person_next_task": { "name": "{person_name} next task" },
+      "person_open_tasks": { "name": "{person_name} open tasks" },
+      "person_tasks_due_today": { "name": "{person_name} tasks due today" },
+      "person_overdue_tasks": { "name": "{person_name} overdue tasks" },
+      "person_blocked_tasks": { "name": "{person_name} blocked tasks" },
+      "person_task_slot": { "name": "{person_name} task {position}" }
+    }
+  },
   "services": {
     "create": {
       "name": "Create task",
