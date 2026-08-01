@@ -158,6 +158,11 @@ State schedules support `for`, due offsets, cooldowns, and duplicate
 suppression. Completion schedules include an initial due date to bootstrap the
 series.
 
+Calendar schedules can map case-insensitive regular expressions over event
+titles to concrete task names. Mapping rows are evaluated in order, and
+unmapped events can be ignored so a shared municipal calendar creates household
+work only for relevant collections.
+
 ### Forecast planning and once-per-season rules
 
 Forecast schedules call Home Assistant's local `weather.get_forecasts` action.
