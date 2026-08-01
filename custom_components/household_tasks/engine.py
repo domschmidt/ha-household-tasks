@@ -645,6 +645,8 @@ class HouseholdTaskEngine:
                     self._parse_duration(schedule.get("offset", "00:00:00"))
                 except (TypeError, ValueError, vol.Invalid):
                     errors.append(f"task '{task_id}' has an invalid offset")
+                if schedule.get("use_event_title") not in {None, True, False}:
+                    errors.append(f"task '{task_id}' use_event_title must be a boolean")
             if schedule_type == "interval_months":
                 if not schedule.get("start"):
                     errors.append(f"task '{task_id}' needs start")
@@ -4910,7 +4912,8 @@ class HouseholdTaskEngine:
 
         assignee, assignment_reason = self._select_assignee_with_reason(task_id, task)
         assignee_name = self.people.get(assignee, {}).get("name", "Offen")
-        title = f"[{assignee_name}] {task['name']}"
+        occurrence_name = self._occurrence_name(task, event_summary)
+        title = f"[{assignee_name}] {occurrence_name}"
         description = self._occurrence_description(task, event_summary)
         dependencies = self._dependency_occurrence_ids(task)
         occurrence = self._occurrence_record(
@@ -5058,6 +5061,15 @@ class HouseholdTaskEngine:
         delegated["assignee"] = delegate_to
         delegated["assignment"] = {"type": "fixed", "people": [delegate_to]}
         return delegated, repetition
+
+    @staticmethod
+    def _occurrence_name(task: dict[str, Any], event_summary: str | None) -> str:
+        """Return a bounded task name, optionally sourced from a calendar event."""
+        use_event_title = task.get("schedule", {}).get("use_event_title", False)
+        normalized_summary = " ".join(str(event_summary or "").split())
+        if use_event_title and normalized_summary:
+            return normalized_summary[:255]
+        return str(task["name"])
 
     @staticmethod
     def _occurrence_description(
