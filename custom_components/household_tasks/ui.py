@@ -48,6 +48,19 @@ def websocket_get(
     connection.send_result(msg["id"], result)
 
 
+@websocket_api.async_response
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/week_preview"})
+async def websocket_week_preview(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return live calendar-backed and deterministic weekly projections."""
+    engine = _engine(hass)
+    _require_household_access(connection, engine)
+    connection.send_result(msg["id"], await engine.async_week_preview())
+
+
 @websocket_api.require_admin
 @websocket_api.async_response
 @websocket_api.websocket_command(
@@ -949,6 +962,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     """Register panel WebSocket commands."""
     for command in (
         websocket_get,
+        websocket_week_preview,
         websocket_save_task,
         websocket_delete_task,
         websocket_save_person,

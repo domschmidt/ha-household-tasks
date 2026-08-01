@@ -1451,14 +1451,7 @@ class HouseholdTaskEngine:
         days: int = 7,
     ) -> list[dict[str, Any]]:
         """Project deterministic schedules without creating task occurrences."""
-        reference = dt_util.as_local(now or dt_util.utcnow())
-        zone = ZoneInfo(self.hass.config.time_zone)
-        start = datetime.combine(reference.date(), time.min, zone)
-        end = datetime.combine(
-            reference.date() + timedelta(days=max(1, days) - 1),
-            time.max,
-            zone,
-        )
+        start, end = self._week_preview_range(now, days)
         existing = set(self.state["occurrences"])
         projected_seasonal_keys: set[str] = set()
         preview: list[dict[str, Any]] = []
@@ -1509,16 +1502,6 @@ class HouseholdTaskEngine:
                         target_person,
                         due,
                     )
-                    conditional = bool(
-                        assignment_pending
-                        or task.get("weather", {}).get("conditions")
-                        or task.get("season")
-                        or (
-                            task.get("assignment", {}).get("type") == "per_person"
-                            and schedule.get("skip_if_open", True)
-                        )
-                        or self._current_household_mode().get("mode") != "normal"
-                    )
                     preview.append(
                         {
                             "id": f"preview-{occurrence_id}",
@@ -1528,12 +1511,181 @@ class HouseholdTaskEngine:
                             "due": due.isoformat(),
                             "schedule_type": schedule["type"],
                             "read_only": True,
-                            "conditional": conditional,
+                            "conditional": self._week_preview_conditional(
+                                task, assignment_pending
+                            ),
                             "assignment_pending": assignment_pending,
                         }
                     )
 
         return sorted(preview, key=lambda item: (item["due"], item["task_id"]))
+
+    async def async_week_preview(
+        self,
+        now: datetime | None = None,
+        *,
+        days: int = 7,
+    ) -> list[dict[str, Any]]:
+        """Project deterministic and calendar-backed work for the panel."""
+        preview = self.week_preview(now, days=days)
+        start, end = self._week_preview_range(now, days)
+        existing = set(self.state["occurrences"])
+        projected_ids = {str(item["id"]).removeprefix("preview-") for item in preview}
+        projected_seasonal_keys: set[str] = set()
+        projection_state = {
+            "existing": existing,
+            "projected_ids": projected_ids,
+            "seasonal_keys": projected_seasonal_keys,
+        }
+
+        for task_id, task in self.tasks.items():
+            schedule = task.get("schedule", {})
+            if not task.get("enabled", True) or schedule.get("type") != "calendar":
+                continue
+            preview.extend(
+                await self._calendar_task_week_preview(
+                    task_id,
+                    task,
+                    start,
+                    end,
+                    projection_state,
+                )
+            )
+
+        return sorted(preview, key=lambda item: (item["due"], item["task_id"]))
+
+    async def _calendar_task_week_preview(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        start: datetime,
+        end: datetime,
+        projection_state: dict[str, set[str]],
+    ) -> list[dict[str, Any]]:
+        """Project one calendar rule without changing persisted runtime state."""
+        try:
+            events, _ignored = await self._preview_calendar_events(
+                task,
+                start,
+                end=end,
+                limit=100,
+            )
+        except Exception as err:  # Calendar providers expose varied errors.
+            _LOGGER.warning(
+                "Could not preview calendar task %s in weekly plan: %s",
+                task_id,
+                err,
+            )
+            return []
+        targets: list[str | None] = [None]
+        if task.get("assignment", {}).get("type") == "per_person":
+            targets = self._fanout_targets(task)
+        result = []
+        for event in events:
+            due = dt_util.parse_datetime(event["due"])
+            if due is None:
+                continue
+            for target_person in targets:
+                item = self._calendar_week_preview_item(
+                    task_id,
+                    task,
+                    event,
+                    due,
+                    target_person,
+                    projection_state,
+                )
+                if item is not None:
+                    result.append(item)
+        return result
+
+    def _calendar_week_preview_item(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        event: dict[str, str],
+        due: datetime,
+        target_person: str | None,
+        projection_state: dict[str, set[str]],
+    ) -> dict[str, Any] | None:
+        """Return one calendar projection when creation policies allow it."""
+        occurrence_id = self._occurrence_id(
+            task_id,
+            due,
+            manual=False,
+            target_person=target_person,
+        )
+        if (
+            occurrence_id in projection_state["existing"]
+            or occurrence_id in projection_state["projected_ids"]
+        ):
+            return None
+        repetition = self._seasonal_execution_decision(
+            task_id,
+            task,
+            due,
+            target_person,
+        )
+        seasonal_key = repetition.get("ledger_key")
+        if (
+            not repetition["allowed"]
+            or seasonal_key in projection_state["seasonal_keys"]
+        ):
+            return None
+        if seasonal_key:
+            projection_state["seasonal_keys"].add(seasonal_key)
+        assignee, assignment_pending = self._preview_assignee(
+            task,
+            target_person,
+            due,
+        )
+        projection_state["projected_ids"].add(occurrence_id)
+        return {
+            "id": f"preview-{occurrence_id}",
+            "task_id": task_id,
+            "title": event["task_name"],
+            "assignee": assignee,
+            "due": due.isoformat(),
+            "schedule_type": "calendar",
+            "read_only": True,
+            "conditional": self._week_preview_conditional(task, assignment_pending),
+            "assignment_pending": assignment_pending,
+            "calendar_summary": event["summary"],
+        }
+
+    def _week_preview_conditional(
+        self,
+        task: dict[str, Any],
+        assignment_pending: bool,
+    ) -> bool:
+        """Return whether final creation may still change a projection."""
+        schedule = task.get("schedule", {})
+        return bool(
+            assignment_pending
+            or task.get("weather", {}).get("conditions")
+            or task.get("season")
+            or (
+                task.get("assignment", {}).get("type") == "per_person"
+                and schedule.get("skip_if_open", True)
+            )
+            or self._current_household_mode().get("mode") != "normal"
+        )
+
+    def _week_preview_range(
+        self,
+        now: datetime | None,
+        days: int,
+    ) -> tuple[datetime, datetime]:
+        """Return the inclusive local date window used by the weekly plan."""
+        reference = dt_util.as_local(now or dt_util.utcnow())
+        zone = ZoneInfo(self.hass.config.time_zone)
+        return (
+            datetime.combine(reference.date(), time.min, zone),
+            datetime.combine(
+                reference.date() + timedelta(days=max(1, days) - 1),
+                time.max,
+                zone,
+            ),
+        )
 
     def _preview_assignee(
         self,
@@ -2614,12 +2766,18 @@ class HouseholdTaskEngine:
         return result
 
     async def _preview_calendar_events(
-        self, task: dict[str, Any], now: datetime
+        self,
+        task: dict[str, Any],
+        now: datetime,
+        *,
+        end: datetime | None = None,
+        limit: int = 10,
     ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
         """Return matching calendar events for the preview window."""
         schedule = task.get("schedule", {})
         offset = self._parse_duration(schedule.get("offset", "00:00:00"))
-        query_end = now + timedelta(days=90) - offset
+        preview_end = end or now + timedelta(days=90)
+        query_end = preview_end - offset
         entity_id = str(schedule.get("entity_id", ""))
         response = await self.hass.services.async_call(
             "calendar",
@@ -2643,7 +2801,7 @@ class HouseholdTaskEngine:
             if event_start is None:
                 continue
             due = event_start + offset
-            if due < now:
+            if due < now or due > preview_end:
                 continue
             included, mapped_title = self._calendar_title_decision(schedule, summary)
             if not included:
@@ -2665,7 +2823,7 @@ class HouseholdTaskEngine:
             )
         matches.sort(key=lambda item: item["due"])
         ignored.sort(key=lambda item: item["start"])
-        return matches[:10], ignored[:10]
+        return matches[:limit], ignored[:limit]
 
     async def async_test_notification(self, person_id: str) -> None:
         """Send an explicit, harmless test notification to one person."""

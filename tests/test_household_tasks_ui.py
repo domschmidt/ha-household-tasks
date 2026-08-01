@@ -21,6 +21,9 @@ class _Connection:
 def _fake_engine() -> MagicMock:
     engine = MagicMock()
     engine.ui_data.side_effect = lambda: {"revision": len(engine.ui_data.mock_calls)}
+    engine.async_week_preview = AsyncMock(
+        return_value=[{"task_id": "waste", "read_only": True}]
+    )
     engine._person_for_context.return_value = "alex"
     engine.preview_smart_task.return_value = {"name": "Laundry"}
     engine.preview_task_batch.return_value = [{"name": "Laundry"}]
@@ -281,3 +284,15 @@ async def test_websocket_adapters_forward_advanced_panel_actions(hass):
         until="2026-08-31T10:00:00+00:00",
         note="Holiday",
     )
+
+
+async def test_websocket_week_preview_returns_live_projection(hass):
+    """The panel adapter awaits calendar-backed weekly projections."""
+    engine = _fake_engine()
+    connection = _Connection()
+
+    with patch.object(ui, "_engine", return_value=engine):
+        await _call(ui.websocket_week_preview, hass, connection, {"id": 1})
+
+    assert connection.results == [(1, [{"task_id": "waste", "read_only": True}])]
+    engine.async_week_preview.assert_awaited_once_with()

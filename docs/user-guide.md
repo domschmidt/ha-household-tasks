@@ -500,8 +500,11 @@ In **Meine Aufgaben** und im **Wochenplan** lassen sich mehrere Vorkommen
 auswählen und gemeinsam erledigen, auf morgen verschieben oder als Hilferuf
 verteilen. Der Wochenplan gruppiert die nächsten sieben Tage und zeigt dadurch
 Überlastungen frühzeitig. Noch nicht erzeugte Aufgaben aus wöchentlichen,
-monatlichen, jährlichen und mehrmonatigen Zeitplänen erscheinen dort als
-gestrichelte **Vorschau**. Diese Einträge sind bewusst schreibgeschützt:
+monatlichen, jährlichen, mehrmonatigen und kalendergestützten Zeitplänen
+erscheinen dort als gestrichelte **Vorschau**. Kalendertermine berücksichtigen
+dabei bereits den zeitlichen Versatz, das Suchmuster und die geordnete
+Regex-Titelzuordnung; nicht zugeordnete Termine bleiben wie konfiguriert
+ausgeblendet. Diese Einträge sind bewusst schreibgeschützt:
 Zuweisung, Bedingungen und offene Vorgänger werden erst bei der tatsächlichen
 Erzeugung abschließend ausgewertet. Bereits erzeugte Aufgaben ersetzen ihre
 Vorschau automatisch und können weiterhin ausgewählt oder verschoben werden.
