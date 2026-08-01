@@ -26,13 +26,15 @@ issue before implementation. Security reports must follow
 
 ## Development setup
 
-Requirements are Python 3.12+ and Git.
+Requirements are Python 3.12+, Node.js 24, and Git.
 
 ```bash
 git clone https://github.com/domschmidt/ha-household-tasks.git
 cd ha-household-tasks
 python -m pip install -e ".[dev]"
 pre-commit install
+npm ci
+npx playwright install chromium webkit
 ```
 
 Run the quality checks before every pull request:
@@ -46,6 +48,25 @@ For an isolated, cached Docker environment on Windows:
 ```powershell
 .\scripts\docker-check.ps1
 ```
+
+Frontend changes must also pass the browser regression suite:
+
+```bash
+npm run test:ui
+```
+
+The suite loads the real panel in a deterministic Home Assistant harness and
+checks desktop Chromium plus an iPhone-sized WebKit project. It covers
+interaction flows, browser console errors, keyboard behavior, serious WCAG
+violations, responsive overflow, and committed visual baselines. Update a
+baseline only after reviewing the rendered difference:
+
+```bash
+npm run test:ui:update
+```
+
+CI uploads the HTML report, failure screenshots, and Playwright traces when a
+browser check fails. Open a trace with `npx playwright show-trace <trace.zip>`.
 
 For an end-to-end check, copy or symlink the integration into a dedicated Home
 Assistant development instance. Do not commit Home Assistant storage,

@@ -1,0 +1,14 @@
+{
+  "name": "ha-household-tasks-ui-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:ui": "playwright test",
+    "test:ui:update": "playwright test --update-snapshots",
+    "test:ui:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.62.1"
+  }
+}
