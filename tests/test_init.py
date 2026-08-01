@@ -476,3 +476,54 @@ async def test_fixed_assignment_absence_policies_are_explicit(hass):
     assigned = engine.state["occurrences"][occurrence_ids["assigned"]]
     assert assigned["assignee"] == "alex"
     assert assigned["assignment_reason"]["type"] == "absence_assigned"
+
+
+async def test_calendar_event_title_can_become_occurrence_name(hass):
+    """One calendar rule can expose the concrete collection type as its title."""
+
+    config = initial_config()
+    config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
+    base = {
+        "enabled": True,
+        "name": "Mülltonne rausstellen",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+    }
+    config["tasks"] = {
+        "dynamic_waste": {
+            **base,
+            "schedule": {
+                "type": "calendar",
+                "entity_id": "calendar.waste",
+                "offset": "-12:00:00",
+                "use_event_title": True,
+            },
+        },
+        "static_waste": {
+            **base,
+            "schedule": {
+                "type": "calendar",
+                "entity_id": "calendar.waste",
+                "offset": "-12:00:00",
+            },
+        },
+    }
+    engine = HouseholdTaskEngine(hass, config)
+    engine._validate_config()
+    due = datetime.now(UTC) + timedelta(hours=1)
+
+    dynamic_id = await engine._create_occurrence(
+        "dynamic_waste", config["tasks"]["dynamic_waste"], due, event_summary="Gelb"
+    )
+    static_id = await engine._create_occurrence(
+        "static_waste", config["tasks"]["static_waste"], due, event_summary="Bio"
+    )
+
+    dynamic = engine.state["occurrences"][dynamic_id]
+    static = engine.state["occurrences"][static_id]
+    assert dynamic["title"] == "[Alex] Gelb"
+    assert dynamic["description"] == "Kalender: Gelb"
+    assert static["title"] == "[Alex] Mülltonne rausstellen"
+    assert engine._occurrence_name(config["tasks"]["dynamic_waste"], " \n") == (
+        "Mülltonne rausstellen"
+    )

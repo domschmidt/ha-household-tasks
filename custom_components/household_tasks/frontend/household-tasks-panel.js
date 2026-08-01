@@ -602,6 +602,7 @@ class HouseholdTasksPanel extends HTMLElement {
         season_condition: "Optionaler Vergleich zwischen aktuellem Entitätszustand und Grenzwert.",
         season_entity_id: "Home-Assistant-Entität, deren Zustand die saisonale Bedingung liefert.",
         season_threshold: "Zahl oder Text, mit dem der aktuelle Zustand verglichen wird.",
+        use_event_title: "Verwendet den Namen des passenden Kalendertermins als sichtbaren Aufgabennamen. Der Vorlagenname bleibt der Rückfallwert.",
         type: "Regel, nach der neue Vorkommen dieser Aufgabe erzeugt werden.",
         weekday: "Wochentage, an denen die Aufgabe fällig wird.",
         day: "Kalendertag des Monats; „last“ steht für den letzten Tag.",
@@ -3488,7 +3489,8 @@ class HouseholdTasksPanel extends HTMLElement {
       <p class="hint"><strong>1. Kalender wählen</strong> · <strong>2. Termine filtern</strong> · <strong>3. Fälligkeit relativ zum Termin festlegen</strong> · anschließend unten die Regel testen.</p>
       <div class="form-grid"><label>1 · Kalender-Entität${entity}</label>
       <label>2 · Suchmuster<input name="match" value="${this._e(s.match || "")}" placeholder="Restmüll"><span class="hint">Leer berücksichtigt alle Termine. Groß-/Kleinschreibung spielt keine Rolle.</span></label>
-      <label>3 · Versatz HH:MM:SS<input name="offset" value="${this._e(s.offset || "-12:00:00")}"><span class="hint">Negativ bedeutet vor dem Termin, z. B. −12 Stunden.</span></label></div></div>`;
+      <label>3 · Versatz HH:MM:SS<input name="offset" value="${this._e(s.offset || "-12:00:00")}"><span class="hint">Negativ bedeutet vor dem Termin, z. B. −12 Stunden.</span></label>
+      <label class="checkbox full"><input name="use_event_title" type="checkbox" ${s.use_event_title ? "checked" : ""}> Kalendertitel für Aufgabenname verwenden<span class="hint">Beispiel: Aus dem Termin „Gelb“ wird die Aufgabe „Gelb“. Der Vorlagenname wird verwendet, wenn der Termin keinen Namen hat.</span></label></div></div>`;
   }
 
   _completionStart(s) {
@@ -3594,6 +3596,7 @@ class HouseholdTasksPanel extends HTMLElement {
       }
       schedule.match = f.get("match");
       schedule.offset = f.get("offset") || "00:00:00";
+      if (f.get("use_event_title") === "on") schedule.use_event_title = true;
     }
     if (type === "after_completion") {
       schedule.start = new Date(f.get("start")).toISOString();

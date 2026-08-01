@@ -232,7 +232,10 @@ Administratoren können Konfigurationen prüfen, bevor sie produktiv wirken:
 - Aufgabenregeln zeigen die nächste berechnete Fälligkeit, passende
   Kalendertermine oder aktuelle Zustände der Auslöser.
 - Kalenderregeln führen in drei Schritten durch Kalender, Suchmuster und
-  zeitlichen Versatz.
+  zeitlichen Versatz. Mit **Kalendertitel für Aufgabenname verwenden** kann
+  eine einzige Regel unterschiedliche Termine wie „Gelb“, „Bio“, „Schwarz“
+  und „Blau“ als jeweilige Aufgabennamen übernehmen. Der Vorlagenname bleibt
+  der Rückfallwert für Termine ohne Namen.
 - Ressourcenregeln vergleichen den aktuellen Sensorwert mit dem Grenzwert,
   ohne eine Aufgabe zu erzeugen.
 - Personen zeigen den aktuellen Anwesenheitszustand und können eine ausdrücklich

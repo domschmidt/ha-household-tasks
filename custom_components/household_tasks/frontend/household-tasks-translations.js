@@ -240,6 +240,8 @@ const EN = {
   "Folgeaufgabe entfernen": "Remove follow-up task",
   "Kalender suchen": "Search calendars",
   "Wähle eine vorhandene Kalender-Entität aus Home Assistant.": "Select an existing calendar entity from Home Assistant.",
+  "Kalendertitel für Aufgabenname verwenden": "Use calendar title as task name",
+  "Beispiel: Aus dem Termin „Gelb“ wird die Aufgabe „Gelb“. Der Vorlagenname wird verwendet, wenn der Termin keinen Namen hat.": "Example: An event named “Yellow” creates a task named “Yellow”. The template name is used when the event has no name.",
   "Auslöser": "Triggers",
   "+ Auslöser": "+ Trigger",
   "Noch kein Auslöser ausgewählt.": "No trigger selected yet.",
