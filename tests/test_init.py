@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
@@ -179,16 +180,22 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     assert state_preview["state_triggers"][0]["matches"]
     calendar_preview = await engine.async_preview_task(
         {
+            "name": "Mülltonne rausstellen",
             "schedule": {
                 "type": "calendar",
                 "entity_id": "calendar.waste",
-                "match": "rest",
                 "offset": "-12:00:00",
-            }
+                "title_mappings": [
+                    {"pattern": "restmüll", "task_title": "Schwarze Tonne"}
+                ],
+                "ignore_unmapped_events": True,
+            },
         }
     )
     assert len(calendar_preview["calendar_events"]) == 1
     assert calendar_preview["calendar_events"][0]["summary"] == "Restmüll"
+    assert calendar_preview["calendar_events"][0]["task_name"] == "Schwarze Tonne"
+    assert calendar_preview["calendar_ignored_events"][0]["summary"] == "Papier"
     assert calendar_preview["next_due"] is not None
     await engine.async_test_notification("alex")
     assert notifications[-1]["data"]["tag"] == "household_tasks_test"
@@ -497,6 +504,13 @@ async def test_calendar_event_title_can_become_occurrence_name(hass):
                 "entity_id": "calendar.waste",
                 "offset": "-12:00:00",
                 "use_event_title": True,
+                "title_mappings": [
+                    {
+                        "pattern": "gelb(er sack)?",
+                        "task_title": "Gelbe Tonne rausstellen",
+                    }
+                ],
+                "ignore_unmapped_events": True,
             },
         },
         "static_waste": {
@@ -513,7 +527,10 @@ async def test_calendar_event_title_can_become_occurrence_name(hass):
     due = datetime.now(UTC) + timedelta(hours=1)
 
     dynamic_id = await engine._create_occurrence(
-        "dynamic_waste", config["tasks"]["dynamic_waste"], due, event_summary="Gelb"
+        "dynamic_waste",
+        config["tasks"]["dynamic_waste"],
+        due,
+        event_summary="Gelber Sack",
     )
     static_id = await engine._create_occurrence(
         "static_waste", config["tasks"]["static_waste"], due, event_summary="Bio"
@@ -521,9 +538,16 @@ async def test_calendar_event_title_can_become_occurrence_name(hass):
 
     dynamic = engine.state["occurrences"][dynamic_id]
     static = engine.state["occurrences"][static_id]
-    assert dynamic["title"] == "[Alex] Gelb"
-    assert dynamic["description"] == "Kalender: Gelb"
+    assert dynamic["title"] == "[Alex] Gelbe Tonne rausstellen"
+    assert dynamic["description"] == "Kalender: Gelber Sack"
     assert static["title"] == "[Alex] Mülltonne rausstellen"
     assert engine._occurrence_name(config["tasks"]["dynamic_waste"], " \n") == (
         "Mülltonne rausstellen"
     )
+    assert engine._calendar_title_decision(
+        config["tasks"]["dynamic_waste"]["schedule"], "Problemabfall"
+    ) == (False, None)
+
+    config["tasks"]["dynamic_waste"]["schedule"]["title_mappings"][0]["pattern"] = "["
+    with pytest.raises(vol.Invalid, match="invalid regex"):
+        HouseholdTaskEngine(hass, config)._validate_config()

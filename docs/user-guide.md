@@ -235,7 +235,19 @@ Administratoren können Konfigurationen prüfen, bevor sie produktiv wirken:
   zeitlichen Versatz. Mit **Kalendertitel für Aufgabenname verwenden** kann
   eine einzige Regel unterschiedliche Termine wie „Gelb“, „Bio“, „Schwarz“
   und „Blau“ als jeweilige Aufgabennamen übernehmen. Der Vorlagenname bleibt
-  der Rückfallwert für Termine ohne Namen.
+  der Rückfallwert für Termine ohne Namen. Optionale Titelzuordnungen bilden
+  reguläre Ausdrücke auf verständliche Aufgabennamen ab; die erste passende
+  Zeile gewinnt. Mit **Nicht zugeordnete Termine ignorieren** werden irrelevante
+  Einträge wie „Problemabfall“ sicher verworfen.
+
+Beispiel für einen gemischten Abfallkalender:
+
+| Titel-Muster (Regex) | Aufgabenname |
+| --- | --- |
+| `gelb\|gelber sack` | Gelbe Tonne rausstellen |
+| `bio` | Biotonne rausstellen |
+| `schwarz\|restmüll` | Schwarze Tonne rausstellen |
+| `blau\|papier` | Blaue Tonne rausstellen |
 - Ressourcenregeln vergleichen den aktuellen Sensorwert mit dem Grenzwert,
   ohne eine Aufgabe zu erzeugen.
 - Personen zeigen den aktuellen Anwesenheitszustand und können eine ausdrücklich

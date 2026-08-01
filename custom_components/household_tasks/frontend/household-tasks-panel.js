@@ -603,6 +603,9 @@ class HouseholdTasksPanel extends HTMLElement {
         season_entity_id: "Home-Assistant-Entität, deren Zustand die saisonale Bedingung liefert.",
         season_threshold: "Zahl oder Text, mit dem der aktuelle Zustand verglichen wird.",
         use_event_title: "Verwendet den Namen des passenden Kalendertermins als sichtbaren Aufgabennamen. Der Vorlagenname bleibt der Rückfallwert.",
+        calendar_mapping_pattern: "Regulärer Ausdruck für den Kalendertitel. Groß- und Kleinschreibung wird ignoriert; die erste passende Zeile gewinnt.",
+        calendar_mapping_task: "Verständlicher Aufgabenname, der für diesen Kalendertitel erzeugt wird.",
+        ignore_unmapped_events: "Verhindert Aufgaben für Kalendertermine, die in keiner Zuordnungszeile stehen.",
         type: "Regel, nach der neue Vorkommen dieser Aufgabe erzeugt werden.",
         weekday: "Wochentage, an denen die Aufgabe fällig wird.",
         day: "Kalendertag des Monats; „last“ steht für den letzten Tag.",
@@ -2839,6 +2842,7 @@ class HouseholdTasksPanel extends HTMLElement {
       this._localize(fields);
       this._bindTriggerEditor(modal);
       this._bindWeatherEditor(modal);
+      this._bindCalendarMappingEditor(modal);
       this._enhanceAccessibility(fields);
     };
     const updateAssignmentFields = () => {
@@ -2946,7 +2950,7 @@ class HouseholdTasksPanel extends HTMLElement {
     const optionalParts = [
       projection.risk === "high" ? "Warnung: Diese Regel könnte ungewöhnlich viele Aufgaben erzeugen." : null,
       preview.next_due ? `Nächste Fälligkeit: ${new Date(preview.next_due).toLocaleString(this._locale())}` : null,
-      preview.calendar_events?.length ? `${preview.calendar_events.length} passende Kalendertermine in den nächsten 90 Tagen` : null,
+      this._calendarEventPreview(preview.calendar_events, preview.calendar_ignored_events),
       this._stateTriggerPreview(preview.state_triggers),
       preview.mode?.message,
       preview.season?.message,
@@ -2974,6 +2978,20 @@ class HouseholdTasksPanel extends HTMLElement {
       const match = item.matches ? " ✓" : "";
       return `${item.entity_id}: aktuell „${item.current ?? "nicht verfügbar"}“, erwartet „${item.wanted}“${match}`;
     }).join(" · ");
+  }
+
+  _calendarEventPreview(events, ignored) {
+    if (!events?.length && !ignored?.length) return null;
+    const included = (events || []).slice(0, 4)
+      .map((item) => `${item.summary} → ${item.task_name}`)
+      .join(" · ");
+    const ignoredTitles = (ignored || []).slice(0, 4)
+      .map((item) => item.summary)
+      .join(", ");
+    const parts = [];
+    if (included) parts.push(`Übernommen: ${included}`);
+    if (ignoredTitles) parts.push(`Ignoriert, weil nicht zugeordnet: ${ignoredTitles}`);
+    return parts.join(" · ");
   }
 
   _weatherPreview(weather) {
@@ -3162,6 +3180,21 @@ class HouseholdTasksPanel extends HTMLElement {
     </div>`).join("");
   }
 
+  _calendarMappingRows(mappings = []) {
+    if (!mappings.length) return `<p class="empty-row">Noch keine Titelzuordnung angelegt.</p>`;
+    return mappings.map((mapping) => `<div class="repeatable-row calendar-mapping-row">
+      <label>Titel-Muster (Regex)<input name="calendar_mapping_pattern" required value="${this._e(mapping.pattern || "")}" placeholder="gelb|gelber sack"></label>
+      <label>Aufgabenname<input name="calendar_mapping_task" required value="${this._e(mapping.task_title || "")}" placeholder="Gelbe Tonne rausstellen"></label>
+      <button type="button" class="remove-row" title="Titelzuordnung entfernen" aria-label="Titelzuordnung entfernen">×</button>
+    </div>`).join("");
+  }
+
+  _createCalendarMappingRow(mapping = {}) {
+    const template = document.createElement("template");
+    template.innerHTML = this._calendarMappingRows([mapping]);
+    return template.content.querySelector(".calendar-mapping-row");
+  }
+
   _createFollowUpRow(followUp = {}, currentTaskId = null) {
     const row = document.createElement("div");
     row.className = "repeatable-row follow-up-row";
@@ -3296,6 +3329,32 @@ class HouseholdTasksPanel extends HTMLElement {
     bindRemovers();
   }
 
+  _bindCalendarMappingEditor(modal) {
+    const editor = modal.querySelector(".calendar-mapping-editor");
+    if (!editor) return;
+    const list = editor.querySelector(".repeatable-list");
+    const bindRemovers = () => {
+      editor.querySelectorAll(".remove-row").forEach((button) => {
+        button.onclick = () => {
+          button.closest(".calendar-mapping-row").remove();
+          if (!editor.querySelector(".calendar-mapping-row")) {
+            list.replaceChildren(this._emptyRepeatableRow("Noch keine Titelzuordnung angelegt."));
+          }
+        };
+      });
+    };
+    editor.querySelector("[data-add-calendar-mapping]").onclick = () => {
+      this._removeRepeatableEmptyState(list);
+      const row = this._createCalendarMappingRow();
+      list.append(row);
+      this._localize(row);
+      this._enhanceAccessibility(row);
+      bindRemovers();
+      row.querySelector("[name=calendar_mapping_pattern]")?.focus();
+    };
+    bindRemovers();
+  }
+
   _bindRepeatableEditors(modal, currentTaskId) {
     const editor = modal.querySelector(".follow-up-editor");
     const bindRemovers = () => {
@@ -3323,6 +3382,7 @@ class HouseholdTasksPanel extends HTMLElement {
     bindRemovers();
     this._bindTriggerEditor(modal);
     this._bindWeatherEditor(modal);
+    this._bindCalendarMappingEditor(modal);
   }
 
   _bindInlineTaskCreates(modal, currentTaskId) {
@@ -3490,7 +3550,14 @@ class HouseholdTasksPanel extends HTMLElement {
       <div class="form-grid"><label>1 · Kalender-Entität${entity}</label>
       <label>2 · Suchmuster<input name="match" value="${this._e(s.match || "")}" placeholder="Restmüll"><span class="hint">Leer berücksichtigt alle Termine. Groß-/Kleinschreibung spielt keine Rolle.</span></label>
       <label>3 · Versatz HH:MM:SS<input name="offset" value="${this._e(s.offset || "-12:00:00")}"><span class="hint">Negativ bedeutet vor dem Termin, z. B. −12 Stunden.</span></label>
-      <label class="checkbox full"><input name="use_event_title" type="checkbox" ${s.use_event_title ? "checked" : ""}> Kalendertitel für Aufgabenname verwenden<span class="hint">Beispiel: Aus dem Termin „Gelb“ wird die Aufgabe „Gelb“. Der Vorlagenname wird verwendet, wenn der Termin keinen Namen hat.</span></label></div></div>`;
+      <label class="checkbox full"><input name="use_event_title" type="checkbox" ${s.use_event_title ? "checked" : ""}> Kalendertitel für Aufgabenname verwenden<span class="hint">Ohne passende Zuordnungszeile kann der unveränderte Kalendertitel verwendet werden.</span></label>
+      <div class="full repeatable-editor calendar-mapping-editor">
+        <span class="field-label">Kalendertitel zuordnen</span>
+        <div class="repeatable-list">${this._calendarMappingRows(s.title_mappings || [])}</div>
+        <button type="button" class="add-row" data-add-calendar-mapping>+ Titelzuordnung</button>
+        <label class="checkbox"><input name="ignore_unmapped_events" type="checkbox" ${s.ignore_unmapped_events !== false ? "checked" : ""}> Nicht zugeordnete Termine ignorieren</label>
+        <p class="hint">Die Muster sind reguläre Ausdrücke, werden ohne Beachtung der Groß-/Kleinschreibung geprüft und von oben nach unten ausgewertet. Beispiel: <code>gelb|gelber sack</code>.</p>
+      </div></div></div>`;
   }
 
   _completionStart(s) {
@@ -3597,6 +3664,22 @@ class HouseholdTasksPanel extends HTMLElement {
       schedule.match = f.get("match");
       schedule.offset = f.get("offset") || "00:00:00";
       if (f.get("use_event_title") === "on") schedule.use_event_title = true;
+      const mappingPatterns = f.getAll("calendar_mapping_pattern");
+      const mappingTitles = f.getAll("calendar_mapping_task");
+      if (mappingPatterns.length) {
+        const seenPatterns = new Set();
+        schedule.title_mappings = mappingPatterns.map((patternValue, index) => {
+          const pattern = String(patternValue).trim();
+          const taskTitle = String(mappingTitles[index] || "").trim();
+          if (!pattern || !taskTitle) throw new Error("Jede Titelzuordnung benötigt ein Muster und einen Aufgabennamen.");
+          try { new RegExp(pattern, "i"); } catch (_error) { throw new Error(`Ungültiger regulärer Ausdruck: ${pattern}`); }
+          const normalized = pattern.toLowerCase();
+          if (seenPatterns.has(normalized)) throw new Error(`Das Titel-Muster „${pattern}“ ist doppelt vorhanden.`);
+          seenPatterns.add(normalized);
+          return { pattern, task_title: taskTitle };
+        });
+        schedule.ignore_unmapped_events = f.get("ignore_unmapped_events") === "on";
+      }
     }
     if (type === "after_completion") {
       schedule.start = new Date(f.get("start")).toISOString();

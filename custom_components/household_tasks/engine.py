@@ -647,6 +647,11 @@ class HouseholdTaskEngine:
                     errors.append(f"task '{task_id}' has an invalid offset")
                 if schedule.get("use_event_title") not in {None, True, False}:
                     errors.append(f"task '{task_id}' use_event_title must be a boolean")
+                if schedule.get("ignore_unmapped_events") not in {None, True, False}:
+                    errors.append(
+                        f"task '{task_id}' ignore_unmapped_events must be a boolean"
+                    )
+                self._validate_calendar_title_mappings(task_id, schedule, errors)
             if schedule_type == "interval_months":
                 if not schedule.get("start"):
                     errors.append(f"task '{task_id}' needs start")
@@ -2278,6 +2283,7 @@ class HouseholdTaskEngine:
             "schedule_type": schedule_type,
             "next_due": None,
             "calendar_events": [],
+            "calendar_ignored_events": [],
             "state_triggers": [],
             "mode": mode_decision(self._current_household_mode(), task),
             "season": self._season_decision(task, now),
@@ -2297,9 +2303,10 @@ class HouseholdTaskEngine:
         elif schedule_type in {"after_completion", "flexible_after_completion"}:
             result["next_due"] = self._preview_after_completion_due(schedule, now)
         elif schedule_type == "calendar":
-            result["calendar_events"] = await self._preview_calendar_events(
-                schedule, now
-            )
+            (
+                result["calendar_events"],
+                result["calendar_ignored_events"],
+            ) = await self._preview_calendar_events(task, now)
             if result["calendar_events"]:
                 result["next_due"] = result["calendar_events"][0]["due"]
         elif schedule_type == "forecast_trigger":
@@ -2607,9 +2614,10 @@ class HouseholdTaskEngine:
         return result
 
     async def _preview_calendar_events(
-        self, schedule: dict[str, Any], now: datetime
-    ) -> list[dict[str, str]]:
+        self, task: dict[str, Any], now: datetime
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
         """Return matching calendar events for the preview window."""
+        schedule = task.get("schedule", {})
         offset = self._parse_duration(schedule.get("offset", "00:00:00"))
         query_end = now + timedelta(days=90) - offset
         entity_id = str(schedule.get("entity_id", ""))
@@ -2626,6 +2634,7 @@ class HouseholdTaskEngine:
         )
         pattern = schedule.get("match")
         matches: list[dict[str, str]] = []
+        ignored: list[dict[str, str]] = []
         for calendar_event in (response or {}).get(entity_id, {}).get("events", []):
             summary = str(calendar_event.get("summary", ""))
             if pattern and re.search(str(pattern), summary, re.IGNORECASE) is None:
@@ -2636,15 +2645,27 @@ class HouseholdTaskEngine:
             due = event_start + offset
             if due < now:
                 continue
+            included, mapped_title = self._calendar_title_decision(schedule, summary)
+            if not included:
+                ignored.append(
+                    {
+                        "summary": summary,
+                        "start": event_start.isoformat(),
+                        "reason": "unmapped_title",
+                    }
+                )
+                continue
             matches.append(
                 {
                     "summary": summary,
+                    "task_name": mapped_title or str(task.get("name", "")),
                     "start": event_start.isoformat(),
                     "due": due.isoformat(),
                 }
             )
         matches.sort(key=lambda item: item["due"])
-        return matches[:10]
+        ignored.sort(key=lambda item: item["start"])
+        return matches[:10], ignored[:10]
 
     async def async_test_notification(self, person_id: str) -> None:
         """Send an explicit, harmless test notification to one person."""
@@ -4523,6 +4544,9 @@ class HouseholdTaskEngine:
                 summary = str(calendar_event.get("summary", ""))
                 if pattern and re.search(str(pattern), summary, re.IGNORECASE) is None:
                     continue
+                included, _ = self._calendar_title_decision(schedule, summary)
+                if not included:
+                    continue
                 event_start = self._parse_calendar_datetime(calendar_event.get("start"))
                 if event_start is None:
                     continue
@@ -5065,11 +5089,78 @@ class HouseholdTaskEngine:
     @staticmethod
     def _occurrence_name(task: dict[str, Any], event_summary: str | None) -> str:
         """Return a bounded task name, optionally sourced from a calendar event."""
-        use_event_title = task.get("schedule", {}).get("use_event_title", False)
-        normalized_summary = " ".join(str(event_summary or "").split())
-        if use_event_title and normalized_summary:
-            return normalized_summary[:255]
+        _, mapped_title = HouseholdTaskEngine._calendar_title_decision(
+            task.get("schedule", {}), event_summary
+        )
+        if mapped_title:
+            return mapped_title
         return str(task["name"])
+
+    @staticmethod
+    def _calendar_title_decision(
+        schedule: dict[str, Any], event_summary: str | None
+    ) -> tuple[bool, str | None]:
+        """Map one normalized calendar title using the first matching regex."""
+        normalized_summary = " ".join(str(event_summary or "").split())
+        mappings = schedule.get("title_mappings", [])
+        for mapping in mappings if isinstance(mappings, list) else []:
+            if not isinstance(mapping, dict):
+                continue
+            pattern = str(mapping.get("pattern", "")).strip()
+            if len(pattern) > 256:
+                continue
+            try:
+                matches = bool(re.search(pattern, normalized_summary, re.IGNORECASE))
+            except re.error:
+                matches = False
+            if pattern and matches:
+                task_title = " ".join(str(mapping.get("task_title", "")).split())
+                return True, task_title[:255] or None
+        if mappings and schedule.get("ignore_unmapped_events", True):
+            return False, None
+        if schedule.get("use_event_title", False) and normalized_summary:
+            return True, normalized_summary[:255]
+        return True, None
+
+    @staticmethod
+    def _validate_calendar_title_mappings(
+        task_id: str, schedule: dict[str, Any], errors: list[str]
+    ) -> None:
+        """Validate ordered, deterministic calendar-title regex mappings."""
+        mappings = schedule.get("title_mappings", [])
+        if not isinstance(mappings, list):
+            errors.append(f"task '{task_id}' title_mappings must be a list")
+            return
+        if len(mappings) > 50:
+            errors.append(f"task '{task_id}' has too many title mappings")
+        seen_patterns: set[str] = set()
+        for index, mapping in enumerate(mappings):
+            if not isinstance(mapping, dict):
+                errors.append(
+                    f"task '{task_id}' title mapping {index + 1} must be a mapping"
+                )
+                continue
+            pattern = str(mapping.get("pattern", "")).strip()
+            task_title = " ".join(str(mapping.get("task_title", "")).split())
+            if not pattern or not task_title:
+                errors.append(
+                    f"task '{task_id}' title mapping {index + 1} needs pattern and title"
+                )
+                continue
+            if len(pattern) > 256 or len(task_title) > 255:
+                errors.append(f"task '{task_id}' title mapping {index + 1} is too long")
+                continue
+            try:
+                re.compile(pattern, re.IGNORECASE)
+            except re.error:
+                errors.append(
+                    f"task '{task_id}' title mapping {index + 1} has invalid regex"
+                )
+                continue
+            normalized = pattern.casefold()
+            if normalized in seen_patterns:
+                errors.append(f"task '{task_id}' has duplicate calendar title patterns")
+            seen_patterns.add(normalized)
 
     @staticmethod
     def _occurrence_description(
