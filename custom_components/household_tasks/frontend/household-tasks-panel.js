@@ -3669,8 +3669,12 @@ class HouseholdTasksPanel extends HTMLElement {
       if (mappingPatterns.length) {
         const seenPatterns = new Set();
         schedule.title_mappings = mappingPatterns.map((patternValue, index) => {
-          const pattern = String(patternValue).trim();
-          const taskTitle = String(mappingTitles[index] || "").trim();
+          const titleValue = mappingTitles[index];
+          if (typeof patternValue !== "string" || typeof titleValue !== "string") {
+            throw new Error("Die Titelzuordnung enthält ungültige Formulardaten.");
+          }
+          const pattern = patternValue.trim();
+          const taskTitle = titleValue.trim();
           if (!pattern || !taskTitle) throw new Error("Jede Titelzuordnung benötigt ein Muster und einen Aufgabennamen.");
           try { new RegExp(pattern, "i"); } catch (_error) { throw new Error(`Ungültiger regulärer Ausdruck: ${pattern}`); }
           const normalized = pattern.toLowerCase();

@@ -95,6 +95,15 @@ async def test_real_runtime_service_persistence_panel_and_unload(
                         "summary": "Papier",
                         "start": (calendar_start + timedelta(days=1)).isoformat(),
                     },
+                    {
+                        "summary": "Other",
+                        "start": (calendar_start + timedelta(days=1)).isoformat(),
+                    },
+                    {"summary": "Invalid", "start": "not-a-date"},
+                    {
+                        "summary": "Past",
+                        "start": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+                    },
                 ]
             }
         }
@@ -184,6 +193,7 @@ async def test_real_runtime_service_persistence_panel_and_unload(
             "schedule": {
                 "type": "calendar",
                 "entity_id": "calendar.waste",
+                "match": "rest|papier|invalid|past",
                 "offset": "-12:00:00",
                 "title_mappings": [
                     {"pattern": "restmüll", "task_title": "Schwarze Tonne"}
@@ -549,5 +559,128 @@ async def test_calendar_event_title_can_become_occurrence_name(hass):
     ) == (False, None)
 
     config["tasks"]["dynamic_waste"]["schedule"]["title_mappings"][0]["pattern"] = "["
+    invalid_engine = HouseholdTaskEngine(hass, config)
     with pytest.raises(vol.Invalid, match="invalid regex"):
-        HouseholdTaskEngine(hass, config)._validate_config()
+        invalid_engine._validate_config()
+
+
+@pytest.mark.parametrize(
+    ("mapping", "expected"),
+    [
+        (None, ("must be a mapping", "")),
+        ({}, ("needs pattern and title", "")),
+        ({"pattern": "x" * 257, "task_title": "Task"}, ("is too long", "")),
+        ({"pattern": "[", "task_title": "Task"}, ("has invalid regex", "")),
+        ({"pattern": "Bio", "task_title": "Biotonne"}, (None, "bio")),
+    ],
+)
+def test_calendar_mapping_validation_errors(mapping, expected):
+    """Every persisted mapping failure has a deterministic validation result."""
+
+    assert HouseholdTaskEngine._calendar_mapping_error(mapping) == expected
+
+
+def test_calendar_mapping_defensive_fallbacks_and_limits():
+    """Imported malformed mappings remain safe before config validation runs."""
+
+    assert HouseholdTaskEngine._calendar_title_decision(
+        {
+            "title_mappings": {"unexpected": "mapping"},
+            "ignore_unmapped_events": False,
+            "use_event_title": True,
+        },
+        "  Bio   Abholung  ",
+    ) == (True, "Bio Abholung")
+    assert (
+        HouseholdTaskEngine._mapped_calendar_title(
+            [None, {"pattern": "[", "task_title": "Invalid"}], "Bio"
+        )
+        is None
+    )
+    assert (
+        HouseholdTaskEngine._calendar_mapping_result(
+            {"pattern": "x" * 257, "task_title": "Too long"}, "x"
+        )
+        is None
+    )
+    assert (
+        HouseholdTaskEngine._calendar_mapping_result(
+            {"pattern": "Bio", "task_title": ""}, "Bio"
+        )
+        is None
+    )
+    assert (
+        HouseholdTaskEngine._calendar_mapping_result(
+            {"pattern": "Gelb", "task_title": "Gelbe Tonne"}, "Bio"
+        )
+        is None
+    )
+
+    errors = []
+    HouseholdTaskEngine._validate_calendar_title_mappings(
+        "waste", {"title_mappings": "invalid"}, errors
+    )
+    assert errors == ["task 'waste' title_mappings must be a list"]
+
+    mappings = [
+        {"pattern": f"title-{index}", "task_title": f"Task {index}"}
+        for index in range(51)
+    ]
+    mappings[-1] = {"pattern": "TITLE-0", "task_title": "Duplicate"}
+    errors = []
+    HouseholdTaskEngine._validate_calendar_title_mappings(
+        "waste", {"title_mappings": mappings}, errors
+    )
+    assert "task 'waste' has too many title mappings" in errors
+    assert "task 'waste' has duplicate calendar title patterns" in errors
+
+
+async def test_calendar_scan_ignores_unmapped_events(hass):
+    """Runtime scanning creates mapped waste work and drops unrelated events."""
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    event_start = now + timedelta(hours=13)
+
+    async def get_events(_call):
+        return {
+            "calendar.waste": {
+                "events": [
+                    {"summary": "Gelber Sack", "start": event_start.isoformat()},
+                    {"summary": "Problemabfall", "start": event_start.isoformat()},
+                ]
+            }
+        }
+
+    hass.services.async_register(
+        "calendar",
+        "get_events",
+        get_events,
+        supports_response=SupportsResponse.ONLY,
+    )
+    config = initial_config()
+    config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
+    config["tasks"] = {
+        "waste": {
+            "enabled": True,
+            "name": "Mülltonne rausstellen",
+            "assignee": "alex",
+            "assignment": {"type": "fixed"},
+            "schedule": {
+                "type": "calendar",
+                "entity_id": "calendar.waste",
+                "offset": "-12:00:00",
+                "title_mappings": [
+                    {"pattern": "gelb", "task_title": "Gelbe Tonne rausstellen"}
+                ],
+                "ignore_unmapped_events": True,
+            },
+        }
+    }
+    engine = HouseholdTaskEngine(hass, config)
+    engine._validate_config()
+
+    await engine._create_calendar_occurrences(now, now + timedelta(hours=2))
+
+    occurrences = list(engine.state["occurrences"].values())
+    assert len(occurrences) == 1
+    assert occurrences[0]["title"] == "[Alex] Gelbe Tonne rausstellen"
