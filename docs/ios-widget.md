@@ -105,7 +105,7 @@ are the same.
 | Tap action | Use it for | Result |
 | --- | --- | --- |
 | **Default** | A `button.*task_actions` entity | Presses the button and asks Household Tasks to send fresh actions for the current task. |
-| **Navigate** | Inbox and count sensors | Opens `/haushaltsaufgaben` in the Home Assistant app. |
+| **Navigate** | Inbox and count sensors | Opens a stable panel tab URL such as `/haushaltsaufgaben?view=mine` in the Home Assistant app. |
 | **Nothing** | Display-only sensor tile | Refreshes the widget without opening another screen. |
 | **Run script** | An existing HA script | Runs the selected script; this is not required by the standard recipes. |
 
@@ -146,11 +146,11 @@ Add these six items in this exact order:
 
 | # | Entity | Display text | Icon | Color | On tap | Confirmation |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `sensor.household_tasks_alex_next_task_1` | `1` | `mdi:numeric-1-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
-| 2 | `sensor.household_tasks_alex_next_task_2` | `2` | `mdi:numeric-2-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
-| 3 | `sensor.household_tasks_alex_next_task_3` | `3` | `mdi:numeric-3-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
-| 4 | `sensor.household_tasks_alex_next_task_4` | `4` | `mdi:numeric-4-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
-| 5 | `sensor.household_tasks_alex_next_task_5` | `5` | `mdi:numeric-5-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 1 | `sensor.household_tasks_alex_next_task_1` | `1` | `mdi:numeric-1-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
+| 2 | `sensor.household_tasks_alex_next_task_2` | `2` | `mdi:numeric-2-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
+| 3 | `sensor.household_tasks_alex_next_task_3` | `3` | `mdi:numeric-3-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
+| 4 | `sensor.household_tasks_alex_next_task_4` | `4` | `mdi:numeric-4-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
+| 5 | `sensor.household_tasks_alex_next_task_5` | `5` | `mdi:numeric-5-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
 | 6 | `button.household_tasks_alex_actions` | `Actions` | `mdi:bell-outline` | Blue | **Default** | On |
 
 Replace `alex` with the real person entity IDs. Each numbered sensor displays
@@ -196,8 +196,8 @@ Add these five items in this exact order:
 | # | Entity | Display text | Icon | Color | On tap | Confirmation |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | Your forecast temperature sensor | `Tomorrow` | `mdi:thermometer-low` | Blue | **Nothing** | Off |
-| 2 | `sensor.household_tasks_alex` | `Alex` | `mdi:car-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
-| 3 | `sensor.household_tasks_sam` | `Sam` | `mdi:car-outline` | Green | **Navigate** → `/haushaltsaufgaben` | Off |
+| 2 | `sensor.household_tasks_alex` | `Alex` | `mdi:car-outline` | Blue | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
+| 3 | `sensor.household_tasks_sam` | `Sam` | `mdi:car-outline` | Green | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
 | 4 | `button.household_tasks_alex_actions` | `Alex actions` | `mdi:bell-outline` | Blue | **Default** | On |
 | 5 | `button.household_tasks_sam_actions` | `Sam actions` | `mdi:bell-outline` | Green | **Default** | On |
 
@@ -218,9 +218,9 @@ Add these four items in this exact order:
 
 | # | Entity | Display text | Icon | Color | On tap | Confirmation |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `sensor.household_tasks_alex` | `Alex` | `mdi:clipboard-account-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 1 | `sensor.household_tasks_alex` | `Alex` | `mdi:clipboard-account-outline` | Blue | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
 | 2 | `button.household_tasks_alex_actions` | `Alex actions` | `mdi:bell-outline` | Blue | **Default** | On |
-| 3 | `sensor.household_tasks_sam` | `Sam` | `mdi:clipboard-account-outline` | Green | **Navigate** → `/haushaltsaufgaben` | Off |
+| 3 | `sensor.household_tasks_sam` | `Sam` | `mdi:clipboard-account-outline` | Green | **Navigate** → `/haushaltsaufgaben?view=mine` | Off |
 | 4 | `button.household_tasks_sam_actions` | `Sam actions` | `mdi:bell-outline` | Green | **Default** | On |
 
 The official grid produces two functional person lanes when it places items 1
@@ -291,7 +291,7 @@ battery use.
 ### Tapping a tile opens the wrong screen
 
 - Use **Default** only for the `button.*task_actions` entity.
-- Use **Navigate** with `/haushaltsaufgaben` for inbox and count sensors.
+- Use **Navigate** with `/haushaltsaufgaben?view=mine` for personal inbox sensors. Household-wide count sensors can continue to use `/haushaltsaufgaben?view=today`.
 - Use **Nothing** for a display-only weather tile.
 
 ### The layout does not match the image

@@ -59,6 +59,31 @@ async def test_widget_action_notification_is_bound_to_exact_task(hass):
     assert args[0:2] == ("mobile_app_alex", "notify.mobile_app_alex")
     assert "Filter check" in args[3]
     assert all(not action["action"].startswith(ACTION_PREFIX) for action in args[5])
+    open_action = engine._notification_actions("open", "alex", None, None)[1]
+    assert open_action["uri"] == "/haushaltsaufgaben?view=mine"
+
+
+async def test_task_notification_opens_personal_panel_tab(hass):
+    """Tapping a task notification deep-links to the personal inbox."""
+    engine = _widget_engine(hass)
+    calls = []
+
+    async def notify(call):
+        calls.append(call)
+
+    hass.services.async_register("notify", "mobile_app_alex", notify)
+
+    delivered = await engine._send_notification(
+        "mobile_app_alex",
+        "notify.mobile_app_alex",
+        "Task",
+        "Filter check",
+        "household_task_filter",
+        [],
+    )
+
+    assert delivered is True
+    assert calls[0].data["data"]["url"] == "/haushaltsaufgaben?view=mine"
 
 
 async def test_widget_action_notification_enforces_person_boundary(hass):

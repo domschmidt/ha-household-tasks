@@ -10,6 +10,9 @@ const HT_WEEKDAYS = [
   ["mon", "Mo", "Mon"], ["tue", "Di", "Tue"], ["wed", "Mi", "Wed"], ["thu", "Do", "Thu"],
   ["fri", "Fr", "Fri"], ["sat", "Sa", "Sat"], ["sun", "So", "Sun"],
 ];
+const HT_PANEL_VIEWS = new Set([
+  "today", "mine", "week", "tasks", "people", "analytics", "history", "settings",
+]);
 
 class HouseholdTasksPanel extends HTMLElement {
   constructor() {
@@ -23,6 +26,13 @@ class HouseholdTasksPanel extends HTMLElement {
     this._offlineActions = new Set(["complete", "snooze", "move_occurrence", "bulk"]);
     this._onlineHandler = () => this._flushOfflineQueue();
     this._offlineHandler = () => this._render();
+    this._popstateHandler = () => {
+      const view = this._viewFromLocation();
+      if (view === this._view) return;
+      this._view = view;
+      this._render();
+      if (view === "week") void this._loadWeekPreview();
+    };
     this._globalKeyHandler = (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
@@ -52,6 +62,11 @@ class HouseholdTasksPanel extends HTMLElement {
     window.addEventListener("online", this._onlineHandler);
     window.removeEventListener("offline", this._offlineHandler);
     window.addEventListener("offline", this._offlineHandler);
+    window.removeEventListener("popstate", this._popstateHandler);
+    window.addEventListener("popstate", this._popstateHandler);
+    window.removeEventListener("location-changed", this._popstateHandler);
+    window.addEventListener("location-changed", this._popstateHandler);
+    this._view = this._viewFromLocation();
     this._render();
     const cached = localStorage.getItem("household_tasks_offline_snapshot");
     if (cached && !this._data) {
@@ -64,6 +79,32 @@ class HouseholdTasksPanel extends HTMLElement {
     window.removeEventListener("keydown", this._globalKeyHandler, true);
     window.removeEventListener("online", this._onlineHandler);
     window.removeEventListener("offline", this._offlineHandler);
+    window.removeEventListener("popstate", this._popstateHandler);
+    window.removeEventListener("location-changed", this._popstateHandler);
+  }
+
+  _viewFromLocation() {
+    const requested = new URL(window.location.href).searchParams.get("view") || "today";
+    return HT_PANEL_VIEWS.has(requested) ? requested : "today";
+  }
+
+  _navigateToView(requested) {
+    const view = HT_PANEL_VIEWS.has(requested) ? requested : "today";
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", view);
+    if (url.href !== window.location.href) {
+      window.history.pushState({}, "", url.toString());
+    }
+    this._view = view;
+    this._render();
+    if (view === "week") void this._loadWeekPreview();
+  }
+
+  _viewUrl(requested) {
+    const view = HT_PANEL_VIEWS.has(requested) ? requested : "today";
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", view);
+    return `${url.pathname}${url.search}${url.hash}`;
   }
 
   async _call(type, payload = {}) {
@@ -988,7 +1029,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _navButton(id, label) {
-    return `<button data-view="${id}" class="${this._view === id ? "active" : ""}">${label}</button>`;
+    return `<a href="${this._e(this._viewUrl(id))}" data-view="${id}" class="${this._view === id ? "active" : ""}">${label}</a>`;
   }
 
   _loading() {
@@ -1783,10 +1824,10 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _bind() {
-    this.shadowRoot.querySelectorAll("[data-view]").forEach((button) => button.onclick = () => {
-      this._view = button.dataset.view;
-      this._render();
-      if (this._view === "week") void this._loadWeekPreview();
+    this.shadowRoot.querySelectorAll("[data-view]").forEach((link) => link.onclick = (event) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      this._navigateToView(link.dataset.view);
     });
     this.shadowRoot.querySelector(".refresh")?.addEventListener("click", () => this._load());
     this.shadowRoot.querySelector(".search-button")?.addEventListener("click", () => this._showCommandPalette());
@@ -3981,7 +4022,7 @@ class HouseholdTasksPanel extends HTMLElement {
       button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid color-mix(in srgb,var(--primary-color,#03a9f4) 70%,white);outline-offset:2px}
       header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}h1{font-size:30px;margin:2px 0}h2{margin:0;font-size:24px}h3{margin:0}p{color:var(--secondary-text-color,#6b7280)}.header-actions{display:flex;align-items:center;gap:8px}.mode-badge{padding:6px 9px;border-radius:99px;background:#fff1bf;color:#765600;font-size:12px;font-weight:800}
       .eyebrow{font-size:11px;letter-spacing:.13em;font-weight:800;color:var(--primary-color,#03a9f4);text-transform:uppercase}
-      nav{display:flex;gap:4px;border-bottom:1px solid var(--divider-color,#ddd);overflow:auto;margin-bottom:24px}nav button{border:0;background:none;padding:12px 16px;color:var(--secondary-text-color);cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent}nav button.active{color:var(--primary-color);border-color:var(--primary-color);font-weight:700}
+      nav{display:flex;gap:4px;border-bottom:1px solid var(--divider-color,#ddd);overflow:auto;margin-bottom:24px}nav a{border:0;background:none;padding:12px 16px;color:var(--secondary-text-color);cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent;text-decoration:none}nav a.active{color:var(--primary-color);border-color:var(--primary-color);font-weight:700}
       button{border:1px solid var(--divider-color,#d6d9de);border-radius:10px;padding:9px 14px;background:var(--card-background-color,#fff);cursor:pointer;font-weight:650}button:hover{filter:brightness(.97)}button:disabled{opacity:.55}.primary{background:var(--primary-color,#03a9f4);color:var(--text-primary-color,#fff);border-color:transparent}.icon-button{width:42px;height:42px;border-radius:50%;font-size:22px;padding:0}
       .context-add{position:fixed;z-index:20;right:28px;bottom:28px;width:56px;height:56px;border:0;border-radius:50%;background:var(--primary-color);color:#fff;font-size:28px;box-shadow:0 6px 20px #0004}
       .hero{display:flex;justify-content:space-between;align-items:center;border-radius:20px;padding:24px 28px;background:linear-gradient(135deg,var(--primary-color,#03a9f4),#536dfe);color:#fff;margin-bottom:16px}.hero .eyebrow,.hero p{color:#e9f7ff}.hero h2{font-size:28px}.hero-side{display:flex;align-items:center;gap:18px}.hero-button{background:#fff;color:#3347ba;border:0}.score{font-size:36px;font-weight:800;text-align:center}.score small{display:block;font-size:12px;font-weight:500}
