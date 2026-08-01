@@ -47,8 +47,25 @@ test("mobile views do not overflow horizontally", async ({ page, isMobile }) => 
   const panel = await openPanel(page);
   for (const view of ["Heute", "Aufgaben", "Verlauf"]) {
     await panel.getByRole("link", { name: view, exact: true }).click();
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    expect(overflow, `${view} has horizontal overflow`).toBeLessThanOrEqual(1);
+    const layout = await page.evaluate(() => {
+      const viewportWidth = document.documentElement.clientWidth;
+      const offenders = [...document.querySelectorAll("*")]
+        .map((element) => {
+          const bounds = element.getBoundingClientRect();
+          return {
+            element: `${element.tagName.toLowerCase()}.${[...element.classList].join(".")}`,
+            left: Math.round(bounds.left),
+            right: Math.round(bounds.right),
+          };
+        })
+        .filter(({ left, right }) => left < -1 || right > viewportWidth + 1)
+        .slice(0, 5);
+      return {
+        overflow: document.documentElement.scrollWidth - viewportWidth,
+        offenders,
+      };
+    });
+    expect(layout.overflow, `${view} has horizontal overflow: ${JSON.stringify(layout.offenders)}`).toBeLessThanOrEqual(1);
   }
 });
 
