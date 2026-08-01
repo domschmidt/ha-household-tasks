@@ -27,6 +27,7 @@ test("NFC creator is aligned and invokes Home Assistant", async ({ page }) => {
   await panel.getByRole("link", { name: "Aufgaben", exact: true }).click();
   await panel.getByRole("button", { name: "Bearbeiten" }).first().click();
   const dialog = panel.getByRole("dialog", { name: "Aufgabe bearbeiten" });
+  await dialog.locator('[data-task-wizard-step="4"]').click();
   await dialog.locator("details.advanced-fields").evaluate((element) => { element.open = true; });
   const input = dialog.locator("[name=nfc_tag_id]");
   const add = dialog.locator("[data-toggle-tag-creator]");

@@ -2883,6 +2883,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _showTaskEditor(id = null, options = {}) {
+    const guided = true;
     const task = this._editorTask(id, options);
     const s = task.schedule || { type: "manual" };
     const esc = task.escalation;
@@ -2899,27 +2900,30 @@ class HouseholdTasksPanel extends HTMLElement {
     const fallbackStrategy = task.assignment?.fallback_strategy || "fair";
     const modal = this.shadowRoot.querySelector("#modal");
     const returnFocus = this.shadowRoot.activeElement;
-    modal.innerHTML = `<div class="backdrop"><div class="modal-card">
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card task-editor ${guided ? "task-editor--wizard" : "task-editor--direct"}">
       <div class="modal-head"><div><div class="eyebrow">AUFGABENVORLAGE</div><h2>${id ? "Aufgabe bearbeiten" : "Neue Aufgabe"}</h2></div><button class="icon-button close">×</button></div>
+      ${guided ? `<ol class="task-wizard-steps" aria-label="Schritte der Aufgabenanlage">
+        ${["Grundlagen", "Zuständigkeit", "Auslöser", "Optionen", "Prüfen"].map((label, index) => `<li><button type="button" data-task-wizard-step="${index + 1}" ${!id && index ? "disabled" : ""}><span>${index + 1}</span>${label}</button></li>`).join("")}
+      </ol>` : ""}
       <form id="task-form" class="form-grid">
-        <label>ID<input name="id" required pattern="[a-z0-9_]+" ${id ? "readonly" : ""} value="${this._e(id || "")}" placeholder="z_b_bad_putzen"></label>
-        <label>Name<input name="name" required value="${this._e(task.name)}" placeholder="Bad putzen"></label>
-        <label>Zuweisung<select name="assignment_type">
+        <input name="id" type="hidden" required pattern="[a-z0-9_]+" value="${this._e(id || "")}">
+        <label class="full" data-task-step="1">Name<input name="name" required autofocus value="${this._e(task.name)}" placeholder="Bad putzen"><span class="hint">Die technische ID wird automatisch erzeugt.</span></label>
+        <label data-task-step="2">Zuweisung<select name="assignment_type">
           ${[["fixed","Fest"],["rotation","Rotation"],["fair","Fair"],["open","Offen"],["per_person","Je Person eine Aufgabe"]].map(([value, label]) =>
             `<option value="${value}" ${value === assignmentType ? "selected" : ""}>${label}</option>`
           ).join("")}
         </select></label>
-        <label class="checkbox"><input name="enabled" type="checkbox" ${task.enabled !== false ? "checked" : ""}> Aufgabe aktiv</label>
-        <label class="full fixed-assignee">Zuständig<select name="assignee">${Object.entries(this._data.people).map(([pid, p]) => `<option value="${this._e(pid)}" ${pid === task.assignee ? "selected" : ""}>${this._e(p.name)}</option>`).join("")}</select></label>
-        <div class="full assignment-candidates">
+        <label class="checkbox" data-task-step="1"><input name="enabled" type="checkbox" ${task.enabled !== false ? "checked" : ""}> Aufgabe aktiv</label>
+        <label class="full fixed-assignee" data-task-step="2">Zuständig<select name="assignee">${Object.entries(this._data.people).map(([pid, p]) => `<option value="${this._e(pid)}" ${pid === task.assignee ? "selected" : ""}>${this._e(p.name)}</option>`).join("")}</select></label>
+        <div class="full assignment-candidates" data-task-step="2">
           <span class="field-label">Teilnehmende Personen</span>
           <div class="candidate-grid">${Object.entries(this._data.people).map(([pid, person]) =>
             `<label class="checkbox"><input type="checkbox" name="assignment_person" value="${this._e(pid)}" ${assignmentPeople.includes(pid) ? "checked" : ""}> ${this._e(person.name)}</label>`
           ).join("")}</div>
           <p class="hint assignment-hint"></p>
         </div>
-        <label class="full checkbox presence-required"><input name="presence_required" type="checkbox" ${presenceRequired ? "checked" : ""}> Anwesenheit bei der Zuweisung berücksichtigen</label>
-        <div class="full fixed-absence-settings form-grid">
+        <label class="full checkbox presence-required" data-task-step="2"><input name="presence_required" type="checkbox" ${presenceRequired ? "checked" : ""}> Anwesenheit bei der Zuweisung berücksichtigen</label>
+        <div class="full fixed-absence-settings form-grid" data-task-step="2">
           <label class="full">Wenn die fest zuständige Person nicht zuhause ist<select name="absence_policy">
             ${[["wait","Warten, bis die Person zurück ist"],["fallback","An eine Ersatzperson zuweisen"],["open","Für Ersatzpersonen zur Übernahme öffnen"],["assign_anyway","Trotzdem fest zuweisen"]].map(([value, label]) => `<option value="${value}" ${value === absencePolicy ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
@@ -2935,7 +2939,7 @@ class HouseholdTasksPanel extends HTMLElement {
             <option value="rotation" ${fallbackStrategy === "rotation" ? "selected" : ""}>Der Reihe nach rotieren</option>
           </select></label>
         </div>
-        <div class="full inline-create">
+        <div class="full inline-create" data-task-step="2">
           <button type="button" data-toggle-inline-person>+ Person direkt anlegen</button>
           <div class="inline-person-form form-grid hidden">
             <label>ID<input name="inline_person_id" pattern="[a-z0-9_]+" placeholder="vorname"></label>
@@ -2945,15 +2949,15 @@ class HouseholdTasksPanel extends HTMLElement {
             <div class="full"><button type="button" class="primary" data-save-inline-person>Person übernehmen</button></div>
           </div>
         </div>
-        <label class="full">Beschreibung<textarea name="description" rows="2">${this._e(task.description || "")}</textarea></label>
-        <label class="full">Checkliste<textarea name="checklist" rows="4" placeholder="Ein Schritt pro Zeile">${this._e((task.checklist || []).map((item) => typeof item === "string" ? item : item.title).join("\n"))}</textarea><span class="hint">Jede Zeile wird zu einem einzeln abhakbaren Schritt. Standardmäßig kann die Aufgabe erst abgeschlossen werden, wenn alle Schritte erledigt sind.</span></label>
-        <label class="full checkbox"><input name="require_checklist_completion" type="checkbox" ${task.require_checklist_completion !== false ? "checked" : ""}> Vollständige Checkliste vor Abschluss verlangen</label>
-        <label>Zeitplan<select name="type">
+        <label class="full" data-task-step="1">Beschreibung<textarea name="description" rows="2">${this._e(task.description || "")}</textarea></label>
+        <label class="full" data-task-step="1">Checkliste<textarea name="checklist" rows="4" placeholder="Ein Schritt pro Zeile">${this._e((task.checklist || []).map((item) => typeof item === "string" ? item : item.title).join("\n"))}</textarea><span class="hint">Jede Zeile wird zu einem einzeln abhakbaren Schritt. Standardmäßig kann die Aufgabe erst abgeschlossen werden, wenn alle Schritte erledigt sind.</span></label>
+        <label class="full checkbox" data-task-step="1"><input name="require_checklist_completion" type="checkbox" ${task.require_checklist_completion !== false ? "checked" : ""}> Vollständige Checkliste vor Abschluss verlangen</label>
+        <label data-task-step="3">Zeitplan<select name="type">
           ${[["manual","Manuell"],["weekly","Wöchentlich"],["monthly","Monatlich"],["yearly","Jährlich"],["interval_months","Alle N Monate"],["after_completion","Nach letzter Erledigung"],["flexible_after_completion","Flexibel nach Erledigung"],["calendar","Kalender / ICS"],["weather_trigger","Aktuelle Wetterregel"],["forecast_trigger","Wettervorhersage"],["state_trigger","Bei Zustandswechsel"],["daily_after_state","Einmal täglich nach Gerätestatus"]].map(([v,l]) => `<option value="${v}" ${v === s.type ? "selected" : ""}>${l}</option>`).join("")}
         </select></label>
-        <div class="full schedule-fields">${this._scheduleFields(s, weather)}</div>
-        <div class="full task-preview"><button type="button" data-preview-task>Regel testen / nächste Fälligkeit</button>${id && task.repeat?.mode === "once_per_season" ? `<button type="button" data-reset-season>Saisonsperren zurücksetzen</button>` : ""}<output class="preview-result" aria-live="polite"></output></div>
-        <details class="full advanced-fields">
+        <div class="full schedule-fields" data-task-step="3">${this._scheduleFields(s, weather)}</div>
+        <div class="full task-preview" data-task-step="3"><button type="button" data-preview-task>Regel testen / nächste Fälligkeit</button>${id && task.repeat?.mode === "once_per_season" ? `<button type="button" data-reset-season>Saisonsperren zurücksetzen</button>` : ""}<output class="preview-result" aria-live="polite"></output></div>
+        <details class="full advanced-fields" data-task-step="4">
           <summary>Expertenoptionen: Markt, Saison, NFC, Abhängigkeiten und Eskalation</summary>
           <div class="form-grid advanced-grid">
         <div class="full repeatable-editor">
@@ -3001,13 +3005,24 @@ class HouseholdTasksPanel extends HTMLElement {
         </div>
           </div>
         </details>
-        <div class="full modal-actions"><button type="button" class="cancel">Abbrechen</button><button class="primary" type="submit">Speichern</button></div>
+        ${guided ? `<section class="full task-wizard-review" data-task-step="5" aria-live="polite">
+          <div class="eyebrow">ZUSAMMENFASSUNG</div><h3>So wird die Aufgabe angelegt</h3>
+          <dl class="wizard-review-facts"><div><dt>Aufgabe</dt><dd data-review-name>–</dd></div><div><dt>Zuständigkeit</dt><dd data-review-assignment>–</dd></div><div><dt>Auslöser</dt><dd data-review-schedule>–</dd></div></dl>
+          <div class="wizard-review-preview"><strong>Regelprüfung</strong><output data-review-preview>Wird beim Öffnen dieses Schritts berechnet.</output></div>
+        </section>` : ""}
+        <div class="full modal-actions task-editor-actions"><button type="button" class="cancel">Abbrechen</button>${guided ? `<button type="button" data-wizard-prev>Zurück</button><button type="button" class="primary" data-wizard-next>Weiter</button>` : ""}<button class="primary save-task" type="submit">Speichern</button></div>
       </form></div></div>`;
     this._localize(modal);
-    const close = () => { modal.innerHTML = ""; returnFocus?.focus(); };
-    modal.querySelector(".close").onclick = close;
-    modal.querySelector(".cancel").onclick = close;
-    this._activateDialog(modal, close);
+    const form = modal.querySelector("#task-form");
+    let dirty = false;
+    const close = async (force = false) => {
+      if (!force && dirty && !await this._confirm("Ungespeicherte Änderungen verwerfen?")) return;
+      modal.innerHTML = "";
+      returnFocus?.focus();
+    };
+    modal.querySelector(".close").onclick = () => { void close(); };
+    modal.querySelector(".cancel").onclick = () => { void close(); };
+    this._activateDialog(modal, () => { void close(); });
     modal.querySelector("[name=type]").onchange = (event) => {
       const fields = modal.querySelector(".schedule-fields");
       fields.innerHTML = this._scheduleFields({ type: event.target.value, time: "18:00:00" }, {});
@@ -3045,8 +3060,11 @@ class HouseholdTasksPanel extends HTMLElement {
     this._bindEscalationEditor(modal);
     this._bindTagCreator(modal);
     this._bindInlineTaskCreates(modal, id);
-    this._bindTaskPreview(modal, id);
-    modal.querySelector("#task-form").onsubmit = async (event) => {
+    const runPreview = this._bindTaskPreview(modal, id);
+    if (guided) this._bindTaskWizard(modal, runPreview, id);
+    form.addEventListener("input", () => { dirty = true; });
+    form.addEventListener("change", () => { dirty = true; });
+    form.onsubmit = async (event) => {
       event.preventDefault();
       try {
         const { taskId, value } = this._readTaskForm(event.target);
@@ -3054,7 +3072,7 @@ class HouseholdTasksPanel extends HTMLElement {
         const projection = await this._hass.callWS({ type: "household_tasks/task_projection", task: value });
         if (projection.risk === "high" && !await this._confirm(`${projection.message} Trotzdem speichern?`)) return;
         await this._call("save_task", { task_id: taskId, task: value });
-        close(); this._toast("Aufgabe gespeichert");
+        await close(true); this._toast("Aufgabe gespeichert");
       } catch (error) {
         if (!error?.message?.includes("household_tasks")) this._toast(this._errorText(error), true);
       }
@@ -3063,6 +3081,103 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _preserveTaskDevice(value, task) {
     if (task.device) value.device = task.device;
+  }
+
+  _bindTaskWizard(modal, runPreview, existingId = null) {
+    const form = modal.querySelector("#task-form");
+    const stepButtons = [...modal.querySelectorAll("[data-task-wizard-step]")];
+    const previous = modal.querySelector("[data-wizard-prev]");
+    const next = modal.querySelector("[data-wizard-next]");
+    const nameInput = form.elements.name;
+    const state = { current: 1, furthest: existingId ? 5 : 1 };
+
+    const generateId = () => {
+      form.elements.id.value = this._generatedTaskId(nameInput.value);
+    };
+
+    const showStep = async (step) => {
+      state.current = step;
+      state.furthest = Math.max(state.furthest, step);
+      this._displayTaskWizardStep(modal, state, existingId);
+      if (step === 5) await this._updateTaskWizardReview(modal, form, runPreview);
+      this._focusTaskWizardStep(modal, form, step);
+    };
+
+    if (!existingId) {
+      nameInput.addEventListener("input", generateId);
+      generateId();
+    }
+    previous.onclick = () => { void showStep(Math.max(1, state.current - 1)); };
+    next.onclick = () => {
+      if (!this._validateTaskWizardStep(form, state.current)) return;
+      void showStep(Math.min(5, state.current + 1));
+    };
+    stepButtons.forEach((button) => {
+      button.onclick = () => {
+        const target = Number(button.dataset.taskWizardStep);
+        if (target > state.current && !this._validateTaskWizardStep(form, state.current)) return;
+        void showStep(target);
+      };
+    });
+    void showStep(1);
+  }
+
+  _generatedTaskId(name) {
+    const normalized = String(name || "").normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "aufgabe";
+    let candidate = normalized;
+    let suffix = 2;
+    while (this._data.tasks[candidate]) candidate = `${normalized}_${suffix++}`;
+    return candidate;
+  }
+
+  _validateTaskWizardStep(form, step) {
+    const selector = `[data-task-step="${step}"] input,[data-task-step="${step}"] select,[data-task-step="${step}"] textarea`;
+    const controls = [...form.querySelectorAll(selector)]
+      .filter((control) => control.offsetParent !== null && !control.disabled);
+    const invalid = controls.find((control) => !control.checkValidity());
+    if (!invalid) return true;
+    invalid.setAttribute("aria-invalid", "true");
+    invalid.reportValidity();
+    invalid.focus();
+    return false;
+  }
+
+  _displayTaskWizardStep(modal, state, existingId) {
+    modal.querySelectorAll("[data-task-step]").forEach((section) => {
+      section.classList.toggle("wizard-step-hidden", Number(section.dataset.taskStep) !== state.current);
+    });
+    modal.querySelectorAll("[data-task-wizard-step]").forEach((button) => {
+      const buttonStep = Number(button.dataset.taskWizardStep);
+      button.disabled = buttonStep > state.furthest;
+      button.toggleAttribute("aria-current", buttonStep === state.current);
+      if (buttonStep === state.current) button.setAttribute("aria-current", "step");
+    });
+    modal.querySelector("[data-wizard-prev]").classList.toggle("hidden", state.current === 1);
+    modal.querySelector("[data-wizard-next]").classList.toggle("hidden", state.current === 5);
+    modal.querySelector(".save-task").classList.toggle("hidden", !existingId && state.current !== 5);
+    modal.querySelector(".task-editor--wizard").classList.add("wizard-ready");
+  }
+
+  async _updateTaskWizardReview(modal, form, runPreview) {
+    const assignment = form.elements.assignment_type;
+    const schedule = form.elements.type;
+    modal.querySelector("[data-review-name]").textContent = form.elements.name.value.trim() || "Noch kein Name";
+    modal.querySelector("[data-review-assignment]").textContent = assignment.options[assignment.selectedIndex]?.textContent || "–";
+    modal.querySelector("[data-review-schedule]").textContent = schedule.options[schedule.selectedIndex]?.textContent || "–";
+    const reviewPreview = modal.querySelector("[data-review-preview]");
+    reviewPreview.textContent = "Regel wird geprüft …";
+    await runPreview();
+    const source = modal.querySelector(".preview-result");
+    reviewPreview.textContent = source.textContent || "Für diese Konfiguration ist noch keine Vorschau verfügbar.";
+    reviewPreview.classList.toggle("error", source.classList.contains("error"));
+  }
+
+  _focusTaskWizardStep(modal, form, step) {
+    modal.querySelector(".task-editor--wizard").scrollTo({ top: 0, behavior: "smooth" });
+    const selector = `[data-task-step="${step}"] input:not([type=hidden]),[data-task-step="${step}"] select,[data-task-step="${step}"] textarea,[data-task-step="${step}"] button`;
+    requestAnimationFrame(() => form.querySelector(selector)?.focus());
   }
 
   _editorTask(id, options) {
@@ -3086,7 +3201,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _bindTaskPreview(modal, taskId) {
-    modal.querySelector("[data-preview-task]").onclick = async () => {
+    const runPreview = async () => {
       const output = modal.querySelector(".task-preview .preview-result");
       try {
         const { value } = this._readTaskForm(modal.querySelector("#task-form"));
@@ -3107,6 +3222,8 @@ class HouseholdTasksPanel extends HTMLElement {
         output.className = "preview-result error";
       }
     };
+    modal.querySelector("[data-preview-task]").onclick = runPreview;
+    return runPreview;
   }
 
   _previewScenario(modal, values) {
@@ -4138,7 +4255,7 @@ class HouseholdTasksPanel extends HTMLElement {
       header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}h1{font-size:30px;margin:2px 0}h2{margin:0;font-size:24px}h3{margin:0}p{color:var(--secondary-text-color,#6b7280)}.header-actions{display:flex;align-items:center;gap:8px}.mode-badge{padding:6px 9px;border-radius:99px;background:#fff1bf;color:#765600;font-size:12px;font-weight:800}
       .eyebrow{font-size:11px;letter-spacing:.13em;font-weight:800;color:var(--ht-accent-text);text-transform:uppercase}
       nav{display:flex;gap:4px;border-bottom:1px solid var(--divider-color,#ddd);overflow:auto;margin-bottom:24px}nav a{border:0;background:none;padding:12px 16px;color:var(--secondary-text-color);cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent;text-decoration:none}nav a.active{color:var(--ht-accent-text);border-color:var(--primary-color);font-weight:700}
-      button{border:1px solid var(--divider-color,#d6d9de);border-radius:10px;padding:9px 14px;background:var(--card-background-color,#fff);cursor:pointer;font-weight:650}button:hover{filter:brightness(.97)}button:disabled{opacity:.55}.primary{background:color-mix(in srgb,var(--primary-color,#03a9f4) 88%,#000);color:var(--text-primary-color,#fff);border-color:transparent}.icon-button{width:42px;height:42px;border-radius:50%;font-size:22px;padding:0}
+      button{border:1px solid var(--divider-color,#d6d9de);border-radius:10px;padding:9px 14px;background:var(--card-background-color,#fff);cursor:pointer;font-weight:650}button:hover{filter:brightness(.97)}button:disabled{opacity:.55}.primary{background:color-mix(in srgb,var(--primary-color,#03a9f4) 88%,#000);color:var(--text-primary-color,#fff);border-color:transparent}.icon-button{width:44px;height:44px;border-radius:50%;font-size:22px;padding:0}
       .context-add{position:fixed;z-index:20;right:28px;bottom:28px;width:56px;height:56px;border:0;border-radius:50%;background:var(--primary-color);color:#fff;font-size:28px;box-shadow:0 6px 20px #0004}
       .hero{display:flex;justify-content:space-between;align-items:center;border-radius:20px;padding:24px 28px;background:linear-gradient(135deg,var(--primary-color,#03a9f4),#536dfe);color:#fff;margin-bottom:16px}.hero .eyebrow,.hero p{color:#e9f7ff}.hero h2{font-size:28px}.hero-side{display:flex;align-items:center;gap:18px}.hero-button{background:#fff;color:#3347ba;border:0}.score{font-size:36px;font-weight:800;text-align:center}.score small{display:block;font-size:12px;font-weight:500}
       .people-strip{display:flex;gap:9px;overflow:auto;padding:4px 0 18px}.person-chip{display:flex;align-items:center;gap:8px;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:99px;padding:6px 10px 6px 6px;white-space:nowrap}.person-chip b{color:var(--secondary-text-color)}
@@ -4161,15 +4278,16 @@ class HouseholdTasksPanel extends HTMLElement {
       .test-line,.test-actions,.resource-test-line,.task-preview{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}.preview-result{font-size:12px;color:var(--secondary-text-color);line-height:1.45}.preview-result.match{color:#17752a}.preview-result.error{color:var(--error-color,#db4437)}.inline-create{border-top:1px solid var(--divider-color,#ddd);padding-top:10px}.inline-person-form,.inline-follow-up-form{margin-top:10px;padding:12px;border-radius:10px;background:var(--secondary-background-color,#f3f4f6)}
       .resource-list{display:grid;gap:12px;margin:14px 0}.resource-row{border:1px solid var(--divider-color,#bbb);border-radius:12px;padding:13px;background:var(--secondary-background-color,#f3f4f6)}.resource-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.resource-head .remove-row{width:38px;height:38px;padding:0;color:var(--error-color,#db4437);font-size:20px}
       .empty{text-align:center;padding:50px 20px}.big-icon{font-size:42px;color:#25a244}.spinner{width:32px;height:32px;border:3px solid var(--divider-color);border-top-color:var(--primary-color);border-radius:50%;animation:spin .8s linear infinite;margin:auto}@keyframes spin{to{transform:rotate(360deg)}}
-      .backdrop{position:fixed;z-index:1000;inset:0;background:#0009;display:grid;place-items:center;padding:18px}.modal-card{width:min(760px,100%);max-height:92vh;overflow:auto;background:var(--card-background-color,#fff);border-radius:20px;padding:22px}.modal-card.small{width:min(580px,100%)}.modal-head{display:flex;justify-content:space-between;align-items:start;margin-bottom:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.form-grid label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:650}.form-grid .full{grid-column:1/-1}.form-grid .checkbox{flex-direction:row;flex-wrap:wrap;align-items:center;align-self:end;min-height:42px}.form-grid input,.form-grid select,.form-grid textarea{width:100%;padding:10px 11px;border:1px solid var(--divider-color,#bbb);border-radius:9px;background:var(--primary-background-color,#fafafa)}.form-grid [aria-invalid="true"]{border-color:var(--error-color,#db4437)}.checkbox input{width:auto}.checkbox .hint{flex-basis:100%;padding-left:24px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:5px}.hidden{display:none!important}.hint{display:block;color:var(--secondary-text-color,#6b7280);font-size:12px;font-weight:400;line-height:1.45;margin:2px 0}.field-help{max-width:68ch}.field-error{display:block;color:var(--error-color,#db4437);font-size:12px;font-weight:650}.group-help{margin-top:-8px}.weekdays{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.weekdays input{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.weekdays span{display:grid;place-items:center;width:40px;height:36px;border:1px solid var(--divider-color);border-radius:9px;cursor:pointer}.weekdays input:focus-visible+span{outline:3px solid color-mix(in srgb,var(--primary-color,#03a9f4) 70%,white);outline-offset:2px}.weekdays input:checked+span{background:var(--primary-color);color:#fff;border-color:var(--primary-color)}.advanced-fields{border:1px solid var(--divider-color);border-radius:12px;padding:12px}.advanced-fields>summary{cursor:pointer;font-weight:750}.advanced-grid{margin-top:15px}.setup-step{display:flex!important;flex-direction:row!important;align-items:center;gap:10px!important;border-bottom:1px solid var(--divider-color);padding-bottom:8px}.setup-step>b{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--primary-color);color:#fff}.setup-step span{display:grid}.setup-step small{font-weight:400;color:var(--secondary-text-color)}.wizard-preview,.gallery-preview{padding:12px;border-radius:10px;background:var(--secondary-background-color)}.wizard-preview p,.gallery-preview p{margin:5px 0}
+      .backdrop{position:fixed;z-index:1000;inset:0;background:#0009;display:grid;place-items:center;padding:18px}.modal-card{width:min(760px,100%);max-height:92vh;overflow:auto;background:var(--card-background-color,#fff);border-radius:20px;padding:22px}.modal-card.small{width:min(580px,100%)}.modal-head{display:flex;justify-content:space-between;align-items:start;margin-bottom:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.form-grid label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:650}.form-grid .full{grid-column:1/-1}.form-grid .checkbox{flex-direction:row;flex-wrap:wrap;align-items:center;align-self:end;min-height:42px}.form-grid input,.form-grid select,.form-grid textarea{width:100%;padding:10px 11px;border:1px solid var(--divider-color,#bbb);border-radius:9px;background:var(--primary-background-color,#fafafa)}.form-grid [aria-invalid="true"]{border-color:var(--error-color,#db4437)}.checkbox input{width:auto}.checkbox .hint{flex-basis:100%;padding-left:24px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:5px}.hidden{display:none!important}.hint{display:block;color:var(--secondary-text-color,#6b7280);font-size:12px;font-weight:400;line-height:1.45;margin:2px 0}.field-help{max-width:68ch}.field-error{display:block;color:var(--error-color,#db4437);font-size:12px;font-weight:650}.group-help{margin-top:-8px}.weekdays{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.weekdays input{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.weekdays span{display:grid;place-items:center;width:40px;height:36px;border:1px solid var(--divider-color);border-radius:9px;cursor:pointer}.weekdays input:focus-visible+span{outline:3px solid color-mix(in srgb,var(--primary-color,#03a9f4) 70%,white);outline-offset:2px}.weekdays input:checked+span{background:color-mix(in srgb,var(--primary-color,#03a9f4) 88%,#000);color:#fff;border-color:var(--primary-color)}.advanced-fields{border:1px solid var(--divider-color);border-radius:12px;padding:12px}.advanced-fields>summary{cursor:pointer;font-weight:750}.advanced-grid{margin-top:15px}.setup-step{display:flex!important;flex-direction:row!important;align-items:center;gap:10px!important;border-bottom:1px solid var(--divider-color);padding-bottom:8px}.setup-step>b{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--primary-color);color:#fff}.setup-step span{display:grid}.setup-step small{font-weight:400;color:var(--secondary-text-color)}.wizard-preview,.gallery-preview{padding:12px;border-radius:10px;background:var(--secondary-background-color)}.wizard-preview p,.gallery-preview p{margin:5px 0}
       .field-label{display:block;font-size:13px;font-weight:650;margin-bottom:7px}.candidate-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:5px 12px;padding:7px 10px;border:1px solid var(--divider-color,#bbb);border-radius:9px}.candidate-grid .checkbox{min-height:32px;font-weight:500}
+      .task-wizard-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:0;margin:0 0 22px;list-style:none}.task-wizard-steps button{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;padding:8px 6px;border-color:transparent;background:var(--secondary-background-color);font-size:12px}.task-wizard-steps button span{display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;background:var(--divider-color);font-weight:800}.task-wizard-steps button[aria-current=step]{border-color:var(--primary-color);background:color-mix(in srgb,var(--primary-color) 10%,var(--card-background-color));color:var(--ht-accent-text)}.task-wizard-steps button[aria-current=step] span{background:var(--primary-color);color:#fff}.task-wizard-steps button:disabled{cursor:not-allowed}.task-editor--wizard:not(.wizard-ready) [data-task-step]:not([data-task-step="1"]),.wizard-step-hidden{display:none!important}.task-editor-actions{position:sticky;z-index:4;bottom:-22px;margin-top:14px;padding:14px 0 0;background:var(--card-background-color);border-top:1px solid var(--divider-color)}.task-wizard-review{display:grid;gap:14px}.task-wizard-review h3{font-size:22px}.wizard-review-facts{display:grid;gap:0;margin:0;border:1px solid var(--divider-color);border-radius:12px;overflow:hidden}.wizard-review-facts div{display:grid;grid-template-columns:minmax(120px,1fr) 2fr;gap:16px;padding:12px 14px;border-top:1px solid var(--divider-color)}.wizard-review-facts div:first-child{border-top:0}.wizard-review-facts dt{margin:0}.wizard-review-facts dd{margin:0;font-weight:700;text-align:right}.wizard-review-preview{display:grid;gap:7px;padding:14px;border-radius:12px;background:var(--secondary-background-color)}.wizard-review-preview output{line-height:1.5}.wizard-review-preview output.error{color:var(--error-color)}
       .repeatable-editor{border:1px solid var(--divider-color,#bbb);border-radius:11px;padding:12px}.repeatable-list{display:grid;gap:9px}.repeatable-row{display:grid;grid-template-columns:minmax(150px,2fr) minmax(130px,1fr) auto;gap:9px;align-items:end;padding:10px;background:var(--secondary-background-color,#f3f4f6);border-radius:9px}.repeatable-row.trigger-row{grid-template-columns:minmax(180px,2fr) repeat(3,minmax(105px,1fr)) auto}.repeatable-row .remove-row{width:38px;height:38px;padding:0;color:var(--error-color,#db4437);font-size:20px}.add-row{margin-top:10px}.empty-row{margin:2px 0 8px;font-size:13px;font-style:italic}
       .repeatable-row.escalation-row{grid-template-columns:repeat(4,minmax(120px,1fr)) minmax(150px,1fr) auto}
       .command-card{width:min(680px,100%)}.command-input{width:100%;padding:13px;border:1px solid var(--divider-color);border-radius:11px;background:var(--primary-background-color)}.command-results{display:grid;gap:4px;margin-top:10px;max-height:55vh;overflow:auto}.command-result{display:grid;grid-template-columns:80px 1fr;align-items:center;text-align:left}.command-result>span:last-child{display:grid}.command-result small{color:var(--secondary-text-color);overflow-wrap:anywhere}.command-type{font-size:10px;color:var(--ht-accent-text);font-weight:800}.mobile-quick{display:none}
       .toast{position:fixed;z-index:2000;left:50%;bottom:28px;transform:translateX(-50%);background:#263238;color:#fff;padding:12px 18px;border-radius:10px;box-shadow:0 4px 20px #0005}.toast.error{background:var(--error-color,#db4437)}
       .history-main{flex:1;min-width:0}.history-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.history-evidence,.history-count{display:inline-flex;padding:3px 8px;border-radius:99px;font-size:12px}.history-count,.has-evidence{background:color-mix(in srgb,var(--primary-color) 15%,transparent);color:var(--ht-accent-text)}.no-evidence{background:var(--secondary-background-color);color:var(--secondary-text-color)}.check{flex:0 0 34px}.history-record>section,.history-record-grid>section{margin:16px 0;padding:14px;border:1px solid var(--divider-color);border-radius:12px}.history-record-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.history-record-grid>section{margin:0}.history-facts{display:grid;gap:7px;margin:0}.history-facts div{display:flex;justify-content:space-between;gap:12px}.history-facts dt{color:var(--secondary-text-color)}.history-facts dd{margin:0;text-align:right}.preserve-lines{white-space:pre-wrap}.history-checklist{display:grid;gap:7px}.history-checklist>div{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center}.history-checklist small,.task-event-list .event-details{color:var(--secondary-text-color)}.task-event-list .event-details{grid-column:1/-1}.readonly-attachments>div{justify-content:flex-start}
       @media(max-width:650px){.history-record-grid{grid-template-columns:1fr}.history-row{align-items:flex-start;flex-wrap:wrap}.history-actions{width:100%;padding-left:47px;justify-content:flex-start}.history-checklist>div{grid-template-columns:auto 1fr}.history-checklist small{grid-column:2}}
-      @media(max-width:650px){main{padding:16px 12px 82px}header{margin-bottom:8px;align-items:flex-start}h1{font-size:24px}.header-actions{flex-wrap:wrap;justify-content:flex-end}.search-button{font-size:0}.search-button::after{content:"⌕";font-size:20px}.mode-badge{order:-1}nav{margin-bottom:16px}.hero{padding:20px;align-items:flex-start}.hero h2{font-size:21px}.hero-side{flex-direction:column-reverse;align-items:flex-end;gap:10px}.hero-button{padding:8px 10px}.context-add{right:18px;bottom:18px}.mobile-quick{display:grid;gap:6px;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:14px;padding:13px;margin-bottom:14px}.mobile-quick button{display:flex;justify-content:space-between;gap:8px;text-align:left}.mobile-quick small{color:var(--secondary-text-color)}.cards,.gallery-strip{grid-template-columns:1fr}.task-card{align-items:flex-start}.occurrence-actions{flex-direction:column;align-items:stretch}.complete{padding:8px}.form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}.modal-card{padding:18px 15px}.toolbar{align-items:flex-start;flex-direction:column;gap:12px}.toolbar-actions{width:100%}.people-grid{grid-template-columns:1fr}.ranking-row{grid-template-columns:27px 34px 1fr auto}.ranking-row .avatar{width:34px;height:34px}.month-points{display:none}.ranking-head>span{display:none}.repeatable-row,.repeatable-row.trigger-row,.repeatable-row.escalation-row,.reference-controls,.smart-capture{grid-template-columns:1fr}.repeatable-row .remove-row{justify-self:end}.bulk-toolbar{position:static}.week-board{grid-template-columns:repeat(7,80vw)}}
+      @media(max-width:650px){main{padding:16px 12px 82px}header{margin-bottom:8px;align-items:flex-start}h1{font-size:24px}.header-actions{flex-wrap:wrap;justify-content:flex-end}.search-button{font-size:0}.search-button::after{content:"⌕";font-size:20px}.mode-badge{order:-1}nav{margin-bottom:16px}.hero{padding:20px;align-items:flex-start}.hero h2{font-size:21px}.hero-side{flex-direction:column-reverse;align-items:flex-end;gap:10px}.hero-button{padding:8px 10px}.context-add{right:18px;bottom:18px}.mobile-quick{display:grid;gap:6px;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:14px;padding:13px;margin-bottom:14px}.mobile-quick button{display:flex;justify-content:space-between;gap:8px;text-align:left}.mobile-quick small{color:var(--secondary-text-color)}.cards,.gallery-strip{grid-template-columns:1fr}.task-card{align-items:flex-start}.occurrence-actions{flex-direction:column;align-items:stretch}.complete{padding:8px}.form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}.modal-card{padding:18px 15px}.toolbar{align-items:flex-start;flex-direction:column;gap:12px}.toolbar-actions{width:100%}.people-grid{grid-template-columns:1fr}.ranking-row{grid-template-columns:27px 34px 1fr auto}.ranking-row .avatar{width:34px;height:34px}.month-points{display:none}.ranking-head>span{display:none}.repeatable-row,.repeatable-row.trigger-row,.repeatable-row.escalation-row,.reference-controls,.smart-capture{grid-template-columns:1fr}.repeatable-row .remove-row{justify-self:end}.bulk-toolbar{position:static}.week-board{grid-template-columns:repeat(7,80vw)}.task-wizard-steps{grid-template-columns:repeat(5,44px);justify-content:space-between;gap:2px}.task-wizard-steps button{width:44px;height:44px;padding:0;font-size:0}.task-wizard-steps button span{font-size:12px}.task-editor-actions{bottom:-18px;display:grid;grid-template-columns:1fr 1fr;padding-bottom:1px}.task-editor-actions .cancel{grid-column:1}.task-editor-actions .primary:last-child{grid-column:2}.wizard-review-facts div{grid-template-columns:1fr}.wizard-review-facts dd{text-align:left}}
     `;
   }
 }
