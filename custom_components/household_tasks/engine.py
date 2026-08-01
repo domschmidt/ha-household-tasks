@@ -113,6 +113,7 @@ from .workflows import (
 
 _LOGGER = logging.getLogger(__name__)
 _PANEL_PATH = f"/{PANEL_URL}"
+_PANEL_MINE_PATH = f"{_PANEL_PATH}?view=mine"
 _TASK_NOT_OPEN = "Die Aufgabe ist nicht mehr offen."
 _HELP_NEEDED = "Hilfe benötigt"
 _OPEN_TASK = "Aufgabe öffnen"
@@ -3334,7 +3335,7 @@ class HouseholdTaskEngine:
                         "message": messages[result],
                         "data": {
                             "tag": f"household_tasks_nfc_{tag_id}",
-                            "url": _PANEL_PATH,
+                            "url": _PANEL_MINE_PATH,
                         },
                     },
                     blocking=True,
@@ -4531,7 +4532,7 @@ class HouseholdTaskEngine:
                     "message": entry["title"],
                     "data": {
                         "tag": f"household_task_{entry['occurrence_id']}",
-                        "url": _PANEL_PATH,
+                        "url": _PANEL_MINE_PATH,
                         "actions": [
                             {
                                 "action": (
@@ -4544,7 +4545,7 @@ class HouseholdTaskEngine:
                             {
                                 "action": "URI",
                                 "title": _OPEN_TASK,
-                                "uri": _PANEL_PATH,
+                                "uri": _PANEL_MINE_PATH,
                             },
                         ],
                     },
@@ -4567,7 +4568,7 @@ class HouseholdTaskEngine:
             {
                 "action": "URI",
                 "title": "Meine Aufgaben öffnen",
-                "uri": _PANEL_PATH,
+                "uri": _PANEL_MINE_PATH,
             }
         )
         return [
@@ -4576,7 +4577,7 @@ class HouseholdTaskEngine:
                 "message": message,
                 "data": {
                     "tag": f"household_tasks_digest_{person_id}",
-                    "url": _PANEL_PATH,
+                    "url": _PANEL_MINE_PATH,
                     "actions": actions,
                 },
             }
@@ -5767,7 +5768,11 @@ class HouseholdTaskEngine:
         claim_help_for: str | None,
     ) -> list[dict[str, Any]]:
         """Build mobile actions for help, market, or assigned tasks."""
-        open_action = {"action": "URI", "title": _OPEN_TASK, "uri": _PANEL_PATH}
+        open_action = {
+            "action": "URI",
+            "title": _OPEN_TASK,
+            "uri": _PANEL_MINE_PATH,
+        }
         if claim_help_for:
             return [
                 {
@@ -5831,7 +5836,11 @@ class HouseholdTaskEngine:
                 {
                     "title": title,
                     "message": message,
-                    "data": {"tag": tag, "url": _PANEL_PATH, "actions": actions},
+                    "data": {
+                        "tag": tag,
+                        "url": _PANEL_MINE_PATH,
+                        "actions": actions,
+                    },
                 },
                 blocking=True,
             )

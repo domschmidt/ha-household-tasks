@@ -490,6 +490,25 @@ Aktionen, gewichtet nach eigener Zuständigkeit, Priorität und Fälligkeit.
 
 ## Persönlicher Arbeitsbereich und Wochenplanung
 
+Jeder Hauptbereich besitzt eine direkt teilbare URL. Der Parameter `view`
+bleibt beim Neuladen erhalten und unterstützt auch die Zurück-/Vorwärts-Tasten
+des Browsers:
+
+| Bereich | URL |
+| --- | --- |
+| Heute | `/haushaltsaufgaben?view=today` |
+| Meine Aufgaben | `/haushaltsaufgaben?view=mine` |
+| Wochenplan | `/haushaltsaufgaben?view=week` |
+| Aufgaben | `/haushaltsaufgaben?view=tasks` |
+| Personen | `/haushaltsaufgaben?view=people` |
+| Auswertung | `/haushaltsaufgaben?view=analytics` |
+| Verlauf | `/haushaltsaufgaben?view=history` |
+| Einstellungen | `/haushaltsaufgaben?view=settings` |
+
+Unbekannte `view`-Werte öffnen sicher die Heute-Ansicht. Aufgabenbezogene
+Push-Nachrichten und persönliche iOS-Widgets verlinken direkt auf
+**Meine Aufgaben**.
+
 **Meine Aufgaben** filtert automatisch auf die mit dem aktuellen
 Home-Assistant-Benutzer verknüpfte Person. Neben direkt zugewiesenen Aufgaben
 erscheinen dort angenommene Hilfen und passende offene Aufgaben. Häufig
