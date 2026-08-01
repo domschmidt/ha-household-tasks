@@ -67,6 +67,12 @@ class ProjectContractTests(unittest.TestCase):
             "_renderMobileQuickActions(",
             "_renderMine(",
             "_renderWeek(",
+            "_renderHistory(",
+            "_historyEventDetails(",
+            "_openAttachment(",
+            "has-evidence",
+            "no-evidence",
+            'data-task-history="',
             "HT_PANEL_VIEWS",
             "_viewFromLocation(",
             "_navigateToView(",
@@ -99,7 +105,8 @@ class ProjectContractTests(unittest.TestCase):
             'this._call("install_discovery"',
             'this._call("move_occurrence"',
             'this._call("create_batch"',
-            'this._call("add_attachment"',
+            'type: "household_tasks/add_attachment_chunk"',
+            'type: "household_tasks/attachment_content_chunk"',
         ):
             with self.subTest(helper=helper):
                 self.assertIn(helper, panel)

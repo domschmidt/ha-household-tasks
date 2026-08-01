@@ -21,6 +21,9 @@ const HT_PANEL_VIEW_URLS = Object.freeze({
   settings: "/haushaltsaufgaben?view=settings",
 });
 const HT_PANEL_VIEWS = new Set(Object.keys(HT_PANEL_VIEW_URLS));
+const HT_ATTACHMENT_MAX_BYTES = 20000000;
+const HT_ATTACHMENT_TOTAL_MAX_BYTES = 100000000;
+const HT_ATTACHMENT_CHUNK_BYTES = 512000;
 
 class HouseholdTasksPanel extends HTMLElement {
   constructor() {
@@ -1616,12 +1619,27 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _renderHistory() {
-    const resolved = this._data.occurrences.filter((o) => o.resolved).slice(0, 60);
+    const resolved = this._data.occurrences
+      .filter((item) => item.resolved)
+      .sort((a, b) => new Date(b.resolved_at) - new Date(a.resolved_at))
+      .slice(0, 60);
     return `<div class="toolbar"><div><h2>Verlauf</h2><p>Erledigte Aufgaben der letzten 90 Tage</p></div></div>
-      ${resolved.length ? `<div class="timeline">${resolved.map((item) => `
-        <div class="history-row"><span class="check">✓</span><div><h3>${this._e(item.title)}</h3>
-        <p>${this._t("Erledigt")} ${new Date(item.resolved_at).toLocaleString(this._locale(), { dateStyle: "medium", timeStyle: "short" })}
-        ${item.completed_by && this._data.people[item.completed_by] ? ` · ${householdTasksLocale(this._hass) === "de" ? "von" : "by"} ${this._e(this._data.people[item.completed_by].name)}` : ""}</p></div></div>`).join("")}</div>`
+      ${resolved.length ? `<div class="timeline">${resolved.map((item) => {
+        const attachments = this._data.attachments?.[item.id] || [];
+        const evidence = attachments.length
+          ? `<span class="history-evidence has-evidence" aria-label="${attachments.length} Anhänge vorhanden">📎 ${attachments.length}</span>`
+          : `<span class="history-evidence no-evidence">Ohne Anhang</span>`;
+        const status = item.status === "cancelled" ? "Abgebrochen" : this._t("Erledigt");
+        let completedBy = "";
+        if (item.completed_by && this._data.people[item.completed_by]) {
+          const preposition = householdTasksLocale(this._hass) === "de" ? "von" : "by";
+          completedBy = ` · ${preposition} ${this._e(this._data.people[item.completed_by].name)}`;
+        }
+        return `<div class="history-row"><span class="check">✓</span><div class="history-main"><h3>${this._e(this._plainTitle(item.title))}</h3>
+        <p>${status} ${new Date(item.resolved_at).toLocaleString(this._locale(), { dateStyle: "medium", timeStyle: "short" })}
+        ${completedBy}</p></div>
+        <div class="history-actions">${evidence}<button data-task-history="${this._e(item.id)}">Akte öffnen</button></div></div>`;
+      }).join("")}</div>`
       : `<div class="empty card"><h2>Noch kein Verlauf</h2><p>Erledigte Aufgaben erscheinen hier.</p></div>`}`;
   }
 
@@ -2177,7 +2195,9 @@ class HouseholdTasksPanel extends HTMLElement {
 
   async _showTaskHistory(occurrenceId) {
     const occurrence = this._data.occurrences.find((item) => item.id === occurrenceId);
+    if (!occurrence) return this._toast("Aufgabe nicht gefunden.", true);
     const events = await this._hass.callWS({ type: "household_tasks/task_history", occurrence_id: occurrenceId });
+    const attachments = this._data.attachments?.[occurrenceId] || [];
     const modal = this.shadowRoot.querySelector("#modal");
     const returnFocus = this.shadowRoot.activeElement;
     const labels = {
@@ -2190,15 +2210,117 @@ class HouseholdTasksPanel extends HTMLElement {
       task_cancelled: "Aufgabe abgebrochen",
       task_claimed: "Aufgabe übernommen",
     };
-    modal.innerHTML = `<div class="backdrop"><div class="modal-card small">
+    const assignee = this._data.people[occurrence.assignee]?.name || "Offen";
+    const completedBy = this._data.people[occurrence.completed_by]?.name || occurrence.completed_by || "–";
+    const description = occurrence.description || occurrence.task?.description || "Keine Beschreibung hinterlegt.";
+    const checklistMarkup = this._historyChecklistMarkup(occurrence.checklist || []);
+    const eventMarkup = this._historyEventsMarkup(events, labels);
+    const attachmentMarkup = this._historyAttachmentsMarkup(attachments);
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card history-record">
       <div class="modal-head"><div><div class="eyebrow">AUFGABENAKTE</div><h2>${this._e(this._plainTitle(occurrence?.title || "Aufgabe"))}</h2></div><button class="icon-button close">×</button></div>
-      <div class="task-event-list">${[...events].reverse().map((event) => `<article><strong>${this._e(labels[event.type] || event.type)}</strong><time>${new Date(event.occurred_at).toLocaleString(this._locale())}</time>${event.actor ? `<small>${this._e(this._data.people[event.actor]?.name || event.actor)}</small>` : ""}</article>`).join("") || "<p>Noch keine Verlaufsdaten.</p>"}</div>
+      <div class="history-record-grid">
+        <section><h3>Abschlussdetails</h3><dl class="history-facts">
+          <div><dt>Status</dt><dd>${occurrence.status === "cancelled" ? "Abgebrochen" : "Erledigt"}</dd></div>
+          <div><dt>Zuständig</dt><dd>${this._e(assignee)}</dd></div>
+          <div><dt>Abgeschlossen von</dt><dd>${this._e(completedBy)}</dd></div>
+          <div><dt>Erstellt</dt><dd>${occurrence.created_at ? new Date(occurrence.created_at).toLocaleString(this._locale()) : "–"}</dd></div>
+          <div><dt>Fällig</dt><dd>${occurrence.due ? new Date(occurrence.due).toLocaleString(this._locale()) : "–"}</dd></div>
+          <div><dt>Abgeschlossen</dt><dd>${occurrence.resolved_at ? new Date(occurrence.resolved_at).toLocaleString(this._locale()) : "–"}</dd></div>
+        </dl></section>
+        <section><h3>Beschreibung</h3><p class="preserve-lines">${this._e(description)}</p></section>
+      </div>
+      <section><h3>Checkliste</h3><div class="history-checklist">${checklistMarkup}</div></section>
+      <section><h3>Fotos und Belege <span class="history-count">${attachments.length}</span></h3><div class="attachment-list readonly-attachments">${attachmentMarkup}</div></section>
+      <section><h3>Änderungsverlauf</h3><div class="task-event-list">${eventMarkup}</div></section>
       <div class="modal-actions"><button type="button" class="close-bottom">Schließen</button></div>
     </div></div>`;
     const close = () => { modal.innerHTML = ""; returnFocus?.focus(); };
     modal.querySelector(".close").onclick = close;
     modal.querySelector(".close-bottom").onclick = close;
     this._activateDialog(modal, close);
+    modal.querySelectorAll("[data-open-attachment]").forEach((button) => button.onclick = () => this._openAttachment(occurrenceId, button.dataset.openAttachment));
+  }
+
+  _historyEventsMarkup(events, labels) {
+    return [...events].reverse().map((event) => {
+      const details = this._historyEventDetails(event.details);
+      const actor = event.actor ? this._data.people[event.actor]?.name || event.actor : "";
+      const actorMarkup = actor ? `<small>${this._e(actor)}</small>` : "";
+      const detailsMarkup = details ? `<small class="event-details">${this._e(details)}</small>` : "";
+      return `<article><strong>${this._e(labels[event.type] || event.type)}</strong><time>${new Date(event.occurred_at).toLocaleString(this._locale())}</time>${actorMarkup}${detailsMarkup}</article>`;
+    }).join("") || "<p>Noch keine Verlaufsdaten.</p>";
+  }
+
+  _historyAttachmentsMarkup(attachments) {
+    return attachments.map((item) => `<div><button data-open-attachment="${this._e(item.id)}">${this._e(item.name)} <small>${this._formatFileSize(item.size)}</small></button></div>`).join("") || "<p>Für diese Aufgabe wurde kein Anhang hinterlegt.</p>";
+  }
+
+  _historyChecklistMarkup(checklist) {
+    return checklist.map((item) => {
+      const completedAt = item.completed_at ? new Date(item.completed_at).toLocaleString(this._locale()) : "";
+      const completedAtMarkup = completedAt ? `<small>${completedAt}</small>` : "";
+      return `<div><span aria-hidden="true">${item.completed ? "✓" : "○"}</span><span>${this._e(item.title)}</span>${completedAtMarkup}</div>`;
+    }).join("") || "<p>Keine Checkliste hinterlegt.</p>";
+  }
+
+  _historyEventDetails(details) {
+    if (!details || typeof details !== "object") return "";
+    const labels = { status: "Status", item_id: "Checklistenpunkt", dependencies: "Abhängigkeiten", due: "Fällig", from: "Von", to: "An", reason: "Grund", instruction: "Verschoben", kind: "Art", task_id: "Vorlage", completed_dependency: "Erledigte Abhängigkeit" };
+    return Object.entries(details).map(([key, value]) => {
+      const rendered = Array.isArray(value) ? value.join(", ") : String(value ?? "");
+      return `${labels[key] || key}: ${rendered}`;
+    }).join(" · ");
+  }
+
+  _formatFileSize(size) {
+    const bytes = Number(size || 0);
+    return bytes >= 1000000 ? `${(bytes / 1000000).toFixed(1)} MB` : `${Math.ceil(bytes / 1000)} KB`;
+  }
+
+  async _openAttachment(occurrenceId, attachmentId) {
+    let offset = 0;
+    let item;
+    const chunks = [];
+    do {
+      item = await this._hass.callWS({ type: "household_tasks/attachment_content_chunk", occurrence_id: occurrenceId, attachment_id: attachmentId, offset });
+      chunks.push(item.content);
+      offset = item.next_offset;
+    } while (!item.complete);
+    const binary = atob(chunks.join(""));
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.codePointAt(index);
+    const url = URL.createObjectURL(new Blob([bytes], { type: item.mime_type }));
+    window.open(url, "_blank", "noopener");
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  _attachmentChunkBase64(bytes) {
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 32768) {
+      binary += String.fromCodePoint(...bytes.subarray(offset, offset + 32768));
+    }
+    return btoa(binary);
+  }
+
+  async _uploadAttachment(occurrenceId, file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const totalChunks = Math.ceil(bytes.length / HT_ATTACHMENT_CHUNK_BYTES);
+    const uploadId = globalThis.crypto.randomUUID();
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const start = chunkIndex * HT_ATTACHMENT_CHUNK_BYTES;
+      const content = this._attachmentChunkBase64(bytes.subarray(start, start + HT_ATTACHMENT_CHUNK_BYTES));
+      await this._hass.callWS({
+        type: "household_tasks/add_attachment_chunk",
+        occurrence_id: occurrenceId,
+        upload_id: uploadId,
+        name: file.name,
+        mime_type: file.type,
+        chunk_index: chunkIndex,
+        total_chunks: totalChunks,
+        content,
+      });
+    }
+    await this._load();
   }
 
   _showAttachments(occurrenceId) {
@@ -2207,9 +2329,9 @@ class HouseholdTasksPanel extends HTMLElement {
     const returnFocus = this.shadowRoot.activeElement;
     modal.innerHTML = `<div class="backdrop"><div class="modal-card small">
       <div class="modal-head"><div><div class="eyebrow">DOKUMENTATION</div><h2>Fotos und Belege</h2></div><button class="icon-button close">×</button></div>
-      <div class="attachment-list">${items.map((item) => `<div><button data-open-attachment="${this._e(item.id)}">${this._e(item.name)} <small>${Math.ceil(item.size / 1024)} KB</small></button><button data-delete-attachment="${this._e(item.id)}" aria-label="Anhang löschen">×</button></div>`).join("") || "<p>Noch keine Anhänge.</p>"}</div>
+      <div class="attachment-list">${items.map((item) => `<div><button data-open-attachment="${this._e(item.id)}">${this._e(item.name)} <small>${this._formatFileSize(item.size)}</small></button><button data-delete-attachment="${this._e(item.id)}" aria-label="Anhang löschen">×</button></div>`).join("") || "<p>Noch keine Anhänge.</p>"}</div>
       <label>Datei hinzufügen<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" data-attachment-file></label>
-      <p class="hint">Lokal in Home Assistant gespeichert, maximal 750 KB pro Datei und zehn Dateien je Aufgabe.</p>
+      <p class="hint">Lokal in Home Assistant gespeichert, maximal 20 MB pro Datei, 100 MB und zehn Dateien je Aufgabe.</p>
       <div class="modal-actions"><button type="button" class="close-bottom">Schließen</button></div>
     </div></div>`;
     const close = () => { modal.innerHTML = ""; returnFocus?.focus(); };
@@ -2219,25 +2341,14 @@ class HouseholdTasksPanel extends HTMLElement {
     modal.querySelector("[data-attachment-file]").onchange = async (event) => {
       const file = event.target.files[0];
       if (!file) return;
-      if (file.size > 750000) return this._toast("Datei ist größer als 750 KB.", true);
-      const content = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = typeof reader.result === "string" ? reader.result : "";
-          resolve(result.split(",")[1]);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      await this._call("add_attachment", { occurrence_id: occurrenceId, name: file.name, mime_type: file.type, content });
+      if (file.size > HT_ATTACHMENT_MAX_BYTES) return this._toast("Datei ist größer als 20 MB.", true);
+      const totalSize = items.reduce((total, item) => total + Number(item.size || 0), 0);
+      if (totalSize + file.size > HT_ATTACHMENT_TOTAL_MAX_BYTES) return this._toast("Alle Anhänge dieser Aufgabe dürfen zusammen höchstens 100 MB groß sein.", true);
+      await this._uploadAttachment(occurrenceId, file);
       close();
       this._showAttachments(occurrenceId);
     };
-    modal.querySelectorAll("[data-open-attachment]").forEach((button) => button.onclick = async () => {
-      const item = await this._hass.callWS({ type: "household_tasks/attachment_content", occurrence_id: occurrenceId, attachment_id: button.dataset.openAttachment });
-      const url = `data:${item.mime_type};base64,${item.content}`;
-      window.open(url, "_blank", "noopener");
-    });
+    modal.querySelectorAll("[data-open-attachment]").forEach((button) => button.onclick = () => this._openAttachment(occurrenceId, button.dataset.openAttachment));
     modal.querySelectorAll("[data-delete-attachment]").forEach((button) => button.onclick = async () => {
       await this._call("delete_attachment", { occurrence_id: occurrenceId, attachment_id: button.dataset.deleteAttachment });
       close();
@@ -4056,6 +4167,8 @@ class HouseholdTasksPanel extends HTMLElement {
       .repeatable-row.escalation-row{grid-template-columns:repeat(4,minmax(120px,1fr)) minmax(150px,1fr) auto}
       .command-card{width:min(680px,100%)}.command-input{width:100%;padding:13px;border:1px solid var(--divider-color);border-radius:11px;background:var(--primary-background-color)}.command-results{display:grid;gap:4px;margin-top:10px;max-height:55vh;overflow:auto}.command-result{display:grid;grid-template-columns:80px 1fr;align-items:center;text-align:left}.command-result>span:last-child{display:grid}.command-result small{color:var(--secondary-text-color);overflow-wrap:anywhere}.command-type{font-size:10px;color:var(--primary-color);font-weight:800}.mobile-quick{display:none}
       .toast{position:fixed;z-index:2000;left:50%;bottom:28px;transform:translateX(-50%);background:#263238;color:#fff;padding:12px 18px;border-radius:10px;box-shadow:0 4px 20px #0005}.toast.error{background:var(--error-color,#db4437)}
+      .history-main{flex:1;min-width:0}.history-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.history-evidence,.history-count{display:inline-flex;padding:3px 8px;border-radius:99px;font-size:12px}.history-count,.has-evidence{background:color-mix(in srgb,var(--primary-color) 15%,transparent);color:var(--primary-color)}.no-evidence{background:var(--secondary-background-color);color:var(--secondary-text-color)}.check{flex:0 0 34px}.history-record>section,.history-record-grid>section{margin:16px 0;padding:14px;border:1px solid var(--divider-color);border-radius:12px}.history-record-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.history-record-grid>section{margin:0}.history-facts{display:grid;gap:7px;margin:0}.history-facts div{display:flex;justify-content:space-between;gap:12px}.history-facts dt{color:var(--secondary-text-color)}.history-facts dd{margin:0;text-align:right}.preserve-lines{white-space:pre-wrap}.history-checklist{display:grid;gap:7px}.history-checklist>div{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center}.history-checklist small,.task-event-list .event-details{color:var(--secondary-text-color)}.task-event-list .event-details{grid-column:1/-1}.readonly-attachments>div{justify-content:flex-start}
+      @media(max-width:650px){.history-record-grid{grid-template-columns:1fr}.history-row{align-items:flex-start;flex-wrap:wrap}.history-actions{width:100%;padding-left:47px;justify-content:flex-start}.history-checklist>div{grid-template-columns:auto 1fr}.history-checklist small{grid-column:2}}
       @media(max-width:650px){main{padding:16px 12px 82px}header{margin-bottom:8px;align-items:flex-start}h1{font-size:24px}.header-actions{flex-wrap:wrap;justify-content:flex-end}.search-button{font-size:0}.search-button::after{content:"⌕";font-size:20px}.mode-badge{order:-1}nav{margin-bottom:16px}.hero{padding:20px;align-items:flex-start}.hero h2{font-size:21px}.hero-side{flex-direction:column-reverse;align-items:flex-end;gap:10px}.hero-button{padding:8px 10px}.context-add{right:18px;bottom:18px}.mobile-quick{display:grid;gap:6px;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:14px;padding:13px;margin-bottom:14px}.mobile-quick button{display:flex;justify-content:space-between;gap:8px;text-align:left}.mobile-quick small{color:var(--secondary-text-color)}.cards,.gallery-strip{grid-template-columns:1fr}.task-card{align-items:flex-start}.occurrence-actions{flex-direction:column;align-items:stretch}.complete{padding:8px}.form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}.modal-card{padding:18px 15px}.toolbar{align-items:center}.people-grid{grid-template-columns:1fr}.ranking-row{grid-template-columns:27px 34px 1fr auto}.ranking-row .avatar{width:34px;height:34px}.month-points{display:none}.ranking-head>span{display:none}.repeatable-row,.repeatable-row.trigger-row,.repeatable-row.escalation-row,.reference-controls,.smart-capture{grid-template-columns:1fr}.repeatable-row .remove-row{justify-self:end}.bulk-toolbar{position:static}.week-board{grid-template-columns:repeat(7,80vw)}}
     `;
   }

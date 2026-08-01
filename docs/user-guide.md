@@ -623,9 +623,18 @@ Handbuch-URL und Notizen enthalten. Sie zeigt außerdem den aktuellen
 Entitätszustand und die letzten Erledigungen.
 
 Fotos, WebP-Bilder und PDF-Belege können direkt an eine Aufgabe gehängt werden.
-Sie werden im lokalen Home-Assistant-Speicher abgelegt. Pro Datei gelten 750 KB,
-pro Aufgabe maximal zehn Anhänge. Die eigentlichen Dateiinhalte werden erst beim
-Öffnen über die WebSocket-API übertragen.
+Sie werden im lokalen Home-Assistant-Speicher abgelegt. Pro Datei gelten 20 MB,
+pro Aufgabe maximal zehn Anhänge und insgesamt 100 MB. Upload und Anzeige werden
+in kleinen Blöcken übertragen, damit auch originale Smartphone-Fotos das
+Nachrichtenlimit des Home-Assistant-WebSockets nicht überschreiten. Die
+eigentlichen Dateiinhalte werden erst beim Öffnen übertragen.
+
+Im **Verlauf** zeigt jede Zeile ausdrücklich, ob und wie viele Anhänge vorhanden
+sind. **Akte öffnen** stellt Abschlussdaten, Beschreibung, Checkliste,
+Änderungsverlauf sowie Fotos und PDF-Belege schreibgeschützt zusammen. Erledigte
+Aufgaben werden 90 Tage aufbewahrt. Beim regelmäßigen Scan entfernt Household
+Tasks danach die Aufgabe zusammen mit ihren Anhängen und aufgabenbezogenen
+Audit-Ereignissen; globale Store-Ereignisse bleiben erhalten.
 
 ## Fehlervermeidung und Offline-Bedienung
 
