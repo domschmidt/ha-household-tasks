@@ -5103,24 +5103,45 @@ class HouseholdTaskEngine:
         """Map one normalized calendar title using the first matching regex."""
         normalized_summary = " ".join(str(event_summary or "").split())
         mappings = schedule.get("title_mappings", [])
-        for mapping in mappings if isinstance(mappings, list) else []:
-            if not isinstance(mapping, dict):
-                continue
-            pattern = str(mapping.get("pattern", "")).strip()
-            if len(pattern) > 256:
-                continue
-            try:
-                matches = bool(re.search(pattern, normalized_summary, re.IGNORECASE))
-            except re.error:
-                matches = False
-            if pattern and matches:
-                task_title = " ".join(str(mapping.get("task_title", "")).split())
-                return True, task_title[:255] or None
+        mapped_title = HouseholdTaskEngine._mapped_calendar_title(
+            mappings, normalized_summary
+        )
+        if mapped_title is not None:
+            return True, mapped_title
         if mappings and schedule.get("ignore_unmapped_events", True):
             return False, None
         if schedule.get("use_event_title", False) and normalized_summary:
             return True, normalized_summary[:255]
         return True, None
+
+    @staticmethod
+    def _mapped_calendar_title(mappings: Any, summary: str) -> str | None:
+        """Return the first valid mapped title for a normalized event summary."""
+        if not isinstance(mappings, list):
+            return None
+        for mapping in mappings:
+            mapped_title = HouseholdTaskEngine._calendar_mapping_result(
+                mapping, summary
+            )
+            if mapped_title is not None:
+                return mapped_title
+        return None
+
+    @staticmethod
+    def _calendar_mapping_result(mapping: Any, summary: str) -> str | None:
+        """Evaluate one defensive regex mapping without leaking regex errors."""
+        if not isinstance(mapping, dict):
+            return None
+        pattern = str(mapping.get("pattern", "")).strip()
+        if not pattern or len(pattern) > 256:
+            return None
+        try:
+            if re.search(pattern, summary, re.IGNORECASE) is None:
+                return None
+        except re.error:
+            return None
+        task_title = " ".join(str(mapping.get("task_title", "")).split())
+        return task_title[:255] or None
 
     @staticmethod
     def _validate_calendar_title_mappings(
@@ -5135,32 +5156,30 @@ class HouseholdTaskEngine:
             errors.append(f"task '{task_id}' has too many title mappings")
         seen_patterns: set[str] = set()
         for index, mapping in enumerate(mappings):
-            if not isinstance(mapping, dict):
-                errors.append(
-                    f"task '{task_id}' title mapping {index + 1} must be a mapping"
-                )
+            error, normalized = HouseholdTaskEngine._calendar_mapping_error(mapping)
+            if error:
+                errors.append(f"task '{task_id}' title mapping {index + 1} {error}")
                 continue
-            pattern = str(mapping.get("pattern", "")).strip()
-            task_title = " ".join(str(mapping.get("task_title", "")).split())
-            if not pattern or not task_title:
-                errors.append(
-                    f"task '{task_id}' title mapping {index + 1} needs pattern and title"
-                )
-                continue
-            if len(pattern) > 256 or len(task_title) > 255:
-                errors.append(f"task '{task_id}' title mapping {index + 1} is too long")
-                continue
-            try:
-                re.compile(pattern, re.IGNORECASE)
-            except re.error:
-                errors.append(
-                    f"task '{task_id}' title mapping {index + 1} has invalid regex"
-                )
-                continue
-            normalized = pattern.casefold()
             if normalized in seen_patterns:
                 errors.append(f"task '{task_id}' has duplicate calendar title patterns")
             seen_patterns.add(normalized)
+
+    @staticmethod
+    def _calendar_mapping_error(mapping: Any) -> tuple[str | None, str]:
+        """Return a validation error and normalized identity for one mapping."""
+        if not isinstance(mapping, dict):
+            return "must be a mapping", ""
+        pattern = str(mapping.get("pattern", "")).strip()
+        task_title = " ".join(str(mapping.get("task_title", "")).split())
+        if not pattern or not task_title:
+            return "needs pattern and title", ""
+        if len(pattern) > 256 or len(task_title) > 255:
+            return "is too long", ""
+        try:
+            re.compile(pattern, re.IGNORECASE)
+        except re.error:
+            return "has invalid regex", ""
+        return None, pattern.casefold()
 
     @staticmethod
     def _occurrence_description(

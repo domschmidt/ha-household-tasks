@@ -372,7 +372,6 @@ const EN = {
   "gleich": "equals",
   "ungleich": "does not equal",
   "Grenzwert": "Threshold",
-  "Aufgabenname": "Task name",
   "Fällig nach": "Due after",
   "Nach Erholung erledigen": "Complete after recovery",
   "Anwesenheit berücksichtigen": "Consider presence",
