@@ -101,9 +101,23 @@ class HouseholdTasksPanel extends HTMLElement {
   async _load() {
     try {
       await this._call("get");
+      if (this._view === "week") await this._loadWeekPreview();
       await this._loadReferences();
     } catch (error) {
       console.debug("Household Tasks could not refresh its panel data.", error);
+    }
+  }
+
+  async _loadWeekPreview() {
+    if (!this._hass || !this._data || !navigator.onLine) return;
+    try {
+      const preview = await this._hass.callWS({ type: "household_tasks/week_preview" });
+      if (!Array.isArray(preview)) return;
+      this._data.week_preview = preview;
+      localStorage.setItem("household_tasks_offline_snapshot", JSON.stringify(this._data));
+      if (this._view === "week") this._render();
+    } catch (error) {
+      console.debug("Household Tasks could not refresh its weekly preview.", error);
     }
   }
 
@@ -1770,7 +1784,9 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _bind() {
     this.shadowRoot.querySelectorAll("[data-view]").forEach((button) => button.onclick = () => {
-      this._view = button.dataset.view; this._render();
+      this._view = button.dataset.view;
+      this._render();
+      if (this._view === "week") void this._loadWeekPreview();
     });
     this.shadowRoot.querySelector(".refresh")?.addEventListener("click", () => this._load());
     this.shadowRoot.querySelector(".search-button")?.addEventListener("click", () => this._showCommandPalette());
