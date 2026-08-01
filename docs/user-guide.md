@@ -430,10 +430,24 @@ für Frostschutz, Pollenfilter, Reifenwechsel, Gäste und den Wochenabschluss
 stehen unter **Aufgaben > Vorlagengalerie** bereit. Zustandsbasierte Vorlagen
 verlangen dabei ausdrücklich eine vorhandene Home-Assistant-Entität.
 
-Das Aufgabenformular zeigt zunächst nur die üblichen Felder. Aufgabenmarkt,
-Saison, NFC, Folgeaufgaben und eigene Eskalationen liegen in den aufklappbaren
-Expertenoptionen. **Regel testen** zeigt nicht nur die nächste Fälligkeit,
-sondern auch, ob Haushaltsmodus und Saison die Erzeugung aktuell zulassen.
+Neue Aufgabenvorlagen werden in fünf übersichtlichen Schritten angelegt:
+**Grundlagen**, **Zuständigkeit**, **Auslöser**, **Optionen** und **Prüfen**.
+Die technische ID wird aus dem Namen erzeugt und muss nicht manuell gepflegt
+werden. Jeder Schritt validiert nur seine sichtbaren Felder. Vor dem Speichern
+fasst **Prüfen** Name, Verteilung und Zeitplan zusammen und führt die vorhandene
+Regelsimulation aus.
+
+Beim Bearbeiten einer bestehenden Vorlage sind alle fünf Abschnitte sofort
+anwählbar; gespeichert werden kann aus jedem Abschnitt. Die stabile interne ID
+bleibt dabei unverändert. Eine am unteren Dialogrand fixierte Aktionsleiste
+hält Navigation und Speichern auch auf dem Smartphone erreichbar. Beim
+Schließen mit ungespeicherten Änderungen fragt das Panel vor dem Verwerfen
+nach.
+
+Aufgabenmarkt, Saison, NFC, Folgeaufgaben und eigene Eskalationen liegen unter
+**Optionen** in den aufklappbaren Expertenoptionen. **Regel testen** zeigt nicht
+nur die nächste Fälligkeit, sondern auch, ob Haushaltsmodus und Saison die
+Erzeugung aktuell zulassen.
 
 ### Urlaub, Gäste und saisonale Aufgaben
 
