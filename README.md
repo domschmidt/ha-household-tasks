@@ -111,7 +111,7 @@ every transition is available in the per-task history.
 
 | Mode | Behavior |
 | --- | --- |
-| Fixed | Always assigns the selected person. |
+| Fixed | Keeps the selected person responsible and applies an explicit absence policy. |
 | Rotation | Cycles through eligible people and persists the cursor. |
 | Fair | Uses assignment count, then current workload, then configured order. |
 | Open | Creates an unassigned item that an eligible person can claim. |
@@ -121,8 +121,22 @@ The panel exposes **Why was this assigned to me?** using the factors recorded at
 assignment time.
 
 Definitions may require presence. Eligible people are then filtered through
-their configured `person.*` state. If nobody is home, the occurrence remains
-open and is assigned automatically when an eligible person returns.
+their configured `person.*`, `device_tracker.*`, or `binary_sensor.*` state.
+For fixed assignments, the default is deliberately safe: the occurrence waits
+for its owner instead of silently moving to somebody else. A definition can
+instead name an explicit substitute pool, open the work for that pool to claim,
+or keep the absent owner assigned. Fair and rotating assignments wait when none
+of their configured candidates is home.
+
+```yaml
+assignee: alex
+assignment:
+  type: fixed
+  presence_required: true
+  absence_policy: fallback
+  fallback_people: [sam]
+  fallback_strategy: fair
+```
 
 Temporary household handovers transfer both open and future work. They can be
 scheduled with an end time, carry an audit reason, and never rewrite the
@@ -370,6 +384,8 @@ branch protection, SonarQube, security scanning, and release provenance.
 The recommended zero-cost iOS integration uses the
 [official Home Assistant Custom Widget](docs/ios-widget.md). Household Tasks
 creates a person-scoped inbox sensor and a safe action button for each person.
+It also exposes an explicit next-task sensor, five stable read-only task slots,
+and personal open, due-today, overdue, and blocked counters for native widgets.
 The button sends task-specific actionable notifications whose completion,
 claim, snooze, and help actions execute in the background without opening
 another app. It needs neither an Apple Developer membership nor a separate

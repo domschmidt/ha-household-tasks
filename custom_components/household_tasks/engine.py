@@ -117,6 +117,9 @@ _TASK_NOT_OPEN = "Die Aufgabe ist nicht mehr offen."
 _HELP_NEEDED = "Hilfe benötigt"
 _OPEN_TASK = "Aufgabe öffnen"
 
+FIXED_ABSENCE_POLICIES = {"wait", "fallback", "open", "assign_anyway"}
+FIXED_FALLBACK_STRATEGIES = {"fair", "rotation"}
+
 PLATFORMS = [Platform.SENSOR, Platform.BUTTON]
 
 WEEKDAYS = {
@@ -567,6 +570,29 @@ class HouseholdTaskEngine:
                     errors.append(f"task '{task_id}' has unknown assignment candidates")
             if assignment.get("presence_required") not in {None, True, False}:
                 errors.append(f"task '{task_id}' presence_required must be a boolean")
+            absence_policy = assignment.get("absence_policy", "wait")
+            if absence_policy not in FIXED_ABSENCE_POLICIES:
+                errors.append(f"task '{task_id}' has an invalid absence policy")
+            fallback_strategy = assignment.get("fallback_strategy", "fair")
+            if fallback_strategy not in FIXED_FALLBACK_STRATEGIES:
+                errors.append(f"task '{task_id}' has an invalid fallback strategy")
+            fallback_people = assignment.get("fallback_people", [])
+            if not isinstance(fallback_people, list):
+                errors.append(f"task '{task_id}' fallback_people must be a list")
+                fallback_people = []
+            unknown_fallback = set(fallback_people) - set(self.people)
+            if unknown_fallback:
+                errors.append(f"task '{task_id}' has unknown fallback people")
+            if (
+                assignment_type == "fixed"
+                and assignment.get("presence_required")
+                and absence_policy in {"fallback", "open"}
+                and not fallback_people
+            ):
+                errors.append(
+                    f"task '{task_id}' needs explicit fallback people for "
+                    f"absence policy '{absence_policy}'"
+                )
             schedule = task.get("schedule", {})
             schedule_type = schedule.get("type")
             if schedule_type not in {
@@ -3144,7 +3170,8 @@ class HouseholdTaskEngine:
         if new_state is None:
             return
         presence_returned = any(
-            person.get("presence") == entity_id and new_state.state == "home"
+            person.get("presence") == entity_id
+            and self._presence_state_is_home(entity_id, new_state.state)
             for person in self.people.values()
         )
         if presence_returned:
@@ -4650,54 +4677,131 @@ class HouseholdTaskEngine:
             "delegate_to": mode.get("delegate_to"),
         }
 
+    def _select_fixed_assignee(
+        self, task_id: str, task: dict[str, Any]
+    ) -> tuple[str | None, dict[str, Any]]:
+        """Resolve a fixed owner and its explicit absence policy."""
+        assignment = task.get("assignment", {})
+        original = task.get("assignee")
+        assignee = (
+            self._active_handover_target(original)
+            if original in self.people
+            else original
+        )
+        if not (
+            assignment.get("presence_required", False)
+            and assignee in self.people
+            and not self._is_home(assignee)
+        ):
+            return assignee, {
+                "type": "handover" if assignee != original else "fixed",
+                "selected": assignee,
+                "original": original,
+            }
+
+        absence_policy = assignment.get("absence_policy", "wait")
+        if absence_policy == "assign_anyway":
+            return assignee, {
+                "type": "absence_assigned",
+                "selected": assignee,
+                "original": original,
+                "absence_policy": absence_policy,
+            }
+        if absence_policy == "wait":
+            return None, {
+                "type": "presence",
+                "selected": None,
+                "original": original,
+                "candidates": [assignee],
+                "absence_policy": absence_policy,
+                "waiting": True,
+            }
+        return self._select_absence_fallback(task_id, task, original, absence_policy)
+
+    def _select_absence_fallback(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        original: str | None,
+        absence_policy: str,
+    ) -> tuple[str | None, dict[str, Any]]:
+        """Select or expose an eligible person from the explicit fallback pool."""
+        assignment = task.get("assignment", {})
+        configured = assignment.get("fallback_people", [])
+        strategy = assignment.get("fallback_strategy", "fair")
+        fallback_task = deepcopy(task)
+        fallback_task["assignment"] = {
+            "type": strategy,
+            "people": configured,
+            "presence_required": True,
+        }
+        candidates = self._assignment_candidates(fallback_task)
+        reason = {
+            "original": original,
+            "candidates": candidates,
+            "configured_candidates": configured,
+            "absence_policy": absence_policy,
+        }
+        if absence_policy == "open":
+            return None, {
+                **reason,
+                "type": "absence_open",
+                "selected": None,
+                "waiting": not candidates,
+            }
+        if strategy == "rotation":
+            selected = self._select_rotating_fallback(task_id, candidates)
+            return selected, {
+                **reason,
+                "type": "absence_fallback",
+                "selected": selected,
+                "fallback_strategy": "rotation",
+                "waiting": selected is None,
+            }
+
+        counts = self.state.setdefault("assignment_counts", {})
+        open_load = {
+            person: sum(
+                1
+                for occurrence in self.state["occurrences"].values()
+                if not occurrence.get("resolved")
+                and occurrence.get("assignee") == person
+            )
+            for person in candidates
+        }
+        selected = select_fair_candidate(candidates, counts, open_load)
+        return selected, {
+            **reason,
+            "type": "absence_fallback",
+            "selected": selected,
+            "fallback_strategy": "fair",
+            "assignment_counts": {
+                person: int(counts.get(person, 0)) for person in candidates
+            },
+            "open_load": open_load,
+            "waiting": selected is None,
+        }
+
+    def _select_rotating_fallback(
+        self, task_id: str, candidates: list[str]
+    ) -> str | None:
+        """Advance the independent rotation cursor for fixed-task substitutes."""
+        if not candidates:
+            return None
+        cursors = self.state.setdefault("rotation_cursors", {})
+        cursor_key = f"{task_id}:absence_fallback"
+        cursor = int(cursors.get(cursor_key, 0))
+        selected = candidates[cursor % len(candidates)]
+        cursors[cursor_key] = cursor + 1
+        return selected
+
     def _select_assignee_with_reason(
         self, task_id: str, task: dict[str, Any]
     ) -> tuple[str | None, dict[str, Any]]:
         """Resolve assignment and preserve the inputs behind the decision."""
         assignment_type = task.get("assignment", {}).get("type", "fixed")
         if assignment_type == "fixed":
-            original = task.get("assignee")
-            assignee = (
-                self._active_handover_target(original)
-                if original in self.people
-                else original
-            )
-            if (
-                task.get("assignment", {}).get("presence_required", False)
-                and assignee in self.people
-                and not self._is_home(assignee)
-            ):
-                configured = task.get("assignment", {}).get("people", [])
-                fallback_task = deepcopy(task)
-                fallback_task["assignment"] = {
-                    "type": "fair",
-                    "people": configured or list(self.people),
-                    "presence_required": True,
-                }
-                candidates = self._assignment_candidates(fallback_task)
-                counts = self.state.setdefault("assignment_counts", {})
-                open_load = {
-                    person: sum(
-                        1
-                        for occurrence in self.state["occurrences"].values()
-                        if not occurrence.get("resolved")
-                        and occurrence.get("assignee") == person
-                    )
-                    for person in candidates
-                }
-                selected = select_fair_candidate(candidates, counts, open_load)
-                return selected, {
-                    "type": "presence",
-                    "selected": selected,
-                    "original": original,
-                    "candidates": candidates,
-                    "waiting": selected is None,
-                }
-            return assignee, {
-                "type": "handover" if assignee != original else "fixed",
-                "selected": assignee,
-                "original": original,
-            }
+            return self._select_fixed_assignee(task_id, task)
         if assignment_type == "open":
             return None, {
                 "type": "open",
@@ -4835,10 +4939,17 @@ class HouseholdTaskEngine:
         self._record_assignment(assignee)
 
         if self._task_value(task, "notify_on_create", False):
+            notification_people = (
+                [assignee]
+                if assignee
+                else assignment_reason.get(
+                    "candidates", self._assignment_candidates(task)
+                )
+            )
             await self._notify(
                 occurrence_id,
                 occurrence,
-                [assignee] if assignee else self._assignment_candidates(task),
+                notification_people,
                 "Neue Aufgabe",
                 title,
             )
@@ -4978,9 +5089,15 @@ class HouseholdTaskEngine:
         rule_reference: datetime | None,
     ) -> dict[str, Any]:
         """Build persisted occurrence metadata."""
+        occurrence_task = deepcopy(task)
+        if assignment_reason.get("type") == "absence_open":
+            occurrence_task["assignment"] = {
+                "type": "open",
+                "people": list(assignment_reason.get("candidates", [])),
+            }
         occurrence = {
             "task_id": task_id,
-            "task": deepcopy(task),
+            "task": occurrence_task,
             "title": title,
             "assignee": assignee,
             "assignment_reason": assignment_reason,
@@ -5165,7 +5282,14 @@ class HouseholdTaskEngine:
                 person_id,
             )
             return True
-        return state.state == "home"
+        return self._presence_state_is_home(entity_id, state.state)
+
+    @staticmethod
+    def _presence_state_is_home(entity_id: str, state: str) -> bool:
+        """Normalize Home Assistant person, tracker, and binary sensor states."""
+        if entity_id.startswith("binary_sensor."):
+            return state == "on"
+        return state == "home"
 
     def _resolve_recipients(
         self, recipients: str | list[str], assignee: str | None

@@ -34,6 +34,20 @@
       "open_tasks": "Offene Aufgaben"
     }
   },
+  "entity": {
+    "sensor": {
+      "open_tasks": { "name": "Offene Aufgaben" },
+      "tasks_due_today": { "name": "Heute fällige Aufgaben" },
+      "overdue_tasks": { "name": "Überfällige Aufgaben" },
+      "blocked_tasks": { "name": "Blockierte Aufgaben" },
+      "person_next_task": { "name": "Nächste Aufgabe für {person_name}" },
+      "person_open_tasks": { "name": "Offene Aufgaben für {person_name}" },
+      "person_tasks_due_today": { "name": "Heute fällige Aufgaben für {person_name}" },
+      "person_overdue_tasks": { "name": "Überfällige Aufgaben für {person_name}" },
+      "person_blocked_tasks": { "name": "Blockierte Aufgaben für {person_name}" },
+      "person_task_slot": { "name": "Aufgabe {position} für {person_name}" }
+    }
+  },
   "services": {
     "create": {
       "name": "Aufgabe erzeugen",

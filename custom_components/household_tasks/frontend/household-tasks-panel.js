@@ -583,6 +583,9 @@ class HouseholdTasksPanel extends HTMLElement {
         assignment_type: "Bestimmt, ob die Zuständigkeit fest, rotierend, fair verteilt oder offen ist.",
         assignment_person: "Diese Personen dürfen bei Rotation, fairer Verteilung oder offener Zuweisung berücksichtigt werden.",
         presence_required: "Berücksichtigt bei automatischer Zuweisung nur aktuell anwesende Personen.",
+        absence_policy: "Legt bei fester Zuständigkeit ausdrücklich fest, ob gewartet, vertreten, geöffnet oder trotzdem zugewiesen wird.",
+        fallback_person: "Nur diese Personen dürfen die feste Zuständigkeit bei Abwesenheit vertreten.",
+        fallback_strategy: "Bestimmt, wie unter mehreren anwesenden Ersatzpersonen ausgewählt wird.",
         follow_up_task_id: "Vorlage, die nach Abschluss dieser Aufgabe automatisch erzeugt wird.",
         follow_up_delay: "Zeitspanne zwischen Abschluss und Erzeugung der Folgeaufgabe.",
         nfc_tag_id: "Optionaler Home-Assistant-Tag, mit dem die Aufgabe ausgelöst oder erledigt wird.",
@@ -1336,6 +1339,24 @@ class HouseholdTasksPanel extends HTMLElement {
       return de
         ? `${name(reason.selected)} wurde ausgewählt, weil diese Person zuhause ist.`
         : `${name(reason.selected)} was selected because this person is home.`;
+    }
+    if (reason.type === "absence_fallback") {
+      if (reason.waiting) return de
+        ? `${name(reason.original)} ist nicht zuhause; die Aufgabe wartet auf eine der festgelegten Ersatzpersonen.`
+        : `${name(reason.original)} is away; the task is waiting for one of the configured substitutes.`;
+      return de
+        ? `${name(reason.original)} ist nicht zuhause. Deshalb wurde ${name(reason.selected)} aus dem festgelegten Ersatzpersonenkreis ausgewählt.`
+        : `${name(reason.original)} is away, so ${name(reason.selected)} was selected from the configured substitutes.`;
+    }
+    if (reason.type === "absence_open") {
+      return de
+        ? `${name(reason.original)} ist nicht zuhause. Die Aufgabe wurde für die festgelegten Ersatzpersonen zur Übernahme geöffnet.`
+        : `${name(reason.original)} is away. The task was opened for the configured substitutes to claim.`;
+    }
+    if (reason.type === "absence_assigned") {
+      return de
+        ? `${name(reason.selected)} ist nicht zuhause, bleibt laut Abwesenheitsregel aber fest zuständig.`
+        : `${name(reason.selected)} is away but remains assigned according to the absence policy.`;
     }
     if (reason.type === "handover") {
       return de
@@ -2697,6 +2718,9 @@ class HouseholdTasksPanel extends HTMLElement {
     const assignmentType = task.assignment?.type || "fixed";
     const assignmentPeople = task.assignment?.people || Object.keys(this._data.people);
     const presenceRequired = task.assignment?.presence_required === true;
+    const absencePolicy = task.assignment?.absence_policy || "wait";
+    const fallbackPeople = task.assignment?.fallback_people || [];
+    const fallbackStrategy = task.assignment?.fallback_strategy || "fair";
     const modal = this.shadowRoot.querySelector("#modal");
     const returnFocus = this.shadowRoot.activeElement;
     modal.innerHTML = `<div class="backdrop"><div class="modal-card">
@@ -2718,7 +2742,23 @@ class HouseholdTasksPanel extends HTMLElement {
           ).join("")}</div>
           <p class="hint assignment-hint"></p>
         </div>
-        <label class="full checkbox"><input name="presence_required" type="checkbox" ${presenceRequired ? "checked" : ""}> Nur an anwesende Personen zuweisen</label>
+        <label class="full checkbox presence-required"><input name="presence_required" type="checkbox" ${presenceRequired ? "checked" : ""}> Anwesenheit bei der Zuweisung berücksichtigen</label>
+        <div class="full fixed-absence-settings form-grid">
+          <label class="full">Wenn die fest zuständige Person nicht zuhause ist<select name="absence_policy">
+            ${[["wait","Warten, bis die Person zurück ist"],["fallback","An eine Ersatzperson zuweisen"],["open","Für Ersatzpersonen zur Übernahme öffnen"],["assign_anyway","Trotzdem fest zuweisen"]].map(([value, label]) => `<option value="${value}" ${value === absencePolicy ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <div class="full fallback-candidates">
+            <span class="field-label">Mögliche Ersatzpersonen</span>
+            <div class="candidate-grid">${Object.entries(this._data.people).map(([pid, person]) =>
+              `<label class="checkbox"><input type="checkbox" name="fallback_person" value="${this._e(pid)}" ${fallbackPeople.includes(pid) ? "checked" : ""}> ${this._e(person.name)}</label>`
+            ).join("") || `<span class="hint">Keine weitere Person vorhanden.</span>`}</div>
+            <p class="hint">Nur ausdrücklich ausgewählte und aktuell anwesende Personen werden berücksichtigt. Die fest zuständige Person wird automatisch aus der Ersatzliste entfernt.</p>
+          </div>
+          <label class="full fallback-strategy">Auswahl unter mehreren Ersatzpersonen<select name="fallback_strategy">
+            <option value="fair" ${fallbackStrategy === "fair" ? "selected" : ""}>Fair nach bisheriger und offener Last</option>
+            <option value="rotation" ${fallbackStrategy === "rotation" ? "selected" : ""}>Der Reihe nach rotieren</option>
+          </select></label>
+        </div>
         <div class="full inline-create">
           <button type="button" data-toggle-inline-person>+ Person direkt anlegen</button>
           <div class="inline-person-form form-grid hidden">
@@ -2802,8 +2842,13 @@ class HouseholdTasksPanel extends HTMLElement {
     };
     const updateAssignmentFields = () => {
       const type = modal.querySelector("[name=assignment_type]").value;
+      const presenceRequired = modal.querySelector("[name=presence_required]").checked;
+      const absencePolicy = modal.querySelector("[name=absence_policy]").value;
       modal.querySelector(".fixed-assignee").classList.toggle("hidden", type !== "fixed");
       modal.querySelector(".assignment-candidates").classList.toggle("hidden", type === "fixed");
+      modal.querySelector(".fixed-absence-settings").classList.toggle("hidden", type !== "fixed" || !presenceRequired);
+      modal.querySelector(".fallback-candidates").classList.toggle("hidden", !["fallback", "open"].includes(absencePolicy));
+      modal.querySelector(".fallback-strategy").classList.toggle("hidden", absencePolicy !== "fallback");
       const hints = {
         rotation: this._t("Die Aufgabe wandert bei jeder Erzeugung zur nächsten ausgewählten Person."),
         fair: this._t("Gewählt wird, wer bisher am wenigsten Zuweisungen und aktuell die geringste offene Last hat."),
@@ -2813,6 +2858,8 @@ class HouseholdTasksPanel extends HTMLElement {
       modal.querySelector(".assignment-hint").textContent = hints[type] || "";
     };
     modal.querySelector("[name=assignment_type]").onchange = updateAssignmentFields;
+    modal.querySelector("[name=presence_required]").onchange = updateAssignmentFields;
+    modal.querySelector("[name=absence_policy]").onchange = updateAssignmentFields;
     updateAssignmentFields();
     modal.querySelector("[name=custom_escalation]").onchange = (event) => {
       modal.querySelector(".escalation-fields").classList.toggle("hidden", !event.target.checked);
@@ -3621,7 +3668,19 @@ class HouseholdTasksPanel extends HTMLElement {
       schedule, assignment: { type: assignmentType },
     };
     if (f.get("presence_required") === "on") value.assignment.presence_required = true;
-    if (assignmentType === "fixed") value.assignee = f.get("assignee");
+    if (assignmentType === "fixed") {
+      value.assignee = f.get("assignee");
+      if (value.assignment.presence_required) {
+        const absencePolicy = f.get("absence_policy") || "wait";
+        const fallbackPeople = f.getAll("fallback_person").filter((personId) => personId !== value.assignee);
+        if (["fallback", "open"].includes(absencePolicy) && !fallbackPeople.length) {
+          throw new Error("Bitte mindestens eine ausdrückliche Ersatzperson auswählen.");
+        }
+        value.assignment.absence_policy = absencePolicy;
+        if (fallbackPeople.length) value.assignment.fallback_people = fallbackPeople;
+        if (absencePolicy === "fallback") value.assignment.fallback_strategy = f.get("fallback_strategy") || "fair";
+      }
+    }
     else if (assignmentPeople.length) value.assignment.people = assignmentPeople;
     if (f.get("description")?.trim()) value.description = f.get("description").trim();
     const checklist = String(f.get("checklist") || "").split("\n").map((line) => line.trim()).filter(Boolean);

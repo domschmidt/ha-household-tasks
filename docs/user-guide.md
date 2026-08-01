@@ -127,10 +127,27 @@ Jede Aufgabenvorlage kann auf eine von vier Arten verteilt werden:
 
 Bestehende Vorlagen ohne Zuweisungsart werden weiterhin als **Fest** behandelt.
 
-Mit **Nur an anwesende Personen zuweisen** werden Kandidaten anhand ihrer
-konfigurierten Anwesenheitsentität gefiltert. Ist niemand verfügbar, bleibt die
-Aufgabe offen und wird automatisch zugewiesen, sobald eine geeignete Person
-nach Hause kommt. Die gespeicherte Zuweisungsbegründung weist diesen Fall aus.
+Mit **Anwesenheit bei der Zuweisung berücksichtigen** werden Kandidaten anhand
+ihrer konfigurierten `person.*`-, `device_tracker.*`- oder
+`binary_sensor.*`-Entität gefiltert. Bei einer festen Zuständigkeit gilt ohne
+weitere Auswahl die sichere Regel **Warten, bis die Person zurück ist**. Eine
+Aufgabe wird also nie mehr stillschweigend an irgendein Haushaltsmitglied
+umverteilt.
+
+Für feste Zuständigkeiten stehen vier Abwesenheitsregeln zur Verfügung:
+
+- **Warten**: Die Aufgabe bleibt wartend und wird der zuständigen Person bei
+  ihrer Rückkehr zugewiesen.
+- **Ersatzperson**: Nur ausdrücklich ausgewählte, anwesende Ersatzpersonen
+  kommen infrage; unter mehreren wird fair oder rotierend gewählt.
+- **Zur Übernahme öffnen**: Nur die ausgewählten, anwesenden Ersatzpersonen
+  können die Aufgabe übernehmen.
+- **Trotzdem fest zuweisen**: Die ursprüngliche Person bleibt auch unterwegs
+  zuständig.
+
+Sind keine erlaubten Ersatzpersonen zuhause, wartet die Aufgabe. Die
+gespeicherte Zuweisungsbegründung zeigt ursprüngliche Zuständigkeit,
+Abwesenheitsregel, Kandidaten und das konkrete Auswahlergebnis an.
 
 ### Haushaltsübergabe
 
@@ -619,7 +636,10 @@ erst nach Auswahl einer konkreten lokalen Entität aktiviert.
 
 Die empfohlene kostenlose iOS-Anbindung verwendet das offizielle
 Home-Assistant-Custom-Widget. Pro Person werden ein Sensor mit der nächsten
-Aufgabe und ein Aktionsknopf angelegt. Der Knopf sendet eine aktuelle,
+Aufgabe, fünf stabile Sensoren für eine read-only Aufgabenliste, persönliche
+Zählsensoren und ein Aktionsknopf angelegt. Die Listenplätze behalten ihre
+Entity-IDs und zeigen jeweils den aktuell zugehörigen Aufgabentitel als Zustand.
+Der Knopf sendet eine aktuelle,
 aufgabenspezifische Benachrichtigung; deren Aktionen werden im Hintergrund
 ausgeführt und öffnen weder Home Assistant noch Scriptable. Einrichtung,
 Berechtigungen und optionale Aktualisierungsautomation sind unter

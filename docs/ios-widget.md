@@ -53,7 +53,12 @@ For a person called Alex, expect entities similar to these:
 
 | Purpose | Typical display name | Example entity ID |
 | --- | --- | --- |
-| Personal next task | `Alex task inbox` | `sensor.household_tasks_alex` |
+| Legacy personal inbox | `Alex task inbox` | `sensor.household_tasks_alex` |
+| Personal next task | `Alex next task` | `sensor.household_tasks_alex_next_task` |
+| Read-only task list | `Alex task 1` through `Alex task 5` | `sensor.household_tasks_alex_next_task_1` through `_5` |
+| Personal open count | `Alex open tasks` | `sensor.household_tasks_alex_open` |
+| Personal due-today count | `Alex tasks due today` | `sensor.household_tasks_alex_due_today` |
+| Personal overdue count | `Alex overdue tasks` | `sensor.household_tasks_alex_overdue` |
 | Personal actions | `Alex task actions` | `button.household_tasks_alex_actions` |
 | All active tasks | `Open tasks` | `sensor.open_tasks` |
 | Due today | `Tasks due today` | `sensor.tasks_due_today` |
@@ -68,6 +73,11 @@ If the personal sensor and button do not exist, confirm that the person is
 actually saved in Household Tasks, then reload the Household Tasks integration
 or restart Home Assistant. The integration creates no personal widget entities
 while the Household Tasks people list is empty.
+
+The Companion App keeps its own entity database for widget configuration. If
+new entities exist under **Developer tools > States** but not in the widget
+picker, open the production server under **Settings > Companion App** and tap
+**Update server information**. Close and reopen the widget editor afterwards.
 
 ## 2. Create a reusable widget configuration in the app
 
@@ -128,19 +138,25 @@ its item limit. Use a larger widget or split the recipe into two configurations.
 
 Recommended configuration name: `Household – My day`
 
-Add these five items in this exact order:
+For a real read-only task preview, add the five stable task positions followed
+by the action button. The entity IDs never change when tasks are completed or
+reordered; only their displayed states change.
+
+Add these six items in this exact order:
 
 | # | Entity | Display text | Icon | Color | On tap | Confirmation |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `sensor.household_tasks_alex` | `Next task` | `mdi:clipboard-account-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
-| 2 | `sensor.tasks_due_today` | `Today` | `mdi:calendar-today` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
-| 3 | `sensor.overdue_tasks` | `Overdue` | `mdi:clock-alert-outline` | Red | **Navigate** → `/haushaltsaufgaben` | Off |
-| 4 | `button.household_tasks_alex_actions` | `Actions` | `mdi:bell-outline` | Blue | **Default** | On |
-| 5 | `sensor.open_tasks` | `All tasks` | `mdi:format-list-checks` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 1 | `sensor.household_tasks_alex_next_task_1` | `1` | `mdi:numeric-1-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 2 | `sensor.household_tasks_alex_next_task_2` | `2` | `mdi:numeric-2-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 3 | `sensor.household_tasks_alex_next_task_3` | `3` | `mdi:numeric-3-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 4 | `sensor.household_tasks_alex_next_task_4` | `4` | `mdi:numeric-4-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 5 | `sensor.household_tasks_alex_next_task_5` | `5` | `mdi:numeric-5-circle-outline` | Blue | **Navigate** → `/haushaltsaufgaben` | Off |
+| 6 | `button.household_tasks_alex_actions` | `Actions` | `mdi:bell-outline` | Blue | **Default** | On |
 
-Replace `alex` with the real person entity IDs. Item 1 displays the next task
-title as its state. Item 4 sends an actionable notification for that current
-task; it does not complete a task immediately.
+Replace `alex` with the real person entity IDs. Each numbered sensor displays
+the task title at that current feed position as its state. An unused position
+shows a neutral dash. The action button sends an actionable notification for the
+current first task; it does not complete a task immediately.
 
 The concept image shows the first item as a wide row. The official widget will
 render it as the first normal grid tile.
