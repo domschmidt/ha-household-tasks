@@ -10,9 +10,17 @@ const HT_WEEKDAYS = [
   ["mon", "Mo", "Mon"], ["tue", "Di", "Tue"], ["wed", "Mi", "Wed"], ["thu", "Do", "Thu"],
   ["fri", "Fr", "Fri"], ["sat", "Sa", "Sat"], ["sun", "So", "Sun"],
 ];
-const HT_PANEL_VIEWS = new Set([
-  "today", "mine", "week", "tasks", "people", "analytics", "history", "settings",
-]);
+const HT_PANEL_VIEW_URLS = Object.freeze({
+  today: "/haushaltsaufgaben?view=today",
+  mine: "/haushaltsaufgaben?view=mine",
+  week: "/haushaltsaufgaben?view=week",
+  tasks: "/haushaltsaufgaben?view=tasks",
+  people: "/haushaltsaufgaben?view=people",
+  analytics: "/haushaltsaufgaben?view=analytics",
+  history: "/haushaltsaufgaben?view=history",
+  settings: "/haushaltsaufgaben?view=settings",
+});
+const HT_PANEL_VIEWS = new Set(Object.keys(HT_PANEL_VIEW_URLS));
 
 class HouseholdTasksPanel extends HTMLElement {
   constructor() {
@@ -90,10 +98,9 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _navigateToView(requested) {
     const view = HT_PANEL_VIEWS.has(requested) ? requested : "today";
-    const url = new URL(window.location.href);
-    url.searchParams.set("view", view);
-    if (url.href !== window.location.href) {
-      window.history.pushState({}, "", url.toString());
+    const url = this._viewUrl(view);
+    if (`${window.location.pathname}${window.location.search}` !== url) {
+      window.history.pushState({}, "", url);
     }
     this._view = view;
     this._render();
@@ -101,10 +108,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _viewUrl(requested) {
-    const view = HT_PANEL_VIEWS.has(requested) ? requested : "today";
-    const url = new URL(window.location.href);
-    url.searchParams.set("view", view);
-    return `${url.pathname}${url.search}${url.hash}`;
+    return HT_PANEL_VIEW_URLS[requested] || HT_PANEL_VIEW_URLS.today;
   }
 
   async _call(type, payload = {}) {
@@ -1029,7 +1033,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _navButton(id, label) {
-    return `<a href="${this._e(this._viewUrl(id))}" data-view="${id}" class="${this._view === id ? "active" : ""}">${label}</a>`;
+    return `<a href="${this._viewUrl(id)}" data-view="${id}" class="${this._view === id ? "active" : ""}">${label}</a>`;
   }
 
   _loading() {
