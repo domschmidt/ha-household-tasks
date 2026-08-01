@@ -117,6 +117,14 @@ _PANEL_MINE_PATH = f"{_PANEL_PATH}?view=mine"
 _TASK_NOT_OPEN = "Die Aufgabe ist nicht mehr offen."
 _HELP_NEEDED = "Hilfe benötigt"
 _OPEN_TASK = "Aufgabe öffnen"
+_ATTACHMENT_TOO_LARGE = "Anhänge dürfen höchstens 20 MB groß sein."
+ATTACHMENT_MAX_BYTES = 20_000_000
+ATTACHMENT_TOTAL_MAX_BYTES = 100_000_000
+ATTACHMENT_MAX_COUNT = 10
+ATTACHMENT_CHUNK_BYTES = 512_000
+ATTACHMENT_UPLOAD_TTL = timedelta(minutes=15)
+ATTACHMENT_MAX_PENDING_UPLOADS = 5
+HISTORY_RETENTION_DAYS = 90
 
 FIXED_ABSENCE_POLICIES = {"wait", "fallback", "open", "assign_anyway"}
 FIXED_FALLBACK_STRATEGIES = {"fair", "rotation"}
@@ -420,6 +428,7 @@ class HouseholdTaskEngine:
         self.remove_stop_listener = None
         self.watched_entities: tuple[str, ...] = ()
         self.pending_state_checks: dict[tuple[str, str], Any] = {}
+        self.pending_attachment_uploads: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def async_setup(self) -> None:
         """Load state, validate configuration, and register listeners."""
@@ -2103,8 +2112,97 @@ class HouseholdTaskEngine:
             decoded = base64.b64decode(content, validate=True)
         except (ValueError, TypeError) as err:
             raise vol.Invalid("Der Anhang ist ungültig.") from err
-        if not decoded or len(decoded) > 750_000:
-            raise vol.Invalid("Anhänge dürfen höchstens 750 KB groß sein.")
+        if not decoded or len(decoded) > ATTACHMENT_MAX_BYTES:
+            raise vol.Invalid(_ATTACHMENT_TOO_LARGE)
+        return await self._async_store_attachment(
+            occurrence_id, name, mime_type, decoded
+        )
+
+    async def async_add_attachment_chunk(
+        self,
+        occurrence_id: str,
+        upload_id: str,
+        name: str,
+        mime_type: str,
+        chunk_index: int,
+        total_chunks: int,
+        content: str,
+    ) -> dict[str, Any]:
+        """Receive a large attachment in WebSocket-safe chunks."""
+        try:
+            decoded = base64.b64decode(content, validate=True)
+        except (ValueError, TypeError) as err:
+            raise vol.Invalid("Der Anhang ist ungültig.") from err
+        if not decoded or len(decoded) > ATTACHMENT_CHUNK_BYTES:
+            raise vol.Invalid("Ein Upload-Block ist ungültig oder zu groß.")
+        if total_chunks < 1 or chunk_index < 0 or chunk_index >= total_chunks:
+            raise vol.Invalid("Die Upload-Reihenfolge ist ungültig.")
+
+        key = (occurrence_id, upload_id)
+        now = dt_util.utcnow()
+        self.pending_attachment_uploads = {
+            pending_key: pending
+            for pending_key, pending in self.pending_attachment_uploads.items()
+            if now - pending["updated_at"] <= ATTACHMENT_UPLOAD_TTL
+        }
+        upload = self.pending_attachment_uploads.get(key)
+        if upload is None:
+            if chunk_index != 0:
+                raise vol.Invalid("Der erste Upload-Block fehlt.")
+            if len(self.pending_attachment_uploads) >= ATTACHMENT_MAX_PENDING_UPLOADS:
+                raise vol.Invalid("Zu viele parallele Anhang-Uploads.")
+            upload = {
+                "name": name,
+                "mime_type": mime_type,
+                "total_chunks": total_chunks,
+                "chunks": [],
+                "size": 0,
+                "updated_at": now,
+            }
+            self.pending_attachment_uploads[key] = upload
+        if (
+            upload["name"] != name
+            or upload["mime_type"] != mime_type
+            or upload["total_chunks"] != total_chunks
+            or chunk_index != len(upload["chunks"])
+        ):
+            self.pending_attachment_uploads.pop(key, None)
+            raise vol.Invalid("Die Upload-Blöcke sind inkonsistent oder ungeordnet.")
+        if upload["size"] + len(decoded) > ATTACHMENT_MAX_BYTES:
+            self.pending_attachment_uploads.pop(key, None)
+            raise vol.Invalid(_ATTACHMENT_TOO_LARGE)
+        upload["chunks"].append(decoded)
+        upload["size"] += len(decoded)
+        upload["updated_at"] = now
+        if len(upload["chunks"]) < total_chunks:
+            return {"complete": False, "next_chunk": chunk_index + 1}
+
+        self.pending_attachment_uploads.pop(key, None)
+        attachment = await self._async_store_attachment(
+            occurrence_id, name, mime_type, b"".join(upload["chunks"])
+        )
+        return {"complete": True, "attachment": attachment}
+
+    async def _async_store_attachment(
+        self,
+        occurrence_id: str,
+        name: str,
+        mime_type: str,
+        decoded: bytes,
+    ) -> dict[str, Any]:
+        """Validate and persist a decoded attachment."""
+        occurrence = self.state["occurrences"].get(occurrence_id)
+        if occurrence is None:
+            raise vol.Invalid("Unbekannte Aufgabe.")
+        if mime_type not in {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "application/pdf",
+        }:
+            raise vol.Invalid("Nur JPG, PNG, WebP und PDF werden unterstützt.")
+        if not decoded or len(decoded) > ATTACHMENT_MAX_BYTES:
+            raise vol.Invalid(_ATTACHMENT_TOO_LARGE)
         attachment_id = hashlib.sha256(
             occurrence_id.encode() + decoded + dt_util.utcnow().isoformat().encode()
         ).hexdigest()[:20]
@@ -2114,17 +2212,42 @@ class HouseholdTaskEngine:
             "mime_type": mime_type,
             "size": len(decoded),
             "created_at": dt_util.utcnow().isoformat(),
-            "content": content,
+            "content": base64.b64encode(decoded).decode(),
         }
         async with self.lock:
             attachments = self.state.setdefault("attachments", {}).setdefault(
                 occurrence_id, []
             )
-            if len(attachments) >= 10:
+            if len(attachments) >= ATTACHMENT_MAX_COUNT:
                 raise vol.Invalid("Pro Aufgabe sind höchstens zehn Anhänge möglich.")
+            total_size = sum(int(item.get("size", 0)) for item in attachments)
+            if total_size + len(decoded) > ATTACHMENT_TOTAL_MAX_BYTES:
+                raise vol.Invalid(
+                    "Alle Anhänge einer Aufgabe dürfen zusammen höchstens 100 MB groß sein."
+                )
             attachments.append(attachment)
             await self._save()
         return {key: value for key, value in attachment.items() if key != "content"}
+
+    def attachment_content_chunk(
+        self,
+        occurrence_id: str,
+        attachment_id: str,
+        offset: int,
+        chunk_chars: int = 700_000,
+    ) -> dict[str, Any]:
+        """Return a WebSocket-safe slice of one base64 attachment."""
+        attachment = self.attachment_content(occurrence_id, attachment_id)
+        content = attachment.pop("content")
+        if offset < 0 or offset > len(content):
+            raise vol.Invalid("Der Download-Offset ist ungültig.")
+        end = min(offset + chunk_chars, len(content))
+        return {
+            **attachment,
+            "content": content[offset:end],
+            "next_offset": end,
+            "complete": end == len(content),
+        }
 
     def attachment_content(
         self,
@@ -6007,7 +6130,7 @@ class HouseholdTaskEngine:
         return fallback
 
     def _prune_state(self, now: datetime) -> None:
-        cutoff = now - timedelta(days=90)
+        cutoff = now - timedelta(days=HISTORY_RETENTION_DAYS)
         self.state["occurrences"] = {
             occurrence_id: occurrence
             for occurrence_id, occurrence in self.state["occurrences"].items()
@@ -6021,6 +6144,12 @@ class HouseholdTaskEngine:
             for occurrence_id, attachments in self.state.get("attachments", {}).items()
             if occurrence_id in retained_ids
         }
+        self.state["task_events"] = [
+            event
+            for event in self.state.get("task_events", [])
+            if not event.get("occurrence_id")
+            or event.get("occurrence_id") in retained_ids
+        ]
         cutoff_day = cutoff.date().isoformat()
         self.state["daily_triggers"] = {
             task_id: {

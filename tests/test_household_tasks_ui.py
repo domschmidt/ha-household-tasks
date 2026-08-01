@@ -43,7 +43,15 @@ def _fake_engine() -> MagicMock:
     engine.async_save_task_stack = AsyncMock()
     engine.async_launch_task_stack = AsyncMock(return_value=["occurrence-1"])
     engine.async_add_attachment = AsyncMock()
+    engine.async_add_attachment_chunk = AsyncMock(
+        return_value={"complete": False, "next_chunk": 1}
+    )
     engine.async_delete_attachment = AsyncMock()
+    engine.attachment_content_chunk.return_value = {
+        "content": "aGVs",
+        "next_offset": 4,
+        "complete": False,
+    }
     engine.async_complete_occurrence = AsyncMock()
     engine.async_set_occurrence_status = AsyncMock()
     engine.async_set_checklist_item = AsyncMock()
@@ -284,6 +292,48 @@ async def test_websocket_adapters_forward_advanced_panel_actions(hass):
         until="2026-08-31T10:00:00+00:00",
         note="Holiday",
     )
+
+
+async def test_websocket_attachment_chunks_forward_transport_fields(hass):
+    """Large attachment blocks remain authenticated and ordered by the engine."""
+    engine = _fake_engine()
+    connection = _Connection()
+    with patch.object(ui, "_engine", return_value=engine):
+        await _call(
+            ui.websocket_add_attachment_chunk,
+            hass,
+            connection,
+            {
+                "id": 1,
+                "occurrence_id": "one",
+                "upload_id": "upload-1",
+                "name": "proof.png",
+                "mime_type": "image/png",
+                "chunk_index": 0,
+                "total_chunks": 2,
+                "content": "aGVs",
+            },
+        )
+        await _call(
+            ui.websocket_attachment_content_chunk,
+            hass,
+            connection,
+            {
+                "id": 2,
+                "occurrence_id": "one",
+                "attachment_id": "attachment-1",
+                "offset": 0,
+            },
+        )
+
+    assert connection.results == [
+        (1, {"complete": False, "next_chunk": 1}),
+        (2, {"content": "aGVs", "next_offset": 4, "complete": False}),
+    ]
+    engine.async_add_attachment_chunk.assert_awaited_once_with(
+        "one", "upload-1", "proof.png", "image/png", 0, 2, "aGVs"
+    )
+    engine.attachment_content_chunk.assert_called_once_with("one", "attachment-1", 0)
 
 
 async def test_websocket_week_preview_returns_live_projection(hass):

@@ -600,6 +600,39 @@ async def websocket_add_attachment(
     connection.send_result(msg["id"], engine.ui_data())
 
 
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/add_attachment_chunk",
+        vol.Required("occurrence_id"): str,
+        vol.Required("upload_id"): vol.All(str, vol.Length(min=1, max=64)),
+        vol.Required("name"): vol.All(str, vol.Length(min=1, max=120)),
+        vol.Required("mime_type"): str,
+        vol.Required("chunk_index"): vol.All(int, vol.Range(min=0, max=40)),
+        vol.Required("total_chunks"): vol.All(int, vol.Range(min=1, max=40)),
+        vol.Required("content"): vol.All(str, vol.Length(min=1, max=700_000)),
+    }
+)
+async def websocket_add_attachment_chunk(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Receive one WebSocket-safe block of a large attachment."""
+    engine = _engine(hass)
+    _require_household_access(connection, engine)
+    result = await engine.async_add_attachment_chunk(
+        msg["occurrence_id"],
+        msg["upload_id"],
+        msg["name"],
+        msg["mime_type"],
+        msg["chunk_index"],
+        msg["total_chunks"],
+        msg["content"],
+    )
+    connection.send_result(msg["id"], result)
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/attachment_content",
@@ -619,6 +652,31 @@ def websocket_attachment_content(
     connection.send_result(
         msg["id"],
         engine.attachment_content(msg["occurrence_id"], msg["attachment_id"]),
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/attachment_content_chunk",
+        vol.Required("occurrence_id"): str,
+        vol.Required("attachment_id"): str,
+        vol.Required("offset"): vol.All(int, vol.Range(min=0)),
+    }
+)
+@callback
+def websocket_attachment_content_chunk(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return one WebSocket-safe block of an attachment."""
+    engine = _engine(hass)
+    _require_household_access(connection, engine)
+    connection.send_result(
+        msg["id"],
+        engine.attachment_content_chunk(
+            msg["occurrence_id"], msg["attachment_id"], msg["offset"]
+        ),
     )
 
 
@@ -989,7 +1047,9 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
         websocket_save_task_stack,
         websocket_launch_task_stack,
         websocket_add_attachment,
+        websocket_add_attachment_chunk,
         websocket_attachment_content,
+        websocket_attachment_content_chunk,
         websocket_delete_attachment,
         websocket_task_projection,
         websocket_complete,
