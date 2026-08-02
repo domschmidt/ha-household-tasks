@@ -646,6 +646,7 @@ async def test_calendar_scan_ignores_unmapped_events(hass):
             "calendar.waste": {
                 "events": [
                     {"summary": "Gelber Sack", "start": event_start.isoformat()},
+                    {"summary": "Biomüll", "start": event_start.isoformat()},
                     {"summary": "Problemabfall", "start": event_start.isoformat()},
                 ]
             }
@@ -670,7 +671,8 @@ async def test_calendar_scan_ignores_unmapped_events(hass):
                 "entity_id": "calendar.waste",
                 "offset": "-12:00:00",
                 "title_mappings": [
-                    {"pattern": "gelb", "task_title": "Gelbe Tonne rausstellen"}
+                    {"pattern": "gelb", "task_title": "Gelbe Tonne rausstellen"},
+                    {"pattern": "bio", "task_title": "Biotonne rausstellen"},
                 ],
                 "ignore_unmapped_events": True,
             },
@@ -682,5 +684,62 @@ async def test_calendar_scan_ignores_unmapped_events(hass):
     await engine._create_calendar_occurrences(now, now + timedelta(hours=2))
 
     occurrences = list(engine.state["occurrences"].values())
-    assert len(occurrences) == 1
-    assert occurrences[0]["title"] == "[Alex] Gelbe Tonne rausstellen"
+    assert len(occurrences) == 2
+    assert {occurrence["title"] for occurrence in occurrences} == {
+        "[Alex] Gelbe Tonne rausstellen",
+        "[Alex] Biotonne rausstellen",
+    }
+    assert {occurrence["calendar_summary"] for occurrence in occurrences} == {
+        "Gelber Sack",
+        "Biomüll",
+    }
+
+    await engine._create_calendar_occurrences(now, now + timedelta(hours=2))
+
+    assert len(engine.state["occurrences"]) == 2
+
+
+async def test_calendar_source_identity_reuses_legacy_occurrence(hass):
+    """Upgrading source identities neither duplicates nor merges calendar work."""
+    config = initial_config()
+    config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
+    task = {
+        "enabled": True,
+        "name": "Mülltonne rausstellen",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {"type": "calendar", "entity_id": "calendar.waste"},
+    }
+    config["tasks"] = {"waste": task}
+    engine = HouseholdTaskEngine(hass, config)
+    due = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=1)
+
+    legacy_id = await engine._create_occurrence(
+        "waste", task, due, event_summary="  Gelber   Sack "
+    )
+    engine.state["occurrences"][legacy_id].pop("calendar_summary")
+
+    reused_id = await engine._create_occurrence(
+        "waste",
+        task,
+        due,
+        event_summary="Gelber Sack",
+        source_discriminator="provider:first",
+    )
+    separate_id = await engine._create_occurrence(
+        "waste",
+        task,
+        due,
+        event_summary="Biomüll",
+        source_discriminator="provider:second",
+    )
+
+    assert reused_id == legacy_id
+    assert separate_id != legacy_id
+    assert len(engine.state["occurrences"]) == 2
+    assert (
+        HouseholdTaskEngine._calendar_event_identity(
+            {"uid": "calendar-event-42", "summary": "ignored for identity"}
+        )
+        == "provider:calendar-event-42"
+    )
