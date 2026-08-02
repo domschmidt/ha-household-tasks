@@ -44,6 +44,54 @@ test("today prioritizes work while dashboard keeps household context", async ({ 
   await expect(panel.locator(".task-card")).toHaveCount(0);
 });
 
+test("live updates and iOS resume refresh stale panel data", async ({ page }) => {
+  const panel = await openPanel(page);
+  await expect.poll(async () => page.evaluate(() => window.__householdTaskSubscriptions)).toEqual([
+    "household_tasks_updated",
+  ]);
+
+  await page.evaluate(() => {
+    window.__householdTaskCalls.length = 0;
+    window.__setHouseholdTasksServerState({ occurrences: [] });
+    window.__emitHouseholdTasksUpdated();
+  });
+
+  await expect(panel.locator(".task-card")).toHaveCount(0);
+  await expect.poll(async () => page.evaluate(() => window.__householdTaskCalls
+    .filter((call) => call.type === "household_tasks/get").length)).toBe(1);
+
+  await page.evaluate(() => {
+    window.__resetHouseholdTasksServerState();
+    document.querySelector("household-tasks-panel")._lastRefreshAt = 0;
+    window.dispatchEvent(new Event("pageshow"));
+  });
+
+  await expect.poll(async () => page.evaluate(() => window.__householdTaskCalls
+    .filter((call) => call.type === "household_tasks/get").length)).toBe(2);
+  await expect(panel.locator(".task-card")).toHaveCount(1);
+});
+
+test("live refresh does not discard an open editor", async ({ page }) => {
+  const panel = await openPanel(page);
+  await panel.getByRole("button", { name: "+ Schnellaufgabe" }).click();
+  const dialog = panel.getByRole("dialog", { name: "Schnellaufgabe" });
+  await expect(dialog).toBeVisible();
+
+  await page.evaluate(() => {
+    window.__householdTaskCalls.length = 0;
+    window.__emitHouseholdTasksUpdated();
+  });
+  await page.waitForTimeout(300);
+
+  await expect(dialog).toBeVisible();
+  expect(await page.evaluate(() => window.__householdTaskCalls
+    .filter((call) => call.type === "household_tasks/get").length)).toBe(0);
+
+  await dialog.getByRole("button", { name: "Abbrechen" }).click();
+  await expect.poll(async () => page.evaluate(() => window.__householdTaskCalls
+    .filter((call) => call.type === "household_tasks/get").length)).toBe(1);
+});
+
 test("NFC creator is aligned and invokes Home Assistant", async ({ page }) => {
   const panel = await openPanel(page);
   await panel.getByRole("link", { name: "Aufgaben", exact: true }).click();

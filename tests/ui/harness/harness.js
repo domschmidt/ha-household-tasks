@@ -4,6 +4,8 @@ import "/custom_components/household_tasks/frontend/household-tasks-panel.js?v=p
 const clone = (value) => structuredClone(value);
 let state = clone(fixture);
 window.__householdTaskCalls = [];
+window.__householdTaskSubscriptions = [];
+const eventSubscribers = new Map();
 
 const callWS = async (message) => {
   window.__householdTaskCalls.push(clone(message));
@@ -27,6 +29,13 @@ const callWS = async (message) => {
 };
 
 const panel = document.querySelector("household-tasks-panel");
+const connection = {
+  async subscribeEvents(callback, eventType) {
+    window.__householdTaskSubscriptions.push(eventType);
+    eventSubscribers.set(eventType, callback);
+    return () => eventSubscribers.delete(eventType);
+  },
+};
 panel.hass = {
   user: { id: "user-dominik", name: "Dominik", is_admin: true },
   locale: { language: new URL(location.href).searchParams.get("lang") || "de" },
@@ -38,6 +47,7 @@ panel.hass = {
     "weather.home": { state: "cloudy", attributes: { friendly_name: "Zuhause", temperature: 4 } },
   },
   services: { notify: { mobile_app_iphone_von_dominik: { name: "Dominiks iPhone" } } },
+  connection,
   callWS,
 };
 
@@ -45,4 +55,16 @@ window.__setHouseholdTasksFixture = (next) => {
   state = { ...clone(fixture), ...clone(next) };
   panel._data = clone(state);
   panel._render();
+};
+
+window.__setHouseholdTasksServerState = (next) => {
+  state = { ...clone(fixture), ...clone(next) };
+};
+
+window.__resetHouseholdTasksServerState = () => {
+  state = clone(fixture);
+};
+
+window.__emitHouseholdTasksUpdated = () => {
+  eventSubscribers.get("household_tasks_updated")?.({ data: {} });
 };
