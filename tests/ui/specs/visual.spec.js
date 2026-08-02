@@ -6,9 +6,9 @@ test("today worklist visual contract", async ({ page }) => {
   await expect(panel).toHaveScreenshot("today-dashboard.png", { animations: "disabled" });
 });
 
-test("household dashboard visual contract", async ({ page }) => {
+test("household ranking visual contract", async ({ page }) => {
   const panel = await openPanel(page);
-  await panel.getByRole("link", { name: "Dashboard", exact: true }).click();
+  await panel.getByRole("link", { name: "Ranking", exact: true }).click();
   await expect(panel).toHaveScreenshot("household-dashboard.png", { animations: "disabled" });
 });
 

@@ -12,12 +12,12 @@ const HT_WEEKDAYS = [
 ];
 const HT_PANEL_VIEW_URLS = Object.freeze({
   today: "/haushaltsaufgaben?view=today",
-  dashboard: "/haushaltsaufgaben?view=dashboard",
   mine: "/haushaltsaufgaben?view=mine",
   week: "/haushaltsaufgaben?view=week",
   tasks: "/haushaltsaufgaben?view=tasks",
   people: "/haushaltsaufgaben?view=people",
   analytics: "/haushaltsaufgaben?view=analytics",
+  ranking: "/haushaltsaufgaben?view=ranking",
   history: "/haushaltsaufgaben?view=history",
   settings: "/haushaltsaufgaben?view=settings",
 });
@@ -128,6 +128,7 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _viewFromLocation() {
     const requested = new URL(window.location.href).searchParams.get("view") || "today";
+    if (requested === "dashboard") return "ranking";
     return HT_PANEL_VIEWS.has(requested) ? requested : "today";
   }
 
@@ -1094,13 +1095,13 @@ class HouseholdTasksPanel extends HTMLElement {
         </header>
         <nav>
           ${this._navButton("today", "Heute")}
-          ${this._navButton("dashboard", "Dashboard")}
           ${this._navButton("mine", "Meine Aufgaben")}
           ${this._navButton("week", "Wochenplan")}
           ${this._navButton("tasks", "Aufgaben")}
           ${this._navButton("people", "Personen")}
           ${this._navButton("analytics", "Auswertung")}
           ${this._navButton("history", "Verlauf")}
+          ${this._navButton("ranking", "Ranking")}
           ${this._navButton("settings", "Einstellungen")}
         </nav>
         <section class="content">
@@ -1131,7 +1132,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _renderView() {
-    if (this._view === "dashboard") return this._renderDashboard();
+    if (this._view === "ranking") return this._renderRanking();
     if (this._view === "mine") return this._renderMine();
     if (this._view === "week") return this._renderWeek();
     if (this._view === "tasks") return this._renderTasks();
@@ -1262,6 +1263,7 @@ class HouseholdTasksPanel extends HTMLElement {
     const upcoming = open.filter((o) => !dueToday.includes(o) && !overdue.includes(o)).slice(0, 8);
     return `
       ${this._renderDayHero(open, dueToday, now)}
+      ${this._renderContextualHome(open)}
       ${this._occurrenceSection("Überfällig", overdue, "danger")}
       ${this._occurrenceSection("Heute", dueToday)}
       ${this._occurrenceSection("Demnächst", upcoming, "muted")}
@@ -1269,16 +1271,11 @@ class HouseholdTasksPanel extends HTMLElement {
     `;
   }
 
-  _renderDashboard() {
+  _renderRanking() {
     const open = this._openOccurrences();
-    const now = new Date();
-    const today = now.toLocaleDateString(this._locale());
-    const dueToday = open.filter((item) => new Date(item.due).toLocaleDateString(this._locale()) === today);
     const personCounts = {};
     open.forEach((item) => { personCounts[item.assignee] = (personCounts[item.assignee] || 0) + 1; });
     return `
-      ${this._renderDayHero(open, dueToday, now)}
-      ${this._renderContextualHome(open)}
       ${this._renderMobileQuickActions(open)}
       ${this._renderTaskStacks()}
       ${this._peopleStrip(personCounts)}
