@@ -1618,7 +1618,15 @@ class HouseholdTaskEngine:
         projection_state: dict[str, set[str]],
     ) -> dict[str, Any] | None:
         """Return one calendar projection when creation policies allow it."""
+        source_discriminator = event["source_discriminator"]
         occurrence_id = self._occurrence_id(
+            task_id,
+            due,
+            manual=False,
+            target_person=target_person,
+            source_discriminator=source_discriminator,
+        )
+        legacy_id = self._occurrence_id(
             task_id,
             due,
             manual=False,
@@ -1627,6 +1635,10 @@ class HouseholdTaskEngine:
         if (
             occurrence_id in projection_state["existing"]
             or occurrence_id in projection_state["projected_ids"]
+            or self._matching_legacy_calendar_occurrence(
+                legacy_id,
+                event["summary"],
+            )
         ):
             return None
         repetition = self._seasonal_execution_decision(
@@ -2943,6 +2955,9 @@ class HouseholdTaskEngine:
                     "task_name": mapped_title or str(task.get("name", "")),
                     "start": event_start.isoformat(),
                     "due": due.isoformat(),
+                    "source_discriminator": self._calendar_event_identity(
+                        calendar_event
+                    ),
                 }
             )
         matches.sort(key=lambda item: item["due"])
@@ -4839,6 +4854,9 @@ class HouseholdTaskEngine:
                         task,
                         due,
                         event_summary=summary,
+                        source_discriminator=self._calendar_event_identity(
+                            calendar_event
+                        ),
                     )
 
     def _active_handover_target(
@@ -5170,6 +5188,7 @@ class HouseholdTaskEngine:
         due: datetime,
         *,
         event_summary: str | None = None,
+        source_discriminator: str | None = None,
         manual: bool = False,
         context: Context | None = None,
         prechecked_weather: dict[str, Any] | None = None,
@@ -5186,6 +5205,7 @@ class HouseholdTaskEngine:
                 task,
                 due,
                 event_summary=event_summary,
+                source_discriminator=source_discriminator,
                 manual=manual,
                 context=context,
                 prechecked_weather=prechecked_weather,
@@ -5199,9 +5219,19 @@ class HouseholdTaskEngine:
             due,
             manual=manual,
             target_person=_target_person,
+            source_discriminator=source_discriminator,
         )
         if occurrence_id in self.state["occurrences"]:
             return occurrence_id
+        if source_discriminator:
+            legacy_id = self._occurrence_id(
+                task_id,
+                due,
+                manual=manual,
+                target_person=_target_person,
+            )
+            if self._matching_legacy_calendar_occurrence(legacy_id, event_summary):
+                return legacy_id
 
         prepared = self._prepare_occurrence_task(
             task_id,
@@ -5236,6 +5266,10 @@ class HouseholdTaskEngine:
             creation_trace=creation_trace,
             rule_reference=rule_reference,
         )
+        if event_summary:
+            occurrence["calendar_summary"] = " ".join(event_summary.split())
+        if source_discriminator:
+            occurrence["source_discriminator"] = source_discriminator
         self.state["occurrences"][occurrence_id] = occurrence
         self._record_task_event(
             "task_created",
@@ -5309,14 +5343,49 @@ class HouseholdTaskEngine:
         *,
         manual: bool,
         target_person: str | None,
+        source_discriminator: str | None = None,
     ) -> str:
         """Build the deterministic occurrence identity."""
         identity = f"{task_id}|{due.astimezone(dt_util.UTC).isoformat()}"
         if target_person:
             identity += f"|person:{target_person}"
+        if source_discriminator:
+            identity += f"|source:{source_discriminator}"
         if manual:
             identity += f"|{dt_util.utcnow().isoformat()}"
         return hashlib.sha256(identity.encode()).hexdigest()[:20]
+
+    def _matching_legacy_calendar_occurrence(
+        self,
+        occurrence_id: str,
+        event_summary: str | None,
+    ) -> bool:
+        """Recognize a pre-source-identity calendar occurrence after upgrading."""
+        occurrence = self.state["occurrences"].get(occurrence_id)
+        if occurrence is None or not event_summary:
+            return False
+        normalized = " ".join(event_summary.split())
+        stored_summary = occurrence.get("calendar_summary")
+        if stored_summary:
+            return " ".join(str(stored_summary).split()) == normalized
+        description = str(occurrence.get("description", ""))
+        return any(
+            line.startswith("Kalender:")
+            and " ".join(line.removeprefix("Kalender:").split()) == normalized
+            for line in description.splitlines()
+        )
+
+    @staticmethod
+    def _calendar_event_identity(calendar_event: dict[str, Any]) -> str:
+        """Return a stable identity that distinguishes simultaneous events."""
+        provider_id = calendar_event.get("uid") or calendar_event.get("id")
+        if provider_id:
+            return f"provider:{provider_id}"
+        identity = "\x1f".join(
+            " ".join(str(calendar_event.get(key, "")).split())
+            for key in ("summary", "start", "end", "location", "description")
+        )
+        return f"event:{hashlib.sha256(identity.encode()).hexdigest()[:20]}"
 
     def _prepare_occurrence_task(
         self,

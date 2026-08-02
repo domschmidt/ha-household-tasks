@@ -246,3 +246,56 @@ async def test_async_week_preview_keeps_static_plan_when_calendar_fails(hass):
     preview = await engine.async_week_preview(start)
 
     assert preview == engine.week_preview(start)
+
+
+async def test_async_week_preview_keeps_simultaneous_calendar_events(hass):
+    """Separate calendar entries at one timestamp remain separate projections."""
+    engine = _engine(hass)
+    engine.tasks["waste"] = {
+        "enabled": True,
+        "name": "Put bins out",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {
+            "type": "calendar",
+            "entity_id": "calendar.waste",
+            "title_mappings": [
+                {"pattern": "gelb", "task_title": "Gelbe Tonne rausstellen"},
+                {"pattern": "bio", "task_title": "Biotonne rausstellen"},
+            ],
+            "ignore_unmapped_events": True,
+        },
+    }
+    start = datetime(2026, 8, 3, 8, tzinfo=UTC)
+    event_start = start + timedelta(days=1)
+
+    async def get_events(_call):
+        return {
+            "calendar.waste": {
+                "events": [
+                    {"summary": "Gelber Sack", "start": event_start.isoformat()},
+                    {"summary": "Biomüll", "start": event_start.isoformat()},
+                ]
+            }
+        }
+
+    hass.services.async_register(
+        "calendar",
+        "get_events",
+        get_events,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    preview = await engine.async_week_preview(start)
+    waste = [item for item in preview if item["task_id"] == "waste"]
+
+    assert len(waste) == 2
+    assert len({item["id"] for item in waste}) == 2
+    assert {item["title"] for item in waste} == {
+        "Gelbe Tonne rausstellen",
+        "Biotonne rausstellen",
+    }
+    assert {item["calendar_summary"] for item in waste} == {
+        "Gelber Sack",
+        "Biomüll",
+    }
