@@ -29,9 +29,9 @@ Es wird kein Eintrag in `configuration.yaml` benötigt.
 
 Das Seitenleisten-Panel enthält:
 
-- **Heute**: operative Arbeitsliste mit überfälligen, heutigen und kommenden Aufgaben
-- **Dashboard**: Tageskontext, Schnellaktionen, Aufgabenstapel, Personenlast und
-  Familien-Ranking
+- **Heute**: Tageskontext, Schnellaufgabe, Planungsempfehlung und die operative
+  Arbeitsliste mit überfälligen, heutigen und kommenden Aufgaben
+- **Ranking**: Schnellaktionen, Aufgabenstapel, Personenlast und Familien-Ranking
 - **Schnellaufgabe**: einmalige Aufgaben für sich selbst oder andere
 - **Aufgaben**: wiederverwendbare und geplante Vorlagen
 - **Personen**: Push-, Anwesenheits- und Benutzerzuordnungen
@@ -304,8 +304,8 @@ der Regel. Das Zurücksetzen wird in den Rückgängig-Stapel aufgenommen.
 
 ## Punktestand
 
-Jede manuell erledigte Aufgabe zählt einen Punkt. Das Familien-Ranking auf dem
-Dashboard zeigt den dauerhaften Gesamtstand und die im aktuellen Monat
+Jede manuell erledigte Aufgabe zählt einen Punkt. Die Ansicht **Ranking** zeigt
+den dauerhaften Gesamtstand und die im aktuellen Monat
 erledigten Aufgaben.
 
 Bei **Erledigt** aus einer Push-Nachricht wird der Punkt der Person zugerechnet,
@@ -513,7 +513,7 @@ des Browsers:
 | Bereich | URL |
 | --- | --- |
 | Heute | `/haushaltsaufgaben?view=today` |
-| Dashboard | `/haushaltsaufgaben?view=dashboard` |
+| Ranking | `/haushaltsaufgaben?view=ranking` |
 | Meine Aufgaben | `/haushaltsaufgaben?view=mine` |
 | Wochenplan | `/haushaltsaufgaben?view=week` |
 | Aufgaben | `/haushaltsaufgaben?view=tasks` |
@@ -522,7 +522,8 @@ des Browsers:
 | Verlauf | `/haushaltsaufgaben?view=history` |
 | Einstellungen | `/haushaltsaufgaben?view=settings` |
 
-Unbekannte `view`-Werte öffnen sicher die Heute-Ansicht. Aufgabenbezogene
+Der frühere Link mit `view=dashboard` öffnet aus Kompatibilitätsgründen ebenfalls
+das Ranking. Unbekannte `view`-Werte öffnen sicher die Heute-Ansicht. Aufgabenbezogene
 Push-Nachrichten und persönliche iOS-Widgets verlinken direkt auf
 **Meine Aufgaben**.
 
@@ -601,10 +602,10 @@ Bei mehrdeutigen Abschlüssen verändert Assist bewusst nichts.
 
 ## Komfortplanung und lokale Assistenz
 
-Das Dashboard passt seinen Schwerpunkt an die Tageszeit an: morgens steht die
+Die Ansicht **Heute** passt ihren Schwerpunkt an die Tageszeit an: morgens steht die
 Tagesplanung im Vordergrund, tagsüber die nächsten sinnvollen Aufgaben und
-abends die Abendrunde. Die gemeinsame Tageskarte und **Schnellaufgabe** stehen
-auf dem Dashboard und in **Heute** zur Verfügung. **Heute planen** öffnet alle
+abends die Abendrunde. Tageskarte, **Schnellaufgabe** und **Heute planen** stehen
+ausschließlich dort zur Verfügung. **Heute planen** öffnet alle
 nahen Aufgaben in einer gemeinsamen Planungsansicht. Im Wochenplan lassen sich Aufgaben per
 Drag-and-drop auf einen anderen Tag verschieben.
 
