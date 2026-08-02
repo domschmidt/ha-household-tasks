@@ -92,6 +92,41 @@ test("live refresh does not discard an open editor", async ({ page }) => {
     .filter((call) => call.type === "household_tasks/get").length)).toBe(1);
 });
 
+test("task action menus open toward available viewport space", async ({ page }) => {
+  const panel = await openPanel(page);
+  await page.evaluate(() => {
+    const element = document.querySelector("household-tasks-panel");
+    const base = structuredClone(element._data.occurrences.find((item) => item.id === "open-frost"));
+    element._data.occurrences = Array.from({ length: 12 }, (_, index) => ({
+      ...structuredClone(base),
+      id: `position-${index}`,
+      title: `[Dominik] Position ${index + 1}`,
+      due: `2026-07-31T${String(8 + index).padStart(2, "0")}:00:00+02:00`,
+    }));
+    element._render();
+  });
+
+  const menus = panel.locator("details.more-actions");
+  const menuCount = await menus.count();
+  expect(menuCount).toBe(12);
+  const firstMenu = menus.nth(0);
+  const lastMenu = menus.nth(menuCount - 1);
+
+  await firstMenu.evaluate((element) => element.closest(".task-card").scrollIntoView({ block: "start" }));
+  await firstMenu.locator("summary").click();
+  await expect(firstMenu).not.toHaveClass(/opens-up/);
+  await firstMenu.locator("summary").click();
+
+  await lastMenu.evaluate((element) => element.closest(".task-card").scrollIntoView({ block: "end" }));
+  await lastMenu.locator("summary").click();
+  await expect(lastMenu).toHaveClass(/opens-up/);
+  const bounds = await lastMenu.locator(":scope > div").boundingBox();
+  const viewportHeight = await page.evaluate(() => window.innerHeight);
+  expect(bounds).not.toBeNull();
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewportHeight + 1);
+});
+
 test("NFC creator is aligned and invokes Home Assistant", async ({ page }) => {
   const panel = await openPanel(page);
   await panel.getByRole("link", { name: "Aufgaben", exact: true }).click();
