@@ -12,6 +12,7 @@ const HT_WEEKDAYS = [
 ];
 const HT_PANEL_VIEW_URLS = Object.freeze({
   today: "/haushaltsaufgaben?view=today",
+  dashboard: "/haushaltsaufgaben?view=dashboard",
   mine: "/haushaltsaufgaben?view=mine",
   week: "/haushaltsaufgaben?view=week",
   tasks: "/haushaltsaufgaben?view=tasks",
@@ -1008,6 +1009,7 @@ class HouseholdTasksPanel extends HTMLElement {
         </header>
         <nav>
           ${this._navButton("today", "Heute")}
+          ${this._navButton("dashboard", "Dashboard")}
           ${this._navButton("mine", "Meine Aufgaben")}
           ${this._navButton("week", "Wochenplan")}
           ${this._navButton("tasks", "Aufgaben")}
@@ -1044,6 +1046,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _renderView() {
+    if (this._view === "dashboard") return this._renderDashboard();
     if (this._view === "mine") return this._renderMine();
     if (this._view === "week") return this._renderWeek();
     if (this._view === "tasks") return this._renderTasks();
@@ -1172,25 +1175,44 @@ class HouseholdTasksPanel extends HTMLElement {
     const dueToday = open.filter((o) => new Date(o.due).toLocaleDateString(this._locale()) === today);
     const overdue = open.filter((o) => new Date(o.due) < now && !dueToday.includes(o));
     const upcoming = open.filter((o) => !dueToday.includes(o) && !overdue.includes(o)).slice(0, 8);
-    const personCounts = {};
-    open.forEach((o) => { personCounts[o.assignee] = (personCounts[o.assignee] || 0) + 1; });
     return `
-      ${this._renderContextualHome(open)}
-      <div class="hero">
-        <div><div class="eyebrow">${now.toLocaleDateString(this._locale(), { weekday: "long", day: "2-digit", month: "long" })}</div>
-        <h2>${dueToday.length ? (householdTasksLocale(this._hass) === "de" ? `${dueToday.length} ${dueToday.length === 1 ? "Aufgabe" : "Aufgaben"} heute` : `${dueToday.length} ${dueToday.length === 1 ? "task" : "tasks"} today`) : this._t("Heute ist alles im Griff")}</h2></div>
-        <div class="hero-side"><div class="score">${open.length}<small>offen</small></div>
-        <button id="quick-task" class="hero-button">+ Schnellaufgabe</button></div>
-      </div>
-      ${this._renderMobileQuickActions(open)}
-      ${this._renderTaskStacks()}
-      ${this._peopleStrip(personCounts)}
-      ${this._ranking()}
+      ${this._renderDayHero(open, dueToday, now)}
       ${this._occurrenceSection("Überfällig", overdue, "danger")}
       ${this._occurrenceSection("Heute", dueToday)}
       ${this._occurrenceSection("Demnächst", upcoming, "muted")}
       ${!open.length ? `<div class="empty card"><div class="big-icon">✓</div><h2>Alles erledigt</h2><p>Im Moment ist keine Haushaltsaufgabe offen.</p></div>` : ""}
     `;
+  }
+
+  _renderDashboard() {
+    const open = this._openOccurrences();
+    const now = new Date();
+    const today = now.toLocaleDateString(this._locale());
+    const dueToday = open.filter((item) => new Date(item.due).toLocaleDateString(this._locale()) === today);
+    const personCounts = {};
+    open.forEach((item) => { personCounts[item.assignee] = (personCounts[item.assignee] || 0) + 1; });
+    return `
+      ${this._renderDayHero(open, dueToday, now)}
+      ${this._renderContextualHome(open)}
+      ${this._renderMobileQuickActions(open)}
+      ${this._renderTaskStacks()}
+      ${this._peopleStrip(personCounts)}
+      ${this._ranking()}
+    `;
+  }
+
+  _renderDayHero(open, dueToday, now) {
+    const heading = dueToday.length
+      ? householdTasksLocale(this._hass) === "de"
+        ? `${dueToday.length} ${dueToday.length === 1 ? "Aufgabe" : "Aufgaben"} heute`
+        : `${dueToday.length} ${dueToday.length === 1 ? "task" : "tasks"} today`
+      : this._t("Heute ist alles im Griff");
+    return `<div class="hero">
+      <div><div class="eyebrow">${now.toLocaleDateString(this._locale(), { weekday: "long", day: "2-digit", month: "long" })}</div>
+      <h2>${heading}</h2></div>
+      <div class="hero-side"><div class="score">${open.length}<small>offen</small></div>
+      <button id="quick-task" class="hero-button">+ Schnellaufgabe</button></div>
+    </div>`;
   }
 
   _renderContextualHome(open) {
