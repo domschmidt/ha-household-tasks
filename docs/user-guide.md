@@ -608,6 +608,11 @@ auf dem Dashboard und in **Heute** zur Verfügung. **Heute planen** öffnet alle
 nahen Aufgaben in einer gemeinsamen Planungsansicht. Im Wochenplan lassen sich Aufgaben per
 Drag-and-drop auf einen anderen Tag verschieben.
 
+Das Panel aktualisiert sich bei Änderungen anderer Clients über den bestehenden
+Home-Assistant-WebSocket. Beim erneuten Öffnen beziehungsweise Fortsetzen der
+iOS-App wird der aktuelle Stand zusätzlich aktiv abgerufen, weil die mobile
+WebView während des Hintergrundbetriebs eingefroren sein kann.
+
 Über **Natürlich verschieben** kann eine Aufgabe beispielsweise auf „morgen 18
 Uhr“, „am Wochenende“ oder „wenn Alex zuhause ist“ gelegt werden. Bei einer
 Anwesenheitsbedingung wartet Household Tasks lokal auf die konfigurierte

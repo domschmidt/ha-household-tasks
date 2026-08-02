@@ -35,9 +35,16 @@ class HouseholdTasksPanel extends HTMLElement {
     this._busy = false;
     this._references = { users: [], devices: [], tags: [] };
     this._referencesLoaded = false;
+    this._lastRefreshAt = 0;
+    this._refreshTimer = null;
+    this._updateSubscription = null;
+    this._updateSubscriptionConnection = null;
     this._offlineActions = new Set(["complete", "snooze", "move_occurrence", "bulk"]);
-    this._onlineHandler = () => this._flushOfflineQueue();
+    this._onlineHandler = () => {
+      void this._flushOfflineQueue().finally(() => this._scheduleRefresh());
+    };
     this._offlineHandler = () => this._render();
+    this._resumeHandler = () => this._refreshAfterResume();
     this._popstateHandler = () => {
       const view = this._viewFromLocation();
       if (view === this._view) return;
@@ -55,7 +62,9 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   set hass(value) {
+    const connectionChanged = this._hass?.connection !== value?.connection;
     this._hass = value;
+    if (connectionChanged) void this._ensureUpdateSubscription();
     if (this.isConnected && !this._data && !this._busy) this._load();
   }
   get hass() { return this._hass; }
@@ -78,13 +87,22 @@ class HouseholdTasksPanel extends HTMLElement {
     window.addEventListener("popstate", this._popstateHandler);
     window.removeEventListener("location-changed", this._popstateHandler);
     window.addEventListener("location-changed", this._popstateHandler);
+    window.removeEventListener("focus", this._resumeHandler);
+    window.addEventListener("focus", this._resumeHandler);
+    window.removeEventListener("pageshow", this._resumeHandler);
+    window.addEventListener("pageshow", this._resumeHandler);
+    document.removeEventListener("visibilitychange", this._resumeHandler);
+    document.addEventListener("visibilitychange", this._resumeHandler);
     this._view = this._viewFromLocation();
     this._render();
     const cached = localStorage.getItem("household_tasks_offline_snapshot");
     if (cached && !this._data) {
       try { this._data = JSON.parse(cached); } catch (_) { /* Ignore stale cache. */ }
     }
-    if (this._hass) this._load();
+    if (this._hass) {
+      void this._ensureUpdateSubscription();
+      this._load();
+    }
   }
 
   disconnectedCallback() {
@@ -93,6 +111,12 @@ class HouseholdTasksPanel extends HTMLElement {
     window.removeEventListener("offline", this._offlineHandler);
     window.removeEventListener("popstate", this._popstateHandler);
     window.removeEventListener("location-changed", this._popstateHandler);
+    window.removeEventListener("focus", this._resumeHandler);
+    window.removeEventListener("pageshow", this._resumeHandler);
+    document.removeEventListener("visibilitychange", this._resumeHandler);
+    clearTimeout(this._refreshTimer);
+    this._refreshTimer = null;
+    this._teardownUpdateSubscription();
   }
 
   _viewFromLocation() {
@@ -150,11 +174,65 @@ class HouseholdTasksPanel extends HTMLElement {
   async _load() {
     try {
       await this._call("get");
+      this._lastRefreshAt = Date.now();
       if (this._view === "week") await this._loadWeekPreview();
       await this._loadReferences();
     } catch (error) {
       console.debug("Household Tasks could not refresh its panel data.", error);
     }
+  }
+
+  _refreshAfterResume() {
+    if (document.visibilityState !== "visible" || !navigator.onLine) return;
+    if (Date.now() - this._lastRefreshAt < 1000) return;
+    this._scheduleRefresh(50);
+  }
+
+  _scheduleRefresh(delay = 150) {
+    if (!this.isConnected || !this._hass || !navigator.onLine) return;
+    clearTimeout(this._refreshTimer);
+    this._refreshTimer = setTimeout(() => {
+      this._refreshTimer = null;
+      if (this.shadowRoot.querySelector("#modal .backdrop")) {
+        this._scheduleRefresh(1000);
+        return;
+      }
+      if (this._busy) {
+        this._scheduleRefresh(250);
+        return;
+      }
+      void this._load();
+    }, delay);
+  }
+
+  async _ensureUpdateSubscription() {
+    const connection = this._hass?.connection;
+    if (!this.isConnected || !connection?.subscribeEvents) return;
+    if (this._updateSubscriptionConnection === connection) return;
+    this._teardownUpdateSubscription();
+    this._updateSubscriptionConnection = connection;
+    try {
+      const unsubscribe = await connection.subscribeEvents(
+        () => this._scheduleRefresh(),
+        "household_tasks_updated",
+      );
+      if (!this.isConnected || this._updateSubscriptionConnection !== connection) {
+        unsubscribe();
+        return;
+      }
+      this._updateSubscription = unsubscribe;
+    } catch (error) {
+      if (this._updateSubscriptionConnection === connection) {
+        this._updateSubscriptionConnection = null;
+      }
+      console.debug("Household Tasks could not subscribe to live updates.", error);
+    }
+  }
+
+  _teardownUpdateSubscription() {
+    if (typeof this._updateSubscription === "function") this._updateSubscription();
+    this._updateSubscription = null;
+    this._updateSubscriptionConnection = null;
   }
 
   async _loadWeekPreview() {
