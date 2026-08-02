@@ -22,6 +22,28 @@ test("quick-task validation never targets an invisible required control", async 
   expect(errors).toEqual([]);
 });
 
+test("today prioritizes work while dashboard keeps household context", async ({ page }) => {
+  const panel = await openPanel(page);
+
+  await expect(panel.locator(".hero")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "+ Schnellaufgabe" })).toBeVisible();
+  await expect(panel.locator(".task-card")).toHaveCount(1);
+  await expect(panel.locator(".context-home")).toHaveCount(0);
+  await expect(panel.locator(".people-strip")).toHaveCount(0);
+  await expect(panel.locator(".ranking-card")).toHaveCount(0);
+
+  await panel.getByRole("link", { name: "Dashboard", exact: true }).click();
+
+  await expect(page).toHaveURL(/view=dashboard/);
+  await expect(panel.locator(".hero")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "+ Schnellaufgabe" })).toBeVisible();
+  await expect(panel.locator(".context-home")).toBeVisible();
+  await expect(panel.locator(".stack-strip")).toBeVisible();
+  await expect(panel.locator(".people-strip")).toBeVisible();
+  await expect(panel.locator(".ranking-card")).toBeVisible();
+  await expect(panel.locator(".task-card")).toHaveCount(0);
+});
+
 test("NFC creator is aligned and invokes Home Assistant", async ({ page }) => {
   const panel = await openPanel(page);
   await panel.getByRole("link", { name: "Aufgaben", exact: true }).click();
@@ -46,7 +68,7 @@ test("NFC creator is aligned and invokes Home Assistant", async ({ page }) => {
 test("mobile views do not overflow horizontally", async ({ page, isMobile }) => {
   test.skip(!isMobile, "Mobile browser project only");
   const panel = await openPanel(page);
-  for (const view of ["Heute", "Aufgaben", "Verlauf"]) {
+  for (const view of ["Heute", "Dashboard", "Aufgaben", "Verlauf"]) {
     await panel.getByRole("link", { name: view, exact: true }).click();
     const layout = await page.evaluate(() => {
       const viewportWidth = document.documentElement.clientWidth;

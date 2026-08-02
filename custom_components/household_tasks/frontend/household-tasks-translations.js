@@ -3,6 +3,7 @@ const EN = {
   "Haushaltsaufgaben": "Household tasks",
   "Aktualisieren": "Refresh",
   "Heute": "Today",
+  "Dashboard": "Dashboard",
   "Aufgaben": "Tasks",
   "Personen": "People",
   "Auswertung": "Analytics",
