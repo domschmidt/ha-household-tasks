@@ -45,6 +45,7 @@ class HouseholdTasksPanel extends HTMLElement {
     };
     this._offlineHandler = () => this._render();
     this._resumeHandler = () => this._refreshAfterResume();
+    this._viewportHandler = () => this._positionOpenActionMenus();
     this._popstateHandler = () => {
       const view = this._viewFromLocation();
       if (view === this._view) return;
@@ -93,6 +94,10 @@ class HouseholdTasksPanel extends HTMLElement {
     window.addEventListener("pageshow", this._resumeHandler);
     document.removeEventListener("visibilitychange", this._resumeHandler);
     document.addEventListener("visibilitychange", this._resumeHandler);
+    window.removeEventListener("resize", this._viewportHandler);
+    window.addEventListener("resize", this._viewportHandler);
+    window.removeEventListener("scroll", this._viewportHandler, true);
+    window.addEventListener("scroll", this._viewportHandler, true);
     this._view = this._viewFromLocation();
     this._render();
     const cached = localStorage.getItem("household_tasks_offline_snapshot");
@@ -114,6 +119,8 @@ class HouseholdTasksPanel extends HTMLElement {
     window.removeEventListener("focus", this._resumeHandler);
     window.removeEventListener("pageshow", this._resumeHandler);
     document.removeEventListener("visibilitychange", this._resumeHandler);
+    window.removeEventListener("resize", this._viewportHandler);
+    window.removeEventListener("scroll", this._viewportHandler, true);
     clearTimeout(this._refreshTimer);
     this._refreshTimer = null;
     this._teardownUpdateSubscription();
@@ -1419,7 +1426,7 @@ class HouseholdTasksPanel extends HTMLElement {
       </div>
       <div class="occurrence-actions">
         ${primaryAction}
-        <details class="more-actions"><summary aria-label="Weitere Aktionen">•••</summary><div>
+        <details class="more-actions"><summary aria-label="Weitere Aktionen" aria-haspopup="menu" aria-expanded="false">•••</summary><div role="menu">
           <button data-snooze="${this._e(item.id)}" data-choice="evening">Heute Abend</button>
           <button data-snooze="${this._e(item.id)}" data-choice="tomorrow">Morgen</button>
           <button data-help="${this._e(item.id)}">Hilfe anfordern</button>
@@ -1999,6 +2006,7 @@ class HouseholdTasksPanel extends HTMLElement {
       });
       ["pointerup", "pointercancel", "pointermove"].forEach((name) => card.addEventListener(name, () => clearTimeout(longPress)));
     });
+    this._bindActionMenus();
     this.shadowRoot.querySelectorAll("[data-jump-occurrence]").forEach((button) => button.onclick = () => {
       const card = this.shadowRoot.querySelector(`[data-complete="${CSS.escape(button.dataset.jumpOccurrence)}"],[data-claim="${CSS.escape(button.dataset.jumpOccurrence)}"]`)?.closest(".task-card");
       card?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -2140,6 +2148,45 @@ class HouseholdTasksPanel extends HTMLElement {
         this._toast("Ausgangswerte wiederhergestellt");
       }
     });
+  }
+
+  _bindActionMenus() {
+    this.shadowRoot.querySelectorAll("details.more-actions").forEach((details) => {
+      details.addEventListener("toggle", () => {
+        const summary = details.querySelector("summary");
+        summary?.setAttribute("aria-expanded", String(details.open));
+        if (!details.open) {
+          details.classList.remove("opens-up");
+          details.querySelector(":scope > div")?.style.removeProperty("max-height");
+          return;
+        }
+        this.shadowRoot.querySelectorAll("details.more-actions[open]").forEach((other) => {
+          if (other !== details) other.open = false;
+        });
+        requestAnimationFrame(() => this._positionActionMenu(details));
+      });
+    });
+  }
+
+  _positionOpenActionMenus() {
+    this.shadowRoot.querySelectorAll("details.more-actions[open]").forEach((details) => {
+      this._positionActionMenu(details);
+    });
+  }
+
+  _positionActionMenu(details) {
+    const summary = details.querySelector("summary");
+    const menu = details.querySelector(":scope > div");
+    if (!details.open || !summary || !menu) return;
+    const trigger = summary.getBoundingClientRect();
+    const gap = 6;
+    const viewportMargin = 8;
+    const roomBelow = window.innerHeight - trigger.bottom - gap - viewportMargin;
+    const roomAbove = trigger.top - gap - viewportMargin;
+    const opensUp = roomBelow < menu.scrollHeight && roomAbove > roomBelow;
+    details.classList.toggle("opens-up", opensUp);
+    const available = Math.max(120, opensUp ? roomAbove : roomBelow);
+    menu.style.maxHeight = `${Math.floor(available)}px`;
   }
 
   _bindBulkActions() {
@@ -4364,7 +4411,7 @@ class HouseholdTasksPanel extends HTMLElement {
       .ranking-card{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:16px;padding:17px 18px;margin-bottom:18px}.ranking-head{display:flex;justify-content:space-between;align-items:end;margin-bottom:10px}.ranking-head>span{font-size:12px;color:var(--secondary-text-color)}.ranking-list{display:grid;gap:4px}.ranking-row{display:grid;grid-template-columns:30px 38px minmax(100px,1fr) auto auto;align-items:center;gap:10px;padding:7px 2px;border-top:1px solid var(--divider-color,#ddd)}.ranking-row:first-child{border-top:0}.rank{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;font-size:12px;font-weight:800;background:var(--divider-color,#eee)}.rank.top-1{background:#ffe08a;color:#6d4c00}.rank.top-2{background:#e2e5e9;color:#46505a}.rank.top-3{background:#e8c3a3;color:#70401f}.month-points{font-size:12px;color:var(--secondary-text-color)}.ranking-row>b{min-width:72px;text-align:right;color:var(--ht-accent-text)}
       .avatar{display:grid;place-items:center;flex:none;width:38px;height:38px;border-radius:50%;background:color-mix(in srgb,var(--primary-color,#03a9f4) 16%,var(--card-background-color,#fff));color:var(--ht-accent-text);font-weight:800}.avatar.large{width:52px;height:52px;font-size:20px}
       .section-title{display:flex;align-items:center;gap:8px;margin:20px 2px 9px}.section-title span{font-size:12px;background:var(--divider-color,#ddd);padding:2px 7px;border-radius:99px}.section-title.danger h3{color:var(--error-color,#db4437)}
-      .occurrences{display:grid;gap:8px}.task-card{display:flex;align-items:center;gap:13px;background:var(--card-background-color,#fff);padding:13px 15px;border-radius:14px;border:1px solid var(--divider-color,#ddd);box-shadow:0 1px 2px #0000000a;transition:box-shadow .2s}.task-card.highlight{box-shadow:0 0 0 3px var(--primary-color)}.task-card.overdue{border-left:4px solid var(--error-color,#db4437)}.task-main{flex:1;min-width:0}.task-main h3{font-size:16px}.task-main p{font-size:13px;margin:4px 0 0}.complete{color:var(--ht-accent-text);border-color:color-mix(in srgb,var(--primary-color) 35%,transparent)}.occurrence-actions{display:flex;align-items:center;gap:6px}.more-actions{position:relative}.more-actions summary{list-style:none;cursor:pointer;padding:9px;border:1px solid var(--divider-color);border-radius:9px}.more-actions>div{position:absolute;z-index:5;right:0;top:44px;display:grid;gap:5px;width:190px;padding:8px;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:11px;box-shadow:0 8px 25px #0003}.more-actions button{text-align:left}.help-status{color:var(--ht-accent-text)!important}.market-badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.market-badges span{font-size:11px;padding:3px 7px;border-radius:99px;background:color-mix(in srgb,var(--primary-color) 10%,transparent);color:var(--ht-accent-text);font-weight:700}
+      .occurrences{display:grid;gap:8px}.task-card{display:flex;align-items:center;gap:13px;background:var(--card-background-color,#fff);padding:13px 15px;border-radius:14px;border:1px solid var(--divider-color,#ddd);box-shadow:0 1px 2px #0000000a;transition:box-shadow .2s}.task-card.highlight{box-shadow:0 0 0 3px var(--primary-color)}.task-card.overdue{border-left:4px solid var(--error-color,#db4437)}.task-main{flex:1;min-width:0}.task-main h3{font-size:16px}.task-main p{font-size:13px;margin:4px 0 0}.complete{color:var(--ht-accent-text);border-color:color-mix(in srgb,var(--primary-color) 35%,transparent)}.occurrence-actions{display:flex;align-items:center;gap:6px}.more-actions{position:relative}.more-actions summary{list-style:none;cursor:pointer;padding:9px;border:1px solid var(--divider-color);border-radius:9px}.more-actions>div{position:absolute;z-index:5;right:0;top:calc(100% + 6px);display:grid;gap:5px;width:190px;padding:8px;overflow-y:auto;overscroll-behavior:contain;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:11px;box-shadow:0 8px 25px #0003}.more-actions.opens-up>div{top:auto;bottom:calc(100% + 6px);box-shadow:0 -8px 25px #0003}.more-actions button{text-align:left}.help-status{color:var(--ht-accent-text)!important}.market-badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.market-badges span{font-size:11px;padding:3px 7px;border-radius:99px;background:color-mix(in srgb,var(--primary-color) 10%,transparent);color:var(--ht-accent-text);font-weight:700}
       .assignment-explanation{margin-top:6px;font-size:12px;color:var(--secondary-text-color)}.assignment-explanation summary{cursor:pointer}.assignment-explanation p{margin:5px 0 0}
       .task-status{display:inline-flex;padding:2px 7px;margin-right:5px;border-radius:99px;background:var(--divider-color,#eee);color:var(--primary-text-color,#202124);font-size:10px;font-weight:800;text-transform:uppercase}.status-in_progress{background:#dceeff;color:#075c9c}.status-waiting{background:#fff1c7;color:#735700}.status-blocked{background:#ffe1df;color:#9b1c16}.task-checklist{display:grid;gap:5px;margin-top:10px;padding:9px 10px;border-radius:10px;background:color-mix(in srgb,var(--primary-color) 5%,transparent)}.task-checklist label{display:flex;align-items:flex-start;gap:7px;font-size:13px}.task-checklist input{width:auto;margin-top:2px}.task-checklist input:checked+span{text-decoration:line-through;color:var(--secondary-text-color)}.task-dependencies{color:var(--warning-color,#b26a00)!important}.task-event-list{display:grid;gap:0;max-height:55vh;overflow:auto}.task-event-list article{display:grid;grid-template-columns:1fr auto;gap:3px 12px;padding:11px 2px;border-bottom:1px solid var(--divider-color)}.task-event-list time,.task-event-list small{font-size:12px;color:var(--secondary-text-color)}
       .toolbar{display:flex;align-items:end;justify-content:space-between;margin-bottom:18px}.toolbar p{margin:5px 0 0}.toolbar-actions{display:flex;gap:8px;flex-wrap:wrap}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}.config-card,.settings-card,.card{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:16px;padding:18px}.config-card.disabled{opacity:.65}.card-top{display:flex;align-items:center;gap:12px}.card-top>div:nth-child(2){flex:1}.card-top p{font-size:13px;margin:3px 0}.status{font-size:11px;font-weight:750;padding:4px 8px;border-radius:99px;background:var(--divider-color,#eee)}.status.home{background:#daf5df;color:#17752a}.description{font-size:14px}.actions{display:flex;gap:7px;margin-top:15px;flex-wrap:wrap}.danger-button{color:var(--error-color,#db4437)}dl{font-size:13px}dt{color:var(--secondary-text-color);margin-top:9px}dd{margin:2px 0;overflow-wrap:anywhere}.gallery-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}.gallery-strip article{display:flex;flex-direction:column;align-items:flex-start;padding:14px;border:1px solid var(--divider-color);border-radius:13px;background:var(--card-background-color)}.gallery-strip span,.gallery-modal span{font-size:10px;font-weight:800;color:var(--primary-color);text-transform:uppercase}.gallery-strip strong{margin:5px 0}.gallery-strip p{font-size:12px;flex:1}.gallery-modal{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:18px}.gallery-modal>button{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:5px}.gallery-modal>button.selected{border-color:var(--primary-color);box-shadow:0 0 0 1px var(--primary-color)}
