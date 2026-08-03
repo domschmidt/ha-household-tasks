@@ -1805,6 +1805,7 @@ class HouseholdTasksPanel extends HTMLElement {
     const digest = this._data.defaults?.notification_digest || { enabled: false, time: "17:30:00", minimum_tasks: 2 };
     const suggestions = this._data.discovery_suggestions || [];
     const householdMode = this._data.household_mode || { mode: "normal", policy: "pause" };
+    const caldav = this._data.caldav || null;
     const health = structuredClone(this._data.configuration_health || { status: "ok", findings: [] });
     if (this._referencesLoaded) {
       const registeredTags = new Set((this._references.tags || []).map((tag) => tag.tag_id || tag.id));
@@ -1830,6 +1831,7 @@ class HouseholdTasksPanel extends HTMLElement {
         ${this._data.is_admin ? `<button id="refresh-health">Neu prüfen</button>` : ""}</div>
         ${healthMarkup}
       </article>
+      ${this._caldavSettings(caldav)}
       <article class="settings-card">
         <h3>Home-Assistant-Autodiscovery</h3>
         <p>Lokale Entitäten werden auf mögliche Geräte-, Kalender-, Batterie- und Wartungsregeln geprüft. Es werden keine Daten übertragen.</p>
@@ -1922,6 +1924,63 @@ class HouseholdTasksPanel extends HTMLElement {
           <input id="import-file" class="hidden" type="file" accept="application/json,.json"></div></div>` : ""}
         ${this._data.is_admin ? `<button id="reset-config" class="danger-button">Auf Ausgangswerte zurücksetzen</button>` : ""}
       </article>`;
+  }
+
+  _caldavSettings(caldav) {
+    if (!caldav) return `<article class="settings-card"><h3>CalDAV</h3><p>Der CalDAV-Dienst wird noch initialisiert.</p></article>`;
+    const settings = caldav.settings || {};
+    const credentials = caldav.credentials || [];
+    const people = Object.entries(this._data.people || {});
+    const credentialRows = credentials.length
+      ? credentials.map((item) => {
+        const person = this._data.people[item.person_id]?.name || (item.scope === "household" ? "Gesamter Haushalt" : item.person_id || "–");
+        const lastUsed = item.last_used_at ? new Date(item.last_used_at).toLocaleString(this._locale()) : "noch nie";
+        const expires = item.expires_at ? new Date(item.expires_at).toLocaleString(this._locale()) : "ohne Ablauf";
+        return `<div class="caldav-credential">
+          <div><strong>${this._e(item.label)}</strong><small>${this._e(item.username)} · ${this._e(person)}</small><small>${item.permission === "read_write" ? "Lesen und Schreiben" : "Nur Lesen"} · ${item.scope === "household" ? "Haushalt" : "Persönlich"}</small><small>Zuletzt verwendet: ${this._e(lastUsed)} · ${this._e(expires)}</small></div>
+          ${this._data.is_admin ? `<button type="button" class="danger-button" data-revoke-caldav="${this._e(item.id)}">Widerrufen</button>` : ""}
+        </div>`;
+      }).join("")
+      : `<p class="hint">Noch kein App-Passwort angelegt. Ohne Zugangsdaten bleibt der Server von außen unzugänglich.</p>`;
+    return `<article class="settings-card caldav-card">
+      <div class="settings-heading"><div><h3>CalDAV für Apple Erinnerungen</h3><p>Bidirektionale, personengebundene VTODO-Synchronisation mit Offline-Konfliktschutz, Checklisten-Unteraufgaben und einmaligen App-Passwörtern.</p></div><span class="status ${settings.enabled ? "home" : ""}">${settings.enabled ? "Aktiv" : "Aus"}</span></div>
+      <div class="info-row"><span>Server-URL</span><code>${this._e(caldav.server_url)}</code></div>
+      <div class="info-row"><span>Protokoll</span><span>CalDAV · VTODO · Sync-Tokens · ETags</span></div>
+      ${settings.require_tls && !String(caldav.server_url || "").startsWith("https://") ? `<div class="health-summary warning">HTTPS ist vorgeschrieben, aber die konfigurierte Home-Assistant-URL ist nicht HTTPS. Externer Zugriff wird abgewiesen.</div>` : ""}
+      ${this._data.is_admin ? `<details class="advanced-fields" open><summary>Serveroptionen</summary>
+        <form id="caldav-settings-form" class="form-grid">
+          <label class="checkbox full"><input name="enabled" type="checkbox" ${settings.enabled ? "checked" : ""}> CalDAV-Server aktivieren<span class="hint">Ohne gültiges App-Passwort ist auch ein aktiver Server nicht nutzbar.</span></label>
+          <label class="checkbox full"><input name="require_tls" type="checkbox" ${settings.require_tls ? "checked" : ""}> HTTPS erzwingen<span class="hint">Für produktive Systeme unbedingt aktiviert lassen. Nur für isolierte lokale Tests abschalten.</span></label>
+          <label>Listenname<input name="calendar_name" maxlength="100" value="${this._e(settings.calendar_name || "Household Tasks")}"></label>
+          <label>Farbe<input name="calendar_color" pattern="#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?" value="${this._e(settings.calendar_color || "#03A9F4FF")}"></label>
+          <label class="full">Beschreibung<input name="calendar_description" maxlength="500" value="${this._e(settings.calendar_description || "")}"></label>
+          <label>Erledigte Aufgaben anzeigen<input name="expose_completed_days" type="number" min="0" max="3650" value="${Number(settings.expose_completed_days ?? 90)}"><span class="hint">Tage; 0 blendet abgeschlossene Aufgaben sofort aus.</span></label>
+          <label>Standard-Erinnerung<input name="default_reminder_minutes" type="number" min="0" max="525600" value="${Number(settings.default_reminder_minutes || 0)}"><span class="hint">Minuten vor Fälligkeit; 0 erzeugt keinen zusätzlichen VALARM.</span></label>
+          <label class="checkbox"><input name="allow_client_create" type="checkbox" ${settings.allow_client_create ? "checked" : ""}> Aufgaben im Client anlegen</label>
+          <label class="checkbox"><input name="allow_client_update" type="checkbox" ${settings.allow_client_update ? "checked" : ""}> Aufgaben im Client ändern/erledigen</label>
+          <label class="checkbox"><input name="allow_client_delete" type="checkbox" ${settings.allow_client_delete ? "checked" : ""}> Aufgaben im Client löschen<span class="hint">Löschen wird revisionssicher als Abbruch protokolliert.</span></label>
+          <input name="delete_mode" type="hidden" value="cancel">
+          <div class="full"><button class="primary" type="submit">CalDAV-Einstellungen speichern</button></div>
+        </form>
+      </details>
+      <details class="advanced-fields"><summary>App-Passwort anlegen</summary>
+        <form id="caldav-credential-form" class="form-grid">
+          <label>Bezeichnung<input name="label" required maxlength="100" placeholder="Mein iPhone"></label>
+          <label>Person<select name="person_id"><option value="">Keine feste Person</option>${people.map(([id, person]) => `<option value="${this._e(id)}">${this._e(person.name)}</option>`).join("")}</select><span class="hint">Für persönliche Listen und neue Aufgaben erforderlich.</span></label>
+          <label>Umfang<select name="scope"><option value="personal">Persönliche und übernehmbare Aufgaben</option><option value="household">Alle Haushaltsaufgaben</option></select></label>
+          <label>Berechtigung<select name="permission"><option value="read_write">Lesen und Schreiben</option><option value="read_only">Nur Lesen</option></select></label>
+          <label>Ablauf (optional)<input name="expires_at" type="datetime-local"></label>
+          <label class="checkbox"><input name="include_claimable" type="checkbox" checked> Offene übernehmbare Aufgaben anzeigen</label>
+          <label class="checkbox full"><input name="complete_checklist_on_parent" type="checkbox" checked> Beim Erledigen der Hauptaufgabe offene Checklistenpunkte mit erledigen<span class="hint">Nützlich für Clients, die CalDAV-Unteraufgaben nicht vollständig darstellen.</span></label>
+          <div class="full"><button class="primary" type="submit">App-Passwort erzeugen</button></div>
+        </form>
+      </details>` : ""}
+      <h4>Aktive Zugänge</h4><div class="caldav-credentials">${credentialRows}</div>
+      <details class="advanced-fields"><summary>Einrichtung und Synchronisationsverhalten</summary>
+        <ol class="setup-steps"><li>In iOS/iPadOS <strong>Einstellungen → Apps → Erinnerungen → Accounts → Account hinzufügen → Andere → CalDAV-Account</strong> öffnen.</li><li>Als Server die oben angezeigte HTTPS-URL und das einmalig erzeugte Paar aus Benutzername und App-Passwort verwenden.</li><li>SSL aktivieren. Änderungen werden offline vorgemerkt und nach Wiederverbindung synchronisiert.</li><li>Bei parallelen Änderungen verhindert der ETag eine stille Überschreibung; der Client lädt die aktuelle Fassung neu.</li></ol>
+        <p class="hint">Jedes Gerät erhält ein eigenes, widerrufbares App-Passwort. Verwende niemals dein Home-Assistant-Kennwort.</p>
+      </details>
+    </article>`;
   }
 
   _selected(actual, expected) {
@@ -2179,6 +2238,13 @@ class HouseholdTasksPanel extends HTMLElement {
     this.shadowRoot.querySelector("#weekly-summary-form")?.addEventListener("submit", (event) => this._saveWeeklySummary(event));
     this.shadowRoot.querySelector("#household-mode-form")?.addEventListener("submit", (event) => this._saveHouseholdMode(event));
     this.shadowRoot.querySelector("#notification-digest-form")?.addEventListener("submit", (event) => this._saveNotificationDigest(event));
+    this.shadowRoot.querySelector("#caldav-settings-form")?.addEventListener("submit", (event) => this._saveCalDAVSettings(event));
+    this.shadowRoot.querySelector("#caldav-credential-form")?.addEventListener("submit", (event) => this._createCalDAVCredential(event));
+    this.shadowRoot.querySelectorAll("[data-revoke-caldav]").forEach((button) => button.onclick = async () => {
+      if (!await this._confirm("Dieses CalDAV-App-Passwort sofort widerrufen? Das Gerät kann danach nicht mehr synchronisieren.")) return;
+      await this._call("caldav_revoke_credential", { credential_id: button.dataset.revokeCaldav });
+      this._toast("CalDAV-Zugang widerrufen");
+    });
     this.shadowRoot.querySelector("#refresh-health")?.addEventListener("click", () => this._load());
     this.shadowRoot.querySelectorAll("[data-health-fix]").forEach((button) => button.onclick = () => {
       const finding = this._data.configuration_health?.findings?.[Number(button.dataset.healthFix)];
@@ -2641,6 +2707,84 @@ class HouseholdTasksPanel extends HTMLElement {
     };
     await this._call("save_defaults", { defaults });
     this._toast("Benachrichtigungsbündelung gespeichert");
+  }
+
+  async _saveCalDAVSettings(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    await this._call("caldav_save_settings", { settings: {
+      enabled: values.get("enabled") === "on",
+      require_tls: values.get("require_tls") === "on",
+      calendar_name: String(values.get("calendar_name") || "Household Tasks").trim(),
+      calendar_description: String(values.get("calendar_description") || "").trim(),
+      calendar_color: String(values.get("calendar_color") || "#03A9F4FF").trim(),
+      allow_client_create: values.get("allow_client_create") === "on",
+      allow_client_update: values.get("allow_client_update") === "on",
+      allow_client_delete: values.get("allow_client_delete") === "on",
+      delete_mode: "cancel",
+      expose_completed_days: Number(values.get("expose_completed_days") || 0),
+      default_reminder_minutes: Number(values.get("default_reminder_minutes") || 0),
+    } });
+    this._toast("CalDAV-Einstellungen gespeichert");
+  }
+
+  async _createCalDAVCredential(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const scope = String(values.get("scope") || "personal");
+    const personId = String(values.get("person_id") || "") || null;
+    if (scope === "personal" && !personId) {
+      this._toast("Für einen persönlichen CalDAV-Zugang muss eine Person ausgewählt werden.", true);
+      return;
+    }
+    const localExpiry = String(values.get("expires_at") || "");
+    this._busy = true;
+    try {
+      const result = await this._hass.callWS({
+        type: "household_tasks/caldav_create_credential",
+        person_id: personId,
+        label: String(values.get("label") || "").trim(),
+        permission: String(values.get("permission") || "read_write"),
+        scope,
+        include_claimable: values.get("include_claimable") === "on",
+        complete_checklist_on_parent: values.get("complete_checklist_on_parent") === "on",
+        expires_at: localExpiry ? new Date(localExpiry).toISOString() : null,
+      });
+      const created = result?.caldav?.created_credential;
+      if (!created) throw new Error("Home Assistant hat keine Zugangsdaten zurückgegeben.");
+      delete result.caldav.created_credential;
+      this._data = result;
+      if (this._hass.user) this._data.is_admin = this._hass.user.is_admin;
+      localStorage.setItem("household_tasks_offline_snapshot", JSON.stringify(this._data));
+      this._render();
+      this._showCalDAVCredential(created);
+    } catch (error) {
+      this._toast(this._errorText(error), true);
+    } finally {
+      this._busy = false;
+    }
+  }
+
+  _showCalDAVCredential(created) {
+    const modal = this.shadowRoot.querySelector("#modal");
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card" role="dialog" aria-modal="true" aria-label="CalDAV-Zugang angelegt">
+      <div class="modal-head"><div><div class="eyebrow">NUR EINMAL SICHTBAR</div><h2>CalDAV-Zugang angelegt</h2></div><button class="icon-button close" aria-label="Schließen">×</button></div>
+      <div class="health-summary warning">Kopiere das App-Passwort jetzt. Es wird ausschließlich gehasht gespeichert und kann später nicht erneut angezeigt werden.</div>
+      <dl class="credential-secret">
+        <dt>Server</dt><dd><code>${this._e(created.server_url)}</code><button type="button" data-copy-secret="server_url">Kopieren</button></dd>
+        <dt>Benutzername</dt><dd><code>${this._e(created.username)}</code><button type="button" data-copy-secret="username">Kopieren</button></dd>
+        <dt>App-Passwort</dt><dd><code>${this._e(created.password)}</code><button type="button" data-copy-secret="password">Kopieren</button></dd>
+      </dl>
+      <p>In Apple Erinnerungen einen CalDAV-Account mit SSL anlegen. Als Server kann die vollständige URL verwendet werden.</p>
+      <div class="actions"><button type="button" class="primary close-bottom">Ich habe die Daten gespeichert</button></div>
+    </div></div>`;
+    const close = () => modal.replaceChildren();
+    modal.querySelector(".close").onclick = close;
+    modal.querySelector(".close-bottom").onclick = close;
+    modal.querySelectorAll("[data-copy-secret]").forEach((button) => button.onclick = () => this._copyReference(created[button.dataset.copySecret]));
+    this._activateDialog(modal, close);
   }
 
   _showDiscoveryInstall(suggestionId) {
@@ -4530,6 +4674,7 @@ class HouseholdTasksPanel extends HTMLElement {
       .timeline{background:var(--card-background-color,#fff);border-radius:16px;border:1px solid var(--divider-color,#ddd);padding:4px 18px}.history-row{display:flex;gap:13px;align-items:center;padding:14px 0;border-bottom:1px solid var(--divider-color,#ddd)}.history-row:last-child{border:0}.history-row p{margin:4px 0 0;font-size:13px}.check{display:grid;place-items:center;border-radius:50%;width:34px;height:34px;background:#daf5df;color:#17752a;font-weight:800}
       .settings-card{max-width:760px;margin-bottom:14px}.settings-card>p{margin-top:6px}.info-row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--divider-color,#ddd);font-size:14px}.settings-card>.danger-button{margin-top:14px}.settings-heading{display:flex;justify-content:space-between;align-items:start;gap:12px}.settings-heading p{margin:5px 0}.health-summary{padding:10px 12px;border-radius:9px;background:#daf5df;color:#17752a;font-weight:700}.health-summary.warning{background:#fff1bf;color:#765600}.health-summary.critical{background:#fee2e2;color:#991b1b}.health-list{display:grid;gap:7px;margin-top:10px}.health-list>div{display:flex;gap:10px;padding:9px;border-left:4px solid var(--primary-color);background:var(--secondary-background-color)}.health-list>.warning{border-color:#f59e0b}.health-list>.critical{border-color:var(--error-color)}.health-list strong{text-transform:uppercase;font-size:10px}.decision-line{display:grid;gap:5px;padding:12px;margin-bottom:9px;border-left:4px solid #25a244;background:var(--secondary-background-color)}.decision-line.blocked{border-color:var(--error-color)}
       .health-list span{flex:1}.health-list button{padding:5px 9px}.discovery-list{display:grid;gap:7px}.discovery-list>div{display:flex;align-items:center;gap:10px;padding:9px;border-radius:9px;background:var(--secondary-background-color)}.discovery-list span{display:grid;flex:1}.discovery-list small{color:var(--secondary-text-color);overflow-wrap:anywhere}.smart-capture{display:grid;grid-template-columns:1fr auto;align-items:end;gap:8px;padding:12px;border:1px solid color-mix(in srgb,var(--primary-color) 40%,var(--divider-color));border-radius:12px;background:color-mix(in srgb,var(--primary-color) 6%,transparent)}.smart-capture output{grid-column:1/-1}
+      .caldav-card code{overflow-wrap:anywhere}.caldav-credentials{display:grid;gap:8px}.caldav-credential{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--divider-color);border-radius:10px;background:var(--secondary-background-color)}.caldav-credential>div{display:grid;gap:3px;min-width:0}.caldav-credential small{color:var(--secondary-text-color);overflow-wrap:anywhere}.setup-steps{padding-left:22px}.setup-steps li{margin:8px 0}.credential-secret dd{display:flex;align-items:center;gap:8px;margin:4px 0 12px}.credential-secret code{flex:1;padding:9px;background:var(--secondary-background-color);border-radius:7px;overflow-wrap:anywhere;user-select:all}
       .config-transfer{border-top:1px solid var(--divider-color,#ddd);margin-top:12px;padding-top:16px}.config-transfer p{font-size:13px}.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}.metric,.analytics-card{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:16px;padding:18px}.metric{display:flex;flex-direction:column;gap:8px}.metric span{font-size:13px;color:var(--secondary-text-color)}.metric b{font-size:26px}.metric.danger b{color:var(--error-color,#db4437)}.analytics-card{margin-bottom:14px}.analytics-card h3{margin-bottom:12px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:10px;border-top:1px solid var(--divider-color,#ddd);white-space:nowrap}th{font-size:12px;color:var(--secondary-text-color)}.insight-list{display:grid;gap:8px}.insight{padding:11px 13px;border-radius:10px;background:var(--secondary-background-color,#f3f4f6);border-left:4px solid var(--primary-color)}.insight.warning{border-color:#f59e0b}.insight.critical{border-color:var(--error-color,#db4437)}.positive{color:#17752a}.handover-note{padding:9px 11px;border-radius:9px;background:color-mix(in srgb,var(--primary-color) 10%,transparent);font-size:13px}
       .monitor-form{margin-top:16px}.printer-list{display:flex;gap:7px;flex-wrap:wrap;margin:2px 0 10px}.printer-list span{font-size:12px;padding:5px 9px;border-radius:99px;background:var(--divider-color,#eee)}
       .reference-help{padding:12px;border:1px solid var(--divider-color,#bbb);border-radius:11px;background:var(--secondary-background-color,#f3f4f6)}.reference-controls{display:grid;grid-template-columns:1fr 1fr;gap:10px}

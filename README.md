@@ -15,6 +15,7 @@ escalation, and a multilingual management panel.
 > repository to HACS as a custom repository.
 
 [Deutsche Anleitung](docs/user-guide.md) ·
+[CalDAV / Apple Reminders](docs/caldav.md) ·
 [Architecture](ARCHITECTURE.md) ·
 [Contributing](CONTRIBUTING.md) ·
 [Security](SECURITY.md)
@@ -37,6 +38,8 @@ escalation, and a multilingual management panel.
 - Progressive forms and a mobile top-three quick-action view.
 - Personal task inbox, seven-day planner with read-only schedule projections,
   bulk actions, and favorites.
+- Bidirectional, person-scoped CalDAV VTODO synchronization for Apple
+  Reminders and other standards-based clients.
 - Local smart capture and entity-based setup suggestions.
 - Actionable diagnostics, routine notification digests, and Assist intents.
 - Context-aware daily planning, natural moves, and drag-and-drop week planning.
@@ -414,6 +417,12 @@ For least privilege, create a dedicated non-administrator Home Assistant user
 and link it to exactly one Household Tasks person. Scriptable stores the token
 only in the iOS Keychain and keeps merely the secret-free task response as its
 offline widget cache.
+
+For a native task-list experience, the embedded CalDAV server projects
+personal or household tasks into Apple Reminders. It provides revocable app
+passwords, read-only or read/write scopes, strong ETags, persistent sync
+tokens, checklist subtasks, alarms and offline conflict detection. See the
+complete [CalDAV setup and operations guide](docs/caldav.md).
 
 ### Quality and security gates
 

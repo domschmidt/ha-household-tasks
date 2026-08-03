@@ -958,6 +958,91 @@ def websocket_health(
     connection.send_result(msg["id"], _engine(hass).configuration_health())
 
 
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/caldav_save_settings",
+        vol.Required("settings"): dict,
+    }
+)
+async def websocket_caldav_save_settings(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Persist validated CalDAV server settings."""
+    from .caldav import get_caldav_service
+
+    service = get_caldav_service(hass)
+    if service is None:
+        raise RuntimeError("CalDAV service is not loaded")
+    await service.async_save_settings(msg["settings"])
+    connection.send_result(msg["id"], _engine(hass).ui_data())
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/caldav_create_credential",
+        vol.Required("person_id"): vol.Any(str, None),
+        vol.Required("label"): str,
+        vol.Required("permission"): vol.In(["read_only", "read_write"]),
+        vol.Required("scope"): vol.In(["personal", "household"]),
+        vol.Required("include_claimable"): bool,
+        vol.Required("complete_checklist_on_parent"): bool,
+        vol.Optional("expires_at"): vol.Any(str, None),
+    }
+)
+async def websocket_caldav_create_credential(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create a scoped CalDAV app password shown exactly once."""
+    from .caldav import get_caldav_service
+
+    service = get_caldav_service(hass)
+    if service is None:
+        raise RuntimeError("CalDAV service is not loaded")
+    status = await service.async_create_credential(
+        person_id=msg["person_id"],
+        label=msg["label"],
+        permission=msg["permission"],
+        scope=msg["scope"],
+        include_claimable=msg["include_claimable"],
+        complete_checklist_on_parent=msg["complete_checklist_on_parent"],
+        expires_at=msg.get("expires_at"),
+    )
+    result = _engine(hass).ui_data()
+    result["caldav"] = status
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/caldav_revoke_credential",
+        vol.Required("credential_id"): str,
+    }
+)
+async def websocket_caldav_revoke_credential(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Revoke one CalDAV app password immediately."""
+    from .caldav import get_caldav_service
+
+    service = get_caldav_service(hass)
+    if service is None:
+        raise RuntimeError("CalDAV service is not loaded")
+    await service.async_revoke_credential(msg["credential_id"])
+    connection.send_result(msg["id"], _engine(hass).ui_data())
+
+
 @websocket_api.async_response
 @websocket_api.websocket_command(
     {
@@ -1063,6 +1148,9 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
         websocket_undo,
         websocket_explain_task,
         websocket_health,
+        websocket_caldav_save_settings,
+        websocket_caldav_create_credential,
+        websocket_caldav_revoke_credential,
         websocket_snooze,
         websocket_request_help,
         websocket_decline,

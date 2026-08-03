@@ -167,9 +167,11 @@ def _frontend_version() -> str:
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up the integration package."""
+    from .caldav import async_setup_caldav
     from .client_api import async_register_client_api
     from .ui import async_register_websocket_commands
 
+    await async_setup_caldav(hass)
     async_register_client_api(hass)
     async_register_websocket_commands(hass)
     await hass.http.async_register_static_paths(
@@ -1405,6 +1407,8 @@ class HouseholdTaskEngine:
 
     def ui_data(self) -> dict[str, Any]:
         """Return data used by the household task panel."""
+        from .caldav import get_caldav_service
+
         occurrences = []
         for occurrence_id, occurrence in list(self.state["occurrences"].items()):
             item = deepcopy(occurrence)
@@ -1418,6 +1422,7 @@ class HouseholdTaskEngine:
             ]
             for occurrence_id, attachments in self.state.get("attachments", {}).items()
         }
+        caldav = get_caldav_service(self.hass)
         return {
             "people": deepcopy(self.people),
             "tasks": deepcopy(self.tasks),
@@ -1451,6 +1456,7 @@ class HouseholdTaskEngine:
             "template_gallery": template_gallery(),
             "discovery_suggestions": self.discovery_suggestions(),
             "configuration_health": self.configuration_health(),
+            "caldav": caldav.public_status() if caldav else None,
             "analytics": build_analytics(
                 self.state["occurrences"],
                 self.people,
@@ -1753,6 +1759,8 @@ class HouseholdTaskEngine:
 
     def configuration_health(self) -> dict[str, Any]:
         """Return actionable configuration findings without exposing secrets."""
+        from .caldav import get_caldav_service
+
         findings: list[dict[str, Any]] = []
         store_health = task_store_health(self.state)
         findings.extend(store_health["findings"])
@@ -1761,6 +1769,9 @@ class HouseholdTaskEngine:
         for task_id, task in self.tasks.items():
             findings.extend(self._task_health_findings(task_id, task))
         findings.extend(self._dependency_health_findings())
+        caldav = get_caldav_service(self.hass)
+        if caldav:
+            findings.extend(caldav.health_findings())
         return {
             "status": self._health_status(findings),
             "findings": findings,
@@ -3022,7 +3033,7 @@ class HouseholdTaskEngine:
         priority: str = "normal",
         points: int = 1,
         context: Context | None = None,
-    ) -> None:
+    ) -> str:
         """Create a one-off task without adding a reusable template."""
         async with self.lock:
             clean_name = name.strip()
@@ -3059,12 +3070,297 @@ class HouseholdTaskEngine:
                         raise vol.Invalid(
                             f"Eskalation {index + 1} ist ungültig."
                         ) from err
-            await self._create_occurrence(
+            occurrence_id = await self._create_occurrence(
                 "__adhoc__",
                 task,
                 parsed_due,
                 manual=True,
                 context=context,
+            )
+            if occurrence_id is None:
+                raise vol.Invalid("Die Schnellaufgabe konnte nicht angelegt werden.")
+            await self._save()
+            return occurrence_id
+
+    async def async_apply_caldav_vtodo(
+        self,
+        occurrence_id: str,
+        parsed: Any,
+        *,
+        person_id: str | None,
+        expected_revision: int,
+        checklist_id: str | None,
+        complete_checklist: bool,
+    ) -> None:
+        """Apply one optimistic CalDAV VTODO write to the native task store."""
+        async with self.lock:
+            occurrence = self._caldav_occurrence(occurrence_id, expected_revision)
+            if checklist_id is not None:
+                self._apply_caldav_checklist(
+                    occurrence_id,
+                    occurrence,
+                    checklist_id,
+                    parsed,
+                    person_id,
+                )
+                await self._save()
+                return
+
+            self._apply_caldav_fields(occurrence, parsed)
+            desired_status = self._caldav_status(parsed.status)
+            current_status = occurrence.get("status", "open")
+            if (
+                current_status in TERMINAL_TASK_STATUSES
+                and desired_status not in TERMINAL_TASK_STATUSES
+            ):
+                self._reopen_caldav_occurrence(
+                    occurrence_id,
+                    occurrence,
+                    desired_status,
+                    person_id,
+                )
+            elif (
+                desired_status == "completed"
+                and current_status not in TERMINAL_TASK_STATUSES
+            ):
+                await self._complete_caldav_occurrence(
+                    occurrence_id,
+                    occurrence,
+                    person_id,
+                    complete_checklist,
+                )
+            elif (
+                desired_status == "cancelled"
+                and current_status not in TERMINAL_TASK_STATUSES
+            ):
+                await self._resolve_occurrence(
+                    occurrence_id,
+                    occurrence,
+                    completed_by=person_id,
+                    award_point=False,
+                    resolution_reason="cancelled",
+                )
+            else:
+                self._set_caldav_status(
+                    occurrence_id,
+                    occurrence,
+                    desired_status,
+                    person_id,
+                )
+            await self._save()
+
+    def _caldav_occurrence(
+        self, occurrence_id: str, expected_revision: int
+    ) -> dict[str, Any]:
+        occurrence = self.state["occurrences"].get(occurrence_id)
+        if occurrence is None:
+            raise vol.Invalid("Unknown task occurrence")
+        if int(occurrence.get("revision", 0)) != expected_revision:
+            raise vol.Invalid(
+                "Die Aufgabe wurde zwischenzeitlich geändert. Bitte neu laden."
+            )
+        return occurrence
+
+    def _apply_caldav_checklist(
+        self,
+        occurrence_id: str,
+        occurrence: dict[str, Any],
+        checklist_id: str,
+        parsed: Any,
+        person_id: str | None,
+    ) -> None:
+        if occurrence.get("status") in TERMINAL_TASK_STATUSES:
+            raise vol.Invalid(
+                "Checklisten abgeschlossener Aufgaben können nicht geändert werden."
+            )
+        item = next(
+            (
+                entry
+                for entry in occurrence.get("checklist", [])
+                if str(entry.get("id")) == checklist_id
+            ),
+            None,
+        )
+        if item is None:
+            raise vol.Invalid("Unknown checklist item")
+        completed = parsed.status == "COMPLETED"
+        item["title"] = parsed.summary
+        item["completed"] = completed
+        if completed:
+            item["completed_at"] = dt_util.utcnow().isoformat()
+            if person_id in self.people:
+                item["completed_by"] = person_id
+        else:
+            item.pop("completed_at", None)
+            item.pop("completed_by", None)
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "checklist_item_completed" if completed else "checklist_item_reopened",
+            actor=person_id,
+            details={"item_id": checklist_id, "source": "caldav"},
+        )
+
+    def _apply_caldav_fields(self, occurrence: dict[str, Any], parsed: Any) -> None:
+        assignee_name = self.people.get(occurrence.get("assignee"), {}).get(
+            "name", "Offen"
+        )
+        occurrence["title"] = f"[{assignee_name}] {parsed.summary}"
+        occurrence["description"] = parsed.description or None
+        if parsed.due is None:
+            occurrence["caldav_no_due"] = True
+        else:
+            occurrence["due"] = (
+                dt_util.as_local(parsed.due).replace(microsecond=0).isoformat()
+            )
+            occurrence.pop("caldav_no_due", None)
+        occurrence.setdefault("task", {}).setdefault("market", {})["priority"] = (
+            self._caldav_priority(parsed.priority)
+        )
+        occurrence["caldav"] = {
+            "uid": parsed.uid,
+            "categories": list(parsed.categories),
+            "url": parsed.url,
+            "alarms": deepcopy(parsed.alarms),
+            "percent": parsed.percent_complete,
+            "x_properties": deepcopy(parsed.raw_x_properties),
+            "preserved_lines": list(parsed.preserved_lines),
+        }
+
+    @staticmethod
+    def _caldav_priority(priority: int) -> str:
+        if 0 < priority <= 2:
+            return "critical"
+        if priority <= 4 and priority > 0:
+            return "high"
+        if priority >= 7:
+            return "low"
+        return "normal"
+
+    @staticmethod
+    def _caldav_status(status: str) -> str:
+        return {
+            "NEEDS-ACTION": "open",
+            "IN-PROCESS": "in_progress",
+            "COMPLETED": "completed",
+            "CANCELLED": "cancelled",
+        }[status]
+
+    def _unresolved_occurrence_dependencies(
+        self, occurrence: dict[str, Any]
+    ) -> list[str]:
+        return [
+            dependency
+            for dependency in occurrence.get("dependencies", [])
+            if self.state["occurrences"].get(dependency, {}).get("status")
+            not in TERMINAL_TASK_STATUSES
+        ]
+
+    def _reopen_caldav_occurrence(
+        self,
+        occurrence_id: str,
+        occurrence: dict[str, Any],
+        desired_status: str,
+        person_id: str | None,
+    ) -> None:
+        completed_by = occurrence.pop("completed_by", None)
+        awarded = int(occurrence.pop("awarded_points", 0))
+        if completed_by in self.people and awarded:
+            scores = self.state.setdefault("scores", {})
+            scores[completed_by] = max(0, int(scores.get(completed_by, 0)) - awarded)
+        occurrence.pop("resolved_at", None)
+        occurrence.pop("resolution_reason", None)
+        occurrence["resolved"] = False
+        occurrence["status"] = (
+            "blocked"
+            if self._unresolved_occurrence_dependencies(occurrence)
+            else desired_status
+        )
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "task_reopened",
+            actor=person_id,
+            details={"source": "caldav"},
+        )
+
+    async def _complete_caldav_occurrence(
+        self,
+        occurrence_id: str,
+        occurrence: dict[str, Any],
+        person_id: str | None,
+        complete_checklist: bool,
+    ) -> None:
+        if occurrence.get("status") == "blocked":
+            raise vol.Invalid("Offene Abhängigkeiten blockieren diese Aufgabe.")
+        incomplete = [
+            item
+            for item in occurrence.get("checklist", [])
+            if not item.get("completed")
+        ]
+        if incomplete and not complete_checklist:
+            raise vol.Invalid(f"Noch {len(incomplete)} Checklistenpunkt(e) offen.")
+        if complete_checklist:
+            completed_at = dt_util.utcnow().isoformat()
+            for item in incomplete:
+                item["completed"] = True
+                item["completed_at"] = completed_at
+                if person_id in self.people:
+                    item["completed_by"] = person_id
+        await self._resolve_occurrence(
+            occurrence_id,
+            occurrence,
+            completed_by=person_id,
+        )
+
+    def _set_caldav_status(
+        self,
+        occurrence_id: str,
+        occurrence: dict[str, Any],
+        desired_status: str,
+        person_id: str | None,
+    ) -> None:
+        if occurrence.get("status") in TERMINAL_TASK_STATUSES:
+            occurrence["status"] = desired_status
+            occurrence["resolution_reason"] = (
+                "cancelled" if desired_status == "cancelled" else "completed"
+            )
+            occurrence["resolved"] = True
+        else:
+            occurrence["status"] = (
+                "blocked"
+                if self._unresolved_occurrence_dependencies(occurrence)
+                else desired_status
+            )
+            occurrence["resolved"] = False
+        self._touch_occurrence(
+            occurrence_id,
+            occurrence,
+            "task_caldav_updated",
+            actor=person_id,
+            details={"status": desired_status, "source": "caldav"},
+        )
+
+    async def async_mark_caldav_deleted(
+        self, occurrence_id: str, *, expected_revision: int
+    ) -> None:
+        """Hide a terminal CalDAV resource while retaining its native audit trail."""
+        async with self.lock:
+            occurrence = self.state["occurrences"].get(occurrence_id)
+            if occurrence is None:
+                raise vol.Invalid("Unknown task occurrence")
+            if int(occurrence.get("revision", 0)) != expected_revision:
+                raise vol.Invalid(
+                    "Die Aufgabe wurde zwischenzeitlich geändert. Bitte neu laden."
+                )
+            if occurrence.get("status") not in TERMINAL_TASK_STATUSES:
+                raise vol.Invalid("Only terminal tasks can be hidden from CalDAV")
+            occurrence["caldav_deleted"] = True
+            self._touch_occurrence(
+                occurrence_id,
+                occurrence,
+                "task_caldav_deleted",
+                details={"source": "caldav"},
             )
             await self._save()
 

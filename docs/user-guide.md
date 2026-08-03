@@ -738,6 +738,19 @@ dort ausdrücklich dokumentiert.
 Scriptable bleibt als optionale, flexiblere Anzeige verfügbar. Interaktive
 Widget-Taps öffnen technisch bedingt jedoch immer die Scriptable-App.
 
+### Apple Erinnerungen über CalDAV
+
+Für eine native Aufgabenliste auf iPhone, iPad und macOS kann Household Tasks
+selbst als bidirektionaler CalDAV-VTODO-Server arbeiten. Persönliche oder
+haushaltsweite Zugänge werden mit widerrufbaren App-Passwörtern abgesichert.
+Erledigen, Verschieben, neue Schnellaufgaben, Checklisten-Unteraufgaben,
+Erinnerungen und Offline-Synchronisation werden unterstützt; ETags verhindern
+stilles Überschreiben bei parallelen Änderungen.
+
+Die vollständige Einrichtung, alle Optionen, Sicherheitsanforderungen,
+Datenzuordnung und Fehlerbehebung stehen in
+[`docs/caldav.md`](caldav.md).
+
 ### Scriptable
 
 Unter `clients/scriptable` liegt ein eigenständiger Scriptable-Client. Er zeigt

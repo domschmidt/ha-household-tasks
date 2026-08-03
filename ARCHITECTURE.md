@@ -29,6 +29,14 @@ entities expose a bounded widget projection, while a button entity sends an
 occurrence-bound actionable notification through the configured Companion App.
 This avoids distributing or storing an additional client credential.
 
+The embedded CalDAV boundary exposes native occurrences as person-scoped
+VTODO resources. Household Tasks remains authoritative. Device-specific app
+passwords are stored as salted PBKDF2 verifiers in a separate Home Assistant
+Store. Strong ETags protect optimistic writes, while persistent RFC 6578 sync
+tokens and bounded tombstones support offline clients. A credential can be
+personal or household-wide, read-only or read/write, expiring, and immediately
+revoked.
+
 Pure domain modules contain scheduling, assignment, weather, forecasting,
 analytics, import/export, productivity, NFC, and integrity logic. `engine.py`
 coordinates those modules at the Home Assistant boundary. `ui.py` is a thin
@@ -97,6 +105,9 @@ projection.
 Attachments are bounded by count, size, and MIME type. URLs require HTTPS.
 Diagnostics redact household identifiers; no telemetry or external account is
 used.
+CalDAV requires HTTPS by default, rate-limits failed Basic-auth attempts, never
+persists plaintext app passwords, and exposes only a provisioned VTODO calendar
+within each credential boundary.
 
 ## Failure behavior
 

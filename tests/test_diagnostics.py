@@ -98,4 +98,6 @@ async def test_system_health_summarizes_loaded_entries(hass):
         "task_schema_version": 2,
         "task_occurrences": 2,
         "open_tasks": 1,
+        "caldav_enabled": False,
+        "caldav_credentials": 0,
     }
