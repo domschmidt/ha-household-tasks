@@ -746,6 +746,9 @@ class HouseholdTasksPanel extends HTMLElement {
         nfc_action: "Aktion, die beim Scannen des zugeordneten NFC-Tags ausgeführt wird.",
         market_priority: "Bestimmt Sortierung und Verhalten im reduzierten Urlaubsmodus.",
         market_points: "Punkte, die der tatsächlich abschließenden Person gutgeschrieben werden.",
+        automatic_completion: "Schließt eine unbestätigte Aufgabe nach der Kulanzzeit automatisch ab.",
+        automatic_completion_person: "Erhält die Punkte nur dann, wenn vorher niemand selbst auf Erledigt gedrückt hat.",
+        automatic_completion_after: "Zeitspanne ab Fälligkeit, in der eine andere Person die Erledigung noch selbst bestätigen kann.",
         market_reward: "Optionale sichtbare Anerkennung für die freiwillige Übernahme.",
         vacation_behavior: "Überschreibt die globale Urlaubsstrategie für diese Vorlage.",
         guest_only: "Erzeugt diese Aufgabe ausschließlich während des Gastmodus.",
@@ -1610,6 +1613,10 @@ class HouseholdTasksPanel extends HTMLElement {
     const description = task.description ? `<p class="description">${this._e(task.description)}</p>` : "";
     const habit = this._taskHabit(id);
     const market = this._taskMarket(task.market);
+    const automaticPerson = this._data.people[task.automatic_completion?.default_person]?.name || task.automatic_completion?.default_person || "unbekannt";
+    const automaticCompletion = task.automatic_completion?.enabled
+      ? `<p class="habit-tip">${householdTasksLocale(this._hass) === "de" ? "Automatische Gutschrift nach" : "Automatic credit after"} ${this._e(task.automatic_completion.after || "12:00:00")} ${householdTasksLocale(this._hass) === "de" ? "an" : "to"} ${this._e(automaticPerson)}</p>`
+      : "";
     const favorite = this._taskFavoriteButton(id, isFavorite);
     const createDisabled = unavailable ? 'disabled title="Aufgabe ist pausiert"' : "";
     let pauseAction = "";
@@ -1622,7 +1629,7 @@ class HouseholdTasksPanel extends HTMLElement {
       <div class="card-top"><span class="avatar">${this._e(assignment.icon)}</span>
       <div><h3>${this._e(task.name)}</h3><p>${this._e(assignment.label)} · ${this._e(this._scheduleLabel(task.schedule))}${nfcLabel}</p></div>
       <span class="status">${this._e(status)}</span></div>
-      ${description}${habit}${market}
+      ${description}${habit}${market}${automaticCompletion}
       <div class="actions">${favorite}
         <button data-create="${this._e(id)}" ${createDisabled}>Jetzt erzeugen</button>
         <button data-explain-task="${this._e(id)}">Warum nicht?</button>
@@ -1787,6 +1794,7 @@ class HouseholdTasksPanel extends HTMLElement {
           const preposition = householdTasksLocale(this._hass) === "de" ? "von" : "by";
           completedBy = ` · ${preposition} ${this._e(this._data.people[item.completed_by].name)}`;
         }
+        if (item.completion_source === "automatic") completedBy += ` · ${this._t("automatisch gutgeschrieben")}`;
         return `<div class="history-row"><span class="check">✓</span><div class="history-main"><h3>${this._e(this._plainTitle(item.title))}</h3>
         <p>${status} ${new Date(item.resolved_at).toLocaleString(this._locale(), { dateStyle: "medium", timeStyle: "short" })}
         ${completedBy}</p></div>
@@ -2423,6 +2431,7 @@ class HouseholdTasksPanel extends HTMLElement {
           <div><dt>Status</dt><dd>${occurrence.status === "cancelled" ? "Abgebrochen" : "Erledigt"}</dd></div>
           <div><dt>Zuständig</dt><dd>${this._e(assignee)}</dd></div>
           <div><dt>Abgeschlossen von</dt><dd>${this._e(completedBy)}</dd></div>
+          <div><dt>Abschlussart</dt><dd>${occurrence.completion_source === "automatic" ? "Automatische Gutschrift" : "Manuell bestätigt"}</dd></div>
           <div><dt>Erstellt</dt><dd>${occurrence.created_at ? new Date(occurrence.created_at).toLocaleString(this._locale()) : "–"}</dd></div>
           <div><dt>Fällig</dt><dd>${occurrence.due ? new Date(occurrence.due).toLocaleString(this._locale()) : "–"}</dd></div>
           <div><dt>Abgeschlossen</dt><dd>${occurrence.resolved_at ? new Date(occurrence.resolved_at).toLocaleString(this._locale()) : "–"}</dd></div>
@@ -3138,6 +3147,8 @@ class HouseholdTasksPanel extends HTMLElement {
     const esc = task.escalation;
     const nfc = task.nfc || {};
     const market = task.market || { priority: "normal", points: 1, reward: "" };
+    const automaticCompletion = task.automatic_completion || {};
+    const automaticCompletionPerson = automaticCompletion.default_person || task.assignee || Object.keys(this._data.people)[0] || "";
     const modes = task.modes || {};
     const season = task.season || {};
     const weather = task.weather || {};
@@ -3237,6 +3248,13 @@ class HouseholdTasksPanel extends HTMLElement {
         </select><span class="hint">Die Tag-ID findest du nach einem Scan unter Einstellungen → Tags in Home Assistant.</span></label>
         <label>Priorität<select name="market_priority">${[["low","Niedrig"],["normal","Normal"],["high","Hoch"],["critical","Kritisch"]].map(([value, label]) => `<option value="${value}" ${market.priority === value ? "selected" : ""}>${label}</option>`).join("")}</select><span class="hint">Hohe und kritische Aufgaben bleiben bei reduziertem Urlaubsmodus aktiv.</span></label>
         <label>Punkte<input name="market_points" type="number" min="0" max="100" value="${Number(market.points ?? 1)}"><span class="hint">Wer übernimmt und erledigt, erhält diese Punkte.</span></label>
+        <div class="full automatic-completion-editor form-grid">
+          <label class="full checkbox"><input name="automatic_completion" type="checkbox" ${automaticCompletion.enabled ? "checked" : ""}> Ohne Bestätigung automatisch gutschreiben</label>
+          <div class="full automatic-completion-settings form-grid ${automaticCompletion.enabled ? "" : "hidden"}">
+            <label>Standardperson<select name="automatic_completion_person">${Object.entries(this._data.people).map(([pid,p]) => `<option value="${this._e(pid)}" ${pid === automaticCompletionPerson ? "selected" : ""}>${this._e(p.name)}</option>`).join("")}</select><span class="hint">Bekommt die Punkte, wenn niemand vorher Erledigt drückt.</span></label>
+            <label>Kulanzzeit nach Fälligkeit<input name="automatic_completion_after" value="${this._e(automaticCompletion.after || "12:00:00")}" pattern="[0-9]+:[0-5][0-9]:[0-5][0-9]" placeholder="12:00:00"><span class="hint">Format HH:MM:SS. Innerhalb dieser Zeit zählt eine manuelle Bestätigung.</span></label>
+          </div>
+        </div>
         <label class="full">Belohnung (optional)<input name="market_reward" value="${this._e(market.reward || "")}" placeholder="Film aussuchen, Wunschessen …"></label>
         <label>Im Urlaub<select name="vacation_behavior">${[["pause","Pausieren"],["reduce","Nur bei hoher Priorität"],["delegate","Delegieren"],["always","Immer ausführen"]].map(([value, label]) => `<option value="${value}" ${modes.vacation === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
         <div>
@@ -3306,6 +3324,9 @@ class HouseholdTasksPanel extends HTMLElement {
     updateAssignmentFields();
     modal.querySelector("[name=custom_escalation]").onchange = (event) => {
       modal.querySelector(".escalation-fields").classList.toggle("hidden", !event.target.checked);
+    };
+    modal.querySelector("[name=automatic_completion]").onchange = (event) => {
+      modal.querySelector(".automatic-completion-settings").classList.toggle("hidden", !event.target.checked);
     };
     this._bindRepeatableEditors(modal, id);
     this._bindEscalationEditor(modal);
@@ -4344,6 +4365,13 @@ class HouseholdTasksPanel extends HTMLElement {
       priority: f.get("market_priority") || "normal",
       points: Math.max(0, Number(f.get("market_points") || 0)),
     };
+    if (f.get("automatic_completion") === "on") {
+      const defaultPerson = f.get("automatic_completion_person");
+      const after = String(f.get("automatic_completion_after") || "12:00:00").trim();
+      if (!this._data.people[defaultPerson]) throw new Error("Bitte eine vorhandene Standardperson für die automatische Gutschrift auswählen.");
+      if (!/^\d+:[0-5]\d:[0-5]\d$/.test(after)) throw new Error("Die Kulanzzeit muss im Format HH:MM:SS angegeben werden.");
+      value.automatic_completion = { enabled: true, default_person: defaultPerson, after };
+    }
     if (f.get("market_reward")?.trim()) value.market.reward = f.get("market_reward").trim();
     value.modes = { vacation: f.get("vacation_behavior") || "pause" };
     if (f.get("guest_only") === "on") value.modes.guest_only = true;

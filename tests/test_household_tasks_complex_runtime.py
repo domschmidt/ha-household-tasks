@@ -122,6 +122,123 @@ async def test_temporary_pause_blocks_schedules_and_initial_completion_work(hass
     } == {"weekly", "completion"}
 
 
+async def test_automatic_completion_credits_default_person_after_grace_period(hass):
+    """Unconfirmed routine work is credited once, then follows normal workflows."""
+    tasks = {
+        "routine": {
+            **_manual(
+                "Routine",
+                [{"task_id": "follow_up", "delay": "00:00:00"}],
+            ),
+            "market": {"priority": "normal", "points": 3},
+            "automatic_completion": {
+                "enabled": True,
+                "default_person": "alex",
+                "after": "12:00:00",
+            },
+        },
+        "follow_up": _manual("Follow-up"),
+    }
+    people = {
+        "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
+        "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
+    }
+    engine, _ = await _native_engine(hass, tasks, people)
+    due = datetime(2026, 8, 3, 8, tzinfo=UTC)
+    occurrence_id = await engine._create_occurrence(
+        "routine",
+        engine.tasks["routine"],
+        due,
+        manual=True,
+    )
+    occurrence = engine.state["occurrences"][occurrence_id]
+
+    await engine._process_automatic_completions(due + timedelta(hours=11, minutes=59))
+    assert not occurrence["resolved"]
+
+    await engine._process_automatic_completions(due + timedelta(hours=12))
+
+    assert occurrence["resolved"]
+    assert occurrence["completed_by"] == "alex"
+    assert occurrence["completion_source"] == "automatic"
+    assert occurrence["awarded_points"] == 3
+    assert engine.state["scores"] == {"alex": 3}
+    assert any(
+        item["task_id"] == "follow_up" for item in engine.state["occurrences"].values()
+    )
+    assert engine.task_history(occurrence_id)[-1]["details"] == {
+        "reason": "completed",
+        "source": "automatic",
+    }
+
+
+async def test_manual_completion_precedes_automatic_credit_and_blocked_work_waits(hass):
+    """A real actor keeps the credit and dependencies cannot be bypassed."""
+    task = {
+        **_manual("Routine"),
+        "market": {"priority": "normal", "points": 2},
+        "automatic_completion": {
+            "enabled": True,
+            "default_person": "alex",
+            "after": "01:00:00",
+        },
+    }
+    people = {
+        "alex": {"name": "Alex", "notify": "notify.mobile_app_alex"},
+        "sam": {"name": "Sam", "notify": "notify.mobile_app_sam"},
+    }
+    engine, _ = await _native_engine(hass, {"routine": task}, people)
+    due = datetime(2026, 8, 3, 8, tzinfo=UTC)
+    manual_id = await engine._create_occurrence("routine", task, due, manual=True)
+    manual = engine.state["occurrences"][manual_id]
+    await engine._resolve_occurrence(manual_id, manual, completed_by="sam")
+    await engine._process_automatic_completions(due + timedelta(days=1))
+
+    assert manual["completed_by"] == "sam"
+    assert "completion_source" not in manual
+    assert engine.state["scores"] == {"sam": 2}
+
+    blocked_id = await engine._create_occurrence(
+        "routine",
+        task,
+        due + timedelta(days=1),
+        manual=True,
+    )
+    blocked = engine.state["occurrences"][blocked_id]
+    blocked["status"] = "blocked"
+    await engine._process_automatic_completions(due + timedelta(days=2, hours=2))
+    assert not blocked["resolved"]
+
+
+async def test_automatic_completion_ignores_corrupted_runtime_data(hass, caplog):
+    """Legacy or externally damaged occurrences fail closed without losing work."""
+    task = {
+        **_manual("Routine"),
+        "automatic_completion": {
+            "enabled": True,
+            "default_person": "alex",
+            "after": "01:00:00",
+        },
+    }
+    engine, _ = await _native_engine(hass, {"routine": task})
+    due = datetime(2026, 8, 3, 8, tzinfo=UTC)
+    invalid_due_id = await engine._create_occurrence("routine", task, due, manual=True)
+    invalid_due = engine.state["occurrences"][invalid_due_id]
+    invalid_due["due"] = "invalid"
+
+    unknown_person_id = await engine._create_occurrence(
+        "routine", task, due + timedelta(days=1), manual=True
+    )
+    unknown_person = engine.state["occurrences"][unknown_person_id]
+    unknown_person["task"]["automatic_completion"]["default_person"] = "missing"
+
+    await engine._process_automatic_completions(due + timedelta(days=2))
+
+    assert not invalid_due["resolved"]
+    assert not unknown_person["resolved"]
+    assert "references unknown person missing" in caplog.text
+
+
 def _first_frost_task():
     """Return a realistic forecast/fan-out rule used by runtime tests."""
     return {
@@ -984,6 +1101,11 @@ def test_configuration_validation_aggregates_complex_rule_errors(hass):
         "metadata": {
             **_manual("Metadata"),
             "paused_until": "not-a-date",
+            "automatic_completion": {
+                "enabled": True,
+                "default_person": "missing",
+                "after": "invalid",
+            },
             "follow_ups": [
                 "invalid",
                 {"task_id": "metadata", "delay": "-01:00:00"},
@@ -1012,6 +1134,18 @@ def test_configuration_validation_aggregates_complex_rule_errors(hass):
             "season": "invalid",
             "weather": "invalid",
         },
+        "invalid_automatic_completion": {
+            **_manual("Invalid automatic completion"),
+            "automatic_completion": "invalid",
+        },
+        "negative_automatic_completion": {
+            **_manual("Negative automatic completion"),
+            "automatic_completion": {
+                "enabled": True,
+                "default_person": "alex",
+                "after": "-01:00:00",
+            },
+        },
     }
     config["monitors"] = {
         "printers": {"enabled": True, "assignee": "missing"},
@@ -1031,6 +1165,9 @@ def test_configuration_validation_aggregates_complex_rule_errors(hass):
     assert "flexible intervals must be positive and ordered" in message
     assert "follow-up delay is invalid" in message
     assert "paused_until must be an ISO date-time" in message
+    assert "automatic completion needs a configured default person" in message
+    assert "automatic completion delay is invalid" in message
+    assert "automatic completion must be a mapping" in message
     assert "device file must be a mapping" in message
     assert "weather rule must be a mapping" in message
     assert "resource monitors must be a mapping" in message

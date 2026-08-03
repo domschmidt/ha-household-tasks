@@ -328,6 +328,25 @@ die den Button erhalten und gedrückt hat. Bei einem Abschluss im Panel wird die
 hinterlegte Home-Assistant-Benutzer-ID verwendet. Automatisch als behoben erkannte
 Druckerprobleme zählen nicht.
 
+### Aufgaben ohne Bestätigung
+
+Für Routinen, die normalerweise stattfinden, aber trotzdem immer einer Person
+gutgeschrieben werden sollen, kann in den Expertenoptionen **Ohne Bestätigung
+automatisch gutschreiben** aktiviert werden. Dazu werden eine **Standardperson**
+und eine **Kulanzzeit nach Fälligkeit** festgelegt.
+
+- Drückt innerhalb der Kulanzzeit jemand **Erledigt**, erhält diese Person die
+  Punkte wie gewohnt.
+- Bleibt die Aufgabe unbestätigt, wird sie nach Ablauf der Kulanzzeit automatisch
+  abgeschlossen und der Standardperson gutgeschrieben.
+- Verschieben ändert auch den Zeitpunkt der automatischen Gutschrift, weil immer
+  die aktuelle Fälligkeit verwendet wird.
+- Bereits erledigte, abgebrochene oder durch Abhängigkeiten blockierte Aufgaben
+  werden nicht automatisch verändert.
+- Der Verlauf kennzeichnet den Abschluss intern als automatische Gutschrift;
+  Punkte, Auswertung, Serien und Folgeaufgaben funktionieren wie bei einem
+  manuellen Abschluss.
+
 ## Auswertung
 
 Die Seite **Auswertung** zeigt für die letzten 30 Tage erledigte Aufgaben,
