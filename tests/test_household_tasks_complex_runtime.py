@@ -53,6 +53,75 @@ async def test_temporary_pause_blocks_manual_creation_until_it_expires(hass):
     assert len(engine.state["occurrences"]) == 2
 
 
+async def test_temporary_pause_is_enforced_by_the_creation_boundary(hass):
+    """Internal callers cannot bypass a pause and receive an audit explanation."""
+    task = {
+        "enabled": True,
+        "paused_until": "2999-01-01T00:00:00+00:00",
+        "name": "Paused routine",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {"type": "manual"},
+    }
+    engine, _ = await _native_engine(hass, {"paused": task})
+
+    created = await engine._create_occurrence(
+        "paused",
+        task,
+        datetime(2026, 8, 3, 12, tzinfo=UTC),
+    )
+
+    assert created is None
+    assert engine.state["occurrences"] == {}
+    assert engine.state["decision_log"][-1]["code"] == "template_paused"
+
+
+async def test_temporary_pause_blocks_schedules_and_initial_completion_work(hass):
+    """Every planning path resumes automatically after the pause has elapsed."""
+    tasks = {
+        "weekly": {
+            "enabled": True,
+            "paused_until": "2999-01-01T00:00:00+00:00",
+            "name": "Weekly routine",
+            "assignee": "alex",
+            "assignment": {"type": "fixed"},
+            "schedule": {
+                "type": "weekly",
+                "weekdays": ["mon"],
+                "time": "11:00:00",
+            },
+        },
+        "completion": {
+            "enabled": True,
+            "paused_until": "2999-01-01T00:00:00+00:00",
+            "name": "Completion routine",
+            "assignee": "alex",
+            "assignment": {"type": "fixed"},
+            "schedule": {
+                "type": "after_completion",
+                "interval": "24:00:00",
+                "start": "2026-08-03T10:00:00+00:00",
+            },
+        },
+    }
+    engine, _ = await _native_engine(hass, tasks)
+    start = datetime(2026, 8, 3, 0, tzinfo=UTC)
+    end = datetime(2026, 8, 3, 23, tzinfo=UTC)
+
+    await engine._create_scheduled_occurrences(start, end)
+    await engine._ensure_after_completion_starts(end)
+    assert engine.state["occurrences"] == {}
+
+    for task in engine.tasks.values():
+        task["paused_until"] = "2020-01-01T00:00:00+00:00"
+    await engine._create_scheduled_occurrences(start, end)
+    await engine._ensure_after_completion_starts(end)
+
+    assert {
+        occurrence["task_id"] for occurrence in engine.state["occurrences"].values()
+    } == {"weekly", "completion"}
+
+
 def _first_frost_task():
     """Return a realistic forecast/fan-out rule used by runtime tests."""
     return {
@@ -914,6 +983,7 @@ def test_configuration_validation_aggregates_complex_rule_errors(hass):
         },
         "metadata": {
             **_manual("Metadata"),
+            "paused_until": "not-a-date",
             "follow_ups": [
                 "invalid",
                 {"task_id": "metadata", "delay": "-01:00:00"},
@@ -960,6 +1030,7 @@ def test_configuration_validation_aggregates_complex_rule_errors(hass):
     assert "completion interval must be positive" in message
     assert "flexible intervals must be positive and ordered" in message
     assert "follow-up delay is invalid" in message
+    assert "paused_until must be an ISO date-time" in message
     assert "device file must be a mapping" in message
     assert "weather rule must be a mapping" in message
     assert "resource monitors must be a mapping" in message
