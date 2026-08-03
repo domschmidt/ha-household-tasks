@@ -237,6 +237,12 @@ test("small attachments use the chunked upload API", async ({ page }) => {
 });
 
 test("CalDAV setup exposes every server option and keeps app passwords ephemeral", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (value) => { window.__copiedCredential = value; } },
+    });
+  });
   const panel = await openPanel(page);
   await panel.getByRole("link", { name: "Einstellungen" }).click();
   await expect(panel.getByRole("heading", { name: "CalDAV für Apple Erinnerungen" })).toBeVisible();
@@ -260,6 +266,42 @@ test("CalDAV setup exposes every server option and keeps app passwords ephemeral
   await credential.getByRole("button", { name: "App-Passwort erzeugen" }).click();
   const dialog = panel.getByRole("dialog", { name: "CalDAV-Zugang angelegt" });
   await expect(dialog.getByText("one-time-secret", { exact: true })).toBeVisible();
+  for (const [label, expected] of [
+    ["Server kopieren", "https://ha.example.test/api/household_tasks/caldav/"],
+    ["Benutzername kopieren", "dominik-12345678"],
+    ["App-Passwort kopieren", "one-time-secret"],
+  ]) {
+    await dialog.getByRole("button", { name: label }).click();
+    await expect.poll(() => page.evaluate(() => window.__copiedCredential)).toBe(expected);
+  }
   const cached = await page.evaluate(() => localStorage.getItem("household_tasks_offline_snapshot"));
   expect(cached).not.toContain("one-time-secret");
+});
+
+test("live refresh preserves unsaved settings instead of resetting the form", async ({ page }) => {
+  const panel = await openPanel(page);
+  await panel.getByRole("link", { name: "Einstellungen" }).click();
+  const settings = panel.locator("#caldav-settings-form");
+  await settings.getByLabel("Listenname").fill("Noch nicht gespeicherte Familienliste");
+  await settings.getByRole("checkbox", { name: /CalDAV-Server aktivieren/ }).check();
+
+  await page.evaluate(() => {
+    window.__householdTaskCalls.length = 0;
+    window.__setHouseholdTasksServerState({
+      caldav: {
+        ...document.querySelector("household-tasks-panel")._data.caldav,
+        settings: {
+          ...document.querySelector("household-tasks-panel")._data.caldav.settings,
+          calendar_name: "Externer Serverwert",
+          enabled: false,
+        },
+      },
+    });
+    window.__emitHouseholdTasksUpdated();
+  });
+
+  await expect.poll(async () => page.evaluate(() => window.__householdTaskCalls
+    .filter((call) => call.type === "household_tasks/get").length)).toBe(1);
+  await expect(settings.getByLabel("Listenname")).toHaveValue("Noch nicht gespeicherte Familienliste");
+  await expect(settings.getByRole("checkbox", { name: /CalDAV-Server aktivieren/ })).toBeChecked();
 });

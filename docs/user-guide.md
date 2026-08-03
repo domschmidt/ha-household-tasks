@@ -766,6 +766,14 @@ Erledigen, Verschieben, neue Schnellaufgaben, Checklisten-Unteraufgaben,
 Erinnerungen und Offline-Synchronisation werden unterstützt; ETags verhindern
 stilles Überschreiben bei parallelen Änderungen.
 
+Der Aufgabenname enthält in Apple Erinnerungen die zuständige Person. Die
+Notizen ergänzen Beschreibung, Status, Priorität, Punkte und
+Checklistenfortschritt, ohne diese automatisch erzeugten Details beim
+Zurücksynchronisieren in die eigentliche Beschreibung zu übernehmen.
+Abgeschlossene Aufgaben werden standardmäßig aus CalDAV entfernt und als
+Sync-Löschung gemeldet. Wer eine Historie im Client behalten möchte, aktiviert
+dies ausdrücklich samt Aufbewahrungsdauer in den CalDAV-Einstellungen.
+
 Die vollständige Einrichtung, alle Optionen, Sicherheitsanforderungen,
 Datenzuordnung und Fehlerbehebung stehen in
 [`docs/caldav.md`](caldav.md).
