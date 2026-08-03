@@ -21,6 +21,8 @@ def async_register(
 
 async def _async_system_health_info(hass: HomeAssistant) -> dict[str, Any]:
     """Return information for the Home Assistant system health page."""
+    from .caldav import get_caldav_service
+
     engines = [
         getattr(entry, "runtime_data", None)
         for entry in hass.config_entries.async_entries(DOMAIN)
@@ -31,6 +33,8 @@ async def _async_system_health_info(hass: HomeAssistant) -> dict[str, Any]:
         for engine in engines
         for occurrence in engine.state.get("occurrences", {}).values()
     ]
+    caldav = get_caldav_service(hass)
+    caldav_status = caldav.public_status() if caldav else None
     return {
         "version": INTEGRATION_VERSION,
         "configured_entries": len(engines),
@@ -45,4 +49,8 @@ async def _async_system_health_info(hass: HomeAssistant) -> dict[str, Any]:
             occurrence.get("status") not in {"completed", "cancelled"}
             for occurrence in occurrences
         ),
+        "caldav_enabled": bool(
+            caldav_status and caldav_status["settings"].get("enabled")
+        ),
+        "caldav_credentials": len(caldav_status["credentials"]) if caldav_status else 0,
     }

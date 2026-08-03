@@ -235,3 +235,31 @@ test("small attachments use the chunked upload API", async ({ page }) => {
   });
   await expect.poll(async () => page.evaluate(() => window.__householdTaskCalls.some((call) => call.type === "household_tasks/add_attachment_chunk"))).toBe(true);
 });
+
+test("CalDAV setup exposes every server option and keeps app passwords ephemeral", async ({ page }) => {
+  const panel = await openPanel(page);
+  await panel.getByRole("link", { name: "Einstellungen" }).click();
+  await expect(panel.getByRole("heading", { name: "CalDAV für Apple Erinnerungen" })).toBeVisible();
+  await expect(panel.getByText("https://ha.example.test/api/household_tasks/caldav/", { exact: true })).toBeVisible();
+
+  const settings = panel.locator("#caldav-settings-form");
+  await settings.getByRole("checkbox", { name: /CalDAV-Server aktivieren/ }).check();
+  await settings.getByLabel("Listenname").fill("Familienaufgaben");
+  await settings.getByRole("button", { name: "CalDAV-Einstellungen speichern" }).click();
+  const saveCall = await page.evaluate(() => window.__householdTaskCalls.findLast(
+    (call) => call.type === "household_tasks/caldav_save_settings"
+  ));
+  expect(saveCall.settings.enabled).toBe(true);
+  expect(saveCall.settings.calendar_name).toBe("Familienaufgaben");
+  expect(saveCall.settings.delete_mode).toBe("cancel");
+
+  await panel.getByText("App-Passwort anlegen", { exact: true }).click();
+  const credential = panel.locator("#caldav-credential-form");
+  await credential.getByLabel("Bezeichnung").fill("Mein iPhone");
+  await credential.getByLabel("Person").selectOption("dominik");
+  await credential.getByRole("button", { name: "App-Passwort erzeugen" }).click();
+  const dialog = panel.getByRole("dialog", { name: "CalDAV-Zugang angelegt" });
+  await expect(dialog.getByText("one-time-secret", { exact: true })).toBeVisible();
+  const cached = await page.evaluate(() => localStorage.getItem("household_tasks_offline_snapshot"));
+  expect(cached).not.toContain("one-time-secret");
+});

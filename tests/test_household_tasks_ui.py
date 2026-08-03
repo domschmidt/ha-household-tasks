@@ -74,6 +74,75 @@ async def _call(command, hass, connection, message) -> None:
         await result
 
 
+async def test_caldav_admin_adapters_manage_settings_and_one_time_credentials(hass):
+    """CalDAV management commands preserve scopes without leaking via the engine."""
+    engine = _fake_engine()
+    service = MagicMock()
+    service.async_save_settings = AsyncMock(return_value={"settings": {}})
+    service.async_create_credential = AsyncMock(
+        return_value={
+            "settings": {},
+            "created_credential": {
+                "username": "alex-device",
+                "password": "shown-once",
+            },
+        }
+    )
+    service.async_revoke_credential = AsyncMock(return_value={"credentials": []})
+    connection = _Connection()
+
+    with (
+        patch.object(ui, "_engine", return_value=engine),
+        patch(
+            "custom_components.household_tasks.caldav.get_caldav_service",
+            return_value=service,
+        ),
+    ):
+        await _call(
+            ui.websocket_caldav_save_settings,
+            hass,
+            connection,
+            {"id": 1, "settings": {"enabled": True}},
+        )
+        await _call(
+            ui.websocket_caldav_create_credential,
+            hass,
+            connection,
+            {
+                "id": 2,
+                "person_id": "alex",
+                "label": "Alex iPhone",
+                "permission": "read_write",
+                "scope": "personal",
+                "include_claimable": True,
+                "complete_checklist_on_parent": True,
+                "expires_at": None,
+            },
+        )
+        await _call(
+            ui.websocket_caldav_revoke_credential,
+            hass,
+            connection,
+            {"id": 3, "credential_id": "credential-1"},
+        )
+
+    service.async_save_settings.assert_awaited_once_with({"enabled": True})
+    service.async_create_credential.assert_awaited_once_with(
+        person_id="alex",
+        label="Alex iPhone",
+        permission="read_write",
+        scope="personal",
+        include_claimable=True,
+        complete_checklist_on_parent=True,
+        expires_at=None,
+    )
+    service.async_revoke_credential.assert_awaited_once_with("credential-1")
+    assert (
+        connection.results[1][1]["caldav"]["created_credential"]["password"]
+        == "shown-once"
+    )
+
+
 async def test_websocket_adapters_forward_advanced_panel_actions(hass):
     """All advanced commands preserve parameters and enrich their responses."""
     engine = _fake_engine()

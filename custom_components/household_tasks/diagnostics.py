@@ -49,6 +49,10 @@ async def async_get_config_entry_diagnostics(
     if engine is None:
         return {"entry": _redact(dict(entry.data)), "loaded": False}
 
+    from .caldav import get_caldav_service
+
+    caldav = get_caldav_service(hass)
+    caldav_status = caldav.public_status() if caldav else None
     return {
         "entry": _redact(dict(entry.data)),
         "loaded": True,
@@ -57,6 +61,12 @@ async def async_get_config_entry_diagnostics(
             "task_count": len(engine.tasks),
             "occurrence_count": len(engine.state.get("occurrences", {})),
             "task_schema_version": engine.state.get("task_schema_version"),
+            "caldav_enabled": bool(
+                caldav_status and caldav_status["settings"].get("enabled")
+            ),
+            "caldav_credentials": len(caldav_status["credentials"])
+            if caldav_status
+            else 0,
         },
         "state": _redact(engine.state),
     }
