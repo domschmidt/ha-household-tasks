@@ -1,7 +1,7 @@
 """Constants for Household Tasks."""
 
 DOMAIN = "household_tasks"
-INTEGRATION_VERSION = "3.0.0"
+INTEGRATION_VERSION = "4.12.0"
 FRONTEND_PATH = "/household_tasks_frontend"
 PANEL_URL = "haushaltsaufgaben"
 STORAGE_KEY = "household_tasks.state"
