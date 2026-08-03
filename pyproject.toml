@@ -18,6 +18,7 @@ classifiers = [
 
 [project.optional-dependencies]
 test = [
+  "defusedxml==0.7.1",
   "homeassistant>=2024.10.0",
   # pycares 4.9+ starts a process-wide shutdown thread on client cleanup, which
   # pytest-homeassistant-custom-component currently reports as a leaked thread.
@@ -28,6 +29,7 @@ test = [
   "pytest-xdist>=3.6",
 ]
 dev = [
+  "defusedxml==0.7.1",
   "homeassistant>=2024.10.0",
   "pycares>=4,<4.9; python_version < '3.14'",
   "pytest>=8.3",

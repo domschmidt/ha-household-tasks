@@ -16,6 +16,7 @@ from custom_components.household_tasks.caldav import (
     CALDAV,
     CALDAV_BASE,
     DAV,
+    _parse_xml,
     _render_vtodo,
     get_caldav_service,
     parse_vtodo,
@@ -133,6 +134,13 @@ def test_vtodo_parser_rejects_unsafe_or_ambiguous_data_and_keeps_extensions():
             b"END:VCALENDAR\r\n",
             UTC,
         )
+
+
+def test_xml_parser_rejects_entity_expansion_beyond_the_fast_prefix_guard():
+    """The hardened parser blocks entities even outside the cheap prefix scan."""
+    payload = b" " * 600 + b'<!DOCTYPE root [<!ENTITY x "expanded">]><root>&x;</root>'
+    with pytest.raises(Exception, match="Malformed XML"):
+        _parse_xml(payload)
 
 
 def test_vtodo_rendering_is_stable_folded_and_contains_checklist_relations():
@@ -291,7 +299,9 @@ async def test_caldav_discovery_query_get_put_sync_and_conflict_round_trip(
     assert response.status == 207
     sync_xml = ET.fromstring(await response.read())
     token = sync_xml.find(f"{{{DAV}}}sync-token")
-    assert token is not None and token.text.startswith("urn:uuid:")
+    assert token is not None
+    assert token.text is not None
+    assert token.text.startswith("urn:uuid:")
 
     created_href = calendar + "from-iphone.ics"
     response = await client.put(

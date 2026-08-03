@@ -1926,55 +1926,68 @@ class HouseholdTasksPanel extends HTMLElement {
       </article>`;
   }
 
+  _caldavCredentialRow(item) {
+    let person = this._data.people[item.person_id]?.name || item.person_id || "–";
+    if (item.scope === "household") person = "Gesamter Haushalt";
+    const lastUsed = item.last_used_at ? new Date(item.last_used_at).toLocaleString(this._locale()) : "noch nie";
+    const expires = item.expires_at ? new Date(item.expires_at).toLocaleString(this._locale()) : "ohne Ablauf";
+    const permission = item.permission === "read_write" ? "Lesen und Schreiben" : "Nur Lesen";
+    const scope = item.scope === "household" ? "Haushalt" : "Persönlich";
+    const revoke = this._data.is_admin
+      ? `<button type="button" class="danger-button" data-revoke-caldav="${this._e(item.id)}">Widerrufen</button>`
+      : "";
+    return `<div class="caldav-credential">
+      <div><strong>${this._e(item.label)}</strong><small>${this._e(item.username)} · ${this._e(person)}</small><small>${permission} · ${scope}</small><small>Zuletzt verwendet: ${this._e(lastUsed)} · ${this._e(expires)}</small></div>
+      ${revoke}
+    </div>`;
+  }
+
+  _caldavAdminForms(settings, people) {
+    if (!this._data.is_admin) return "";
+    return `<details class="advanced-fields" open><summary>Serveroptionen</summary>
+      <form id="caldav-settings-form" class="form-grid">
+        <label class="checkbox full"><input name="enabled" type="checkbox" ${settings.enabled ? "checked" : ""}> CalDAV-Server aktivieren<span class="hint">Ohne gültiges App-Passwort ist auch ein aktiver Server nicht nutzbar.</span></label>
+        <label class="checkbox full"><input name="require_tls" type="checkbox" ${settings.require_tls ? "checked" : ""}> HTTPS erzwingen<span class="hint">Für produktive Systeme unbedingt aktiviert lassen. Nur für isolierte lokale Tests abschalten.</span></label>
+        <label>Listenname<input name="calendar_name" maxlength="100" value="${this._e(settings.calendar_name || "Household Tasks")}"></label>
+        <label>Farbe<input name="calendar_color" pattern="#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?" value="${this._e(settings.calendar_color || "#03A9F4FF")}"></label>
+        <label class="full">Beschreibung<input name="calendar_description" maxlength="500" value="${this._e(settings.calendar_description || "")}"></label>
+        <label>Erledigte Aufgaben anzeigen<input name="expose_completed_days" type="number" min="0" max="3650" value="${Number(settings.expose_completed_days ?? 90)}"><span class="hint">Tage; 0 blendet abgeschlossene Aufgaben sofort aus.</span></label>
+        <label>Standard-Erinnerung<input name="default_reminder_minutes" type="number" min="0" max="525600" value="${Number(settings.default_reminder_minutes || 0)}"><span class="hint">Minuten vor Fälligkeit; 0 erzeugt keinen zusätzlichen VALARM.</span></label>
+        <label class="checkbox"><input name="allow_client_create" type="checkbox" ${settings.allow_client_create ? "checked" : ""}> Aufgaben im Client anlegen</label>
+        <label class="checkbox"><input name="allow_client_update" type="checkbox" ${settings.allow_client_update ? "checked" : ""}> Aufgaben im Client ändern/erledigen</label>
+        <label class="checkbox"><input name="allow_client_delete" type="checkbox" ${settings.allow_client_delete ? "checked" : ""}> Aufgaben im Client löschen<span class="hint">Löschen wird revisionssicher als Abbruch protokolliert.</span></label>
+        <input name="delete_mode" type="hidden" value="cancel">
+        <div class="full"><button class="primary" type="submit">CalDAV-Einstellungen speichern</button></div>
+      </form>
+    </details>
+    <details class="advanced-fields"><summary>App-Passwort anlegen</summary>
+      <form id="caldav-credential-form" class="form-grid">
+        <label>Bezeichnung<input name="label" required maxlength="100" placeholder="Mein iPhone"></label>
+        <label>Person<select name="person_id"><option value="">Keine feste Person</option>${people.map(([id, person]) => `<option value="${this._e(id)}">${this._e(person.name)}</option>`).join("")}</select><span class="hint">Für persönliche Listen und neue Aufgaben erforderlich.</span></label>
+        <label>Umfang<select name="scope"><option value="personal">Persönliche und übernehmbare Aufgaben</option><option value="household">Alle Haushaltsaufgaben</option></select></label>
+        <label>Berechtigung<select name="permission"><option value="read_write">Lesen und Schreiben</option><option value="read_only">Nur Lesen</option></select></label>
+        <label>Ablauf (optional)<input name="expires_at" type="datetime-local"></label>
+        <label class="checkbox"><input name="include_claimable" type="checkbox" checked> Offene übernehmbare Aufgaben anzeigen</label>
+        <label class="checkbox full"><input name="complete_checklist_on_parent" type="checkbox" checked> Beim Erledigen der Hauptaufgabe offene Checklistenpunkte mit erledigen<span class="hint">Nützlich für Clients, die CalDAV-Unteraufgaben nicht vollständig darstellen.</span></label>
+        <div class="full"><button class="primary" type="submit">App-Passwort erzeugen</button></div>
+      </form>
+    </details>`;
+  }
+
   _caldavSettings(caldav) {
     if (!caldav) return `<article class="settings-card"><h3>CalDAV</h3><p>Der CalDAV-Dienst wird noch initialisiert.</p></article>`;
     const settings = caldav.settings || {};
     const credentials = caldav.credentials || [];
     const people = Object.entries(this._data.people || {});
     const credentialRows = credentials.length
-      ? credentials.map((item) => {
-        const person = this._data.people[item.person_id]?.name || (item.scope === "household" ? "Gesamter Haushalt" : item.person_id || "–");
-        const lastUsed = item.last_used_at ? new Date(item.last_used_at).toLocaleString(this._locale()) : "noch nie";
-        const expires = item.expires_at ? new Date(item.expires_at).toLocaleString(this._locale()) : "ohne Ablauf";
-        return `<div class="caldav-credential">
-          <div><strong>${this._e(item.label)}</strong><small>${this._e(item.username)} · ${this._e(person)}</small><small>${item.permission === "read_write" ? "Lesen und Schreiben" : "Nur Lesen"} · ${item.scope === "household" ? "Haushalt" : "Persönlich"}</small><small>Zuletzt verwendet: ${this._e(lastUsed)} · ${this._e(expires)}</small></div>
-          ${this._data.is_admin ? `<button type="button" class="danger-button" data-revoke-caldav="${this._e(item.id)}">Widerrufen</button>` : ""}
-        </div>`;
-      }).join("")
+      ? credentials.map((item) => this._caldavCredentialRow(item)).join("")
       : `<p class="hint">Noch kein App-Passwort angelegt. Ohne Zugangsdaten bleibt der Server von außen unzugänglich.</p>`;
     return `<article class="settings-card caldav-card">
       <div class="settings-heading"><div><h3>CalDAV für Apple Erinnerungen</h3><p>Bidirektionale, personengebundene VTODO-Synchronisation mit Offline-Konfliktschutz, Checklisten-Unteraufgaben und einmaligen App-Passwörtern.</p></div><span class="status ${settings.enabled ? "home" : ""}">${settings.enabled ? "Aktiv" : "Aus"}</span></div>
       <div class="info-row"><span>Server-URL</span><code>${this._e(caldav.server_url)}</code></div>
       <div class="info-row"><span>Protokoll</span><span>CalDAV · VTODO · Sync-Tokens · ETags</span></div>
       ${settings.require_tls && !String(caldav.server_url || "").startsWith("https://") ? `<div class="health-summary warning">HTTPS ist vorgeschrieben, aber die konfigurierte Home-Assistant-URL ist nicht HTTPS. Externer Zugriff wird abgewiesen.</div>` : ""}
-      ${this._data.is_admin ? `<details class="advanced-fields" open><summary>Serveroptionen</summary>
-        <form id="caldav-settings-form" class="form-grid">
-          <label class="checkbox full"><input name="enabled" type="checkbox" ${settings.enabled ? "checked" : ""}> CalDAV-Server aktivieren<span class="hint">Ohne gültiges App-Passwort ist auch ein aktiver Server nicht nutzbar.</span></label>
-          <label class="checkbox full"><input name="require_tls" type="checkbox" ${settings.require_tls ? "checked" : ""}> HTTPS erzwingen<span class="hint">Für produktive Systeme unbedingt aktiviert lassen. Nur für isolierte lokale Tests abschalten.</span></label>
-          <label>Listenname<input name="calendar_name" maxlength="100" value="${this._e(settings.calendar_name || "Household Tasks")}"></label>
-          <label>Farbe<input name="calendar_color" pattern="#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?" value="${this._e(settings.calendar_color || "#03A9F4FF")}"></label>
-          <label class="full">Beschreibung<input name="calendar_description" maxlength="500" value="${this._e(settings.calendar_description || "")}"></label>
-          <label>Erledigte Aufgaben anzeigen<input name="expose_completed_days" type="number" min="0" max="3650" value="${Number(settings.expose_completed_days ?? 90)}"><span class="hint">Tage; 0 blendet abgeschlossene Aufgaben sofort aus.</span></label>
-          <label>Standard-Erinnerung<input name="default_reminder_minutes" type="number" min="0" max="525600" value="${Number(settings.default_reminder_minutes || 0)}"><span class="hint">Minuten vor Fälligkeit; 0 erzeugt keinen zusätzlichen VALARM.</span></label>
-          <label class="checkbox"><input name="allow_client_create" type="checkbox" ${settings.allow_client_create ? "checked" : ""}> Aufgaben im Client anlegen</label>
-          <label class="checkbox"><input name="allow_client_update" type="checkbox" ${settings.allow_client_update ? "checked" : ""}> Aufgaben im Client ändern/erledigen</label>
-          <label class="checkbox"><input name="allow_client_delete" type="checkbox" ${settings.allow_client_delete ? "checked" : ""}> Aufgaben im Client löschen<span class="hint">Löschen wird revisionssicher als Abbruch protokolliert.</span></label>
-          <input name="delete_mode" type="hidden" value="cancel">
-          <div class="full"><button class="primary" type="submit">CalDAV-Einstellungen speichern</button></div>
-        </form>
-      </details>
-      <details class="advanced-fields"><summary>App-Passwort anlegen</summary>
-        <form id="caldav-credential-form" class="form-grid">
-          <label>Bezeichnung<input name="label" required maxlength="100" placeholder="Mein iPhone"></label>
-          <label>Person<select name="person_id"><option value="">Keine feste Person</option>${people.map(([id, person]) => `<option value="${this._e(id)}">${this._e(person.name)}</option>`).join("")}</select><span class="hint">Für persönliche Listen und neue Aufgaben erforderlich.</span></label>
-          <label>Umfang<select name="scope"><option value="personal">Persönliche und übernehmbare Aufgaben</option><option value="household">Alle Haushaltsaufgaben</option></select></label>
-          <label>Berechtigung<select name="permission"><option value="read_write">Lesen und Schreiben</option><option value="read_only">Nur Lesen</option></select></label>
-          <label>Ablauf (optional)<input name="expires_at" type="datetime-local"></label>
-          <label class="checkbox"><input name="include_claimable" type="checkbox" checked> Offene übernehmbare Aufgaben anzeigen</label>
-          <label class="checkbox full"><input name="complete_checklist_on_parent" type="checkbox" checked> Beim Erledigen der Hauptaufgabe offene Checklistenpunkte mit erledigen<span class="hint">Nützlich für Clients, die CalDAV-Unteraufgaben nicht vollständig darstellen.</span></label>
-          <div class="full"><button class="primary" type="submit">App-Passwort erzeugen</button></div>
-        </form>
-      </details>` : ""}
+      ${this._caldavAdminForms(settings, people)}
       <h4>Aktive Zugänge</h4><div class="caldav-credentials">${credentialRows}</div>
       <details class="advanced-fields"><summary>Einrichtung und Synchronisationsverhalten</summary>
         <ol class="setup-steps"><li>In iOS/iPadOS <strong>Einstellungen → Apps → Erinnerungen → Accounts → Account hinzufügen → Andere → CalDAV-Account</strong> öffnen.</li><li>Als Server die oben angezeigte HTTPS-URL und das einmalig erzeugte Paar aus Benutzername und App-Passwort verwenden.</li><li>SSL aktivieren. Änderungen werden offline vorgemerkt und nach Wiederverbindung synchronisiert.</li><li>Bei parallelen Änderungen verhindert der ETag eine stille Überschreibung; der Client lädt die aktuelle Fassung neu.</li></ol>
@@ -1985,6 +1998,11 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _selected(actual, expected) {
     return actual === expected ? "selected" : "";
+  }
+
+  _formText(values, name, fallback = "") {
+    const value = values.get(name);
+    return typeof value === "string" ? value : fallback;
   }
 
   _modeControls(mode) {
@@ -2716,9 +2734,9 @@ class HouseholdTasksPanel extends HTMLElement {
     await this._call("caldav_save_settings", { settings: {
       enabled: values.get("enabled") === "on",
       require_tls: values.get("require_tls") === "on",
-      calendar_name: String(values.get("calendar_name") || "Household Tasks").trim(),
-      calendar_description: String(values.get("calendar_description") || "").trim(),
-      calendar_color: String(values.get("calendar_color") || "#03A9F4FF").trim(),
+      calendar_name: this._formText(values, "calendar_name", "Household Tasks").trim(),
+      calendar_description: this._formText(values, "calendar_description").trim(),
+      calendar_color: this._formText(values, "calendar_color", "#03A9F4FF").trim(),
       allow_client_create: values.get("allow_client_create") === "on",
       allow_client_update: values.get("allow_client_update") === "on",
       allow_client_delete: values.get("allow_client_delete") === "on",
@@ -2733,20 +2751,20 @@ class HouseholdTasksPanel extends HTMLElement {
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
-    const scope = String(values.get("scope") || "personal");
-    const personId = String(values.get("person_id") || "") || null;
+    const scope = this._formText(values, "scope", "personal");
+    const personId = this._formText(values, "person_id") || null;
     if (scope === "personal" && !personId) {
       this._toast("Für einen persönlichen CalDAV-Zugang muss eine Person ausgewählt werden.", true);
       return;
     }
-    const localExpiry = String(values.get("expires_at") || "");
+    const localExpiry = this._formText(values, "expires_at");
     this._busy = true;
     try {
       const result = await this._hass.callWS({
         type: "household_tasks/caldav_create_credential",
         person_id: personId,
-        label: String(values.get("label") || "").trim(),
-        permission: String(values.get("permission") || "read_write"),
+        label: this._formText(values, "label").trim(),
+        permission: this._formText(values, "permission", "read_write"),
         scope,
         include_claimable: values.get("include_claimable") === "on",
         complete_checklist_on_parent: values.get("complete_checklist_on_parent") === "on",
