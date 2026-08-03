@@ -3,13 +3,61 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 HOUSEHOLD_MODES = {"normal", "vacation", "guest"}
 MODE_POLICIES = {"pause", "reduce", "delegate"}
 PRIORITIES = {"low", "normal", "high", "critical"}
 SEASON_CONDITIONS = {"below", "at_most", "above", "at_least", "equals", "not_equals"}
+
+
+def task_activation_decision(
+    task: dict[str, Any], reference: datetime | None = None
+) -> dict[str, Any]:
+    """Explain whether a template is enabled at a point in time."""
+    if task.get("enabled", True) is False:
+        return {
+            "allowed": False,
+            "code": "template_disabled",
+            "message": "Die Aufgabenvorlage ist dauerhaft deaktiviert.",
+            "paused_until": None,
+        }
+
+    raw_until = task.get("paused_until")
+    if not raw_until:
+        return {
+            "allowed": True,
+            "code": "template_active",
+            "message": "Die Aufgabenvorlage ist aktiv.",
+            "paused_until": None,
+        }
+    try:
+        paused_until = datetime.fromisoformat(str(raw_until).replace("Z", "+00:00"))
+    except ValueError:
+        return {
+            "allowed": False,
+            "code": "template_pause_invalid",
+            "message": "Der Pausenzeitpunkt ist ungültig.",
+            "paused_until": str(raw_until),
+        }
+
+    if paused_until.tzinfo is None:
+        paused_until = paused_until.replace(tzinfo=UTC)
+    moment = reference or datetime.now(UTC)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    paused = moment.astimezone(UTC) < paused_until.astimezone(UTC)
+    return {
+        "allowed": not paused,
+        "code": "template_paused" if paused else "template_pause_elapsed",
+        "message": (
+            f"Die Aufgabenvorlage ist bis {paused_until.isoformat()} pausiert."
+            if paused
+            else "Die zeitlich begrenzte Pause ist beendet."
+        ),
+        "paused_until": paused_until.isoformat(),
+    }
 
 
 def default_household_mode() -> dict[str, Any]:

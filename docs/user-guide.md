@@ -62,6 +62,21 @@ Der Aufgabeneditor unterstützt:
 - bei jedem passenden Zustandswechsel mit optionaler Verzögerung und Cooldown
 - erneut in einem festen Abstand nach der tatsächlichen letzten Erledigung
 
+### Vorlagen temporär pausieren
+
+Administratoren können eine aktive Vorlage über **Temporär pausieren** für 12
+Stunden, einen Tag, eine Woche oder bis zu einem frei gewählten Zeitpunkt
+aussetzen. Währenddessen entstehen weder durch Zeitpläne, Zustände, Wetter,
+Kalender, Folgeaufgaben noch NFC-Tags neue Aufgaben. Bereits vorhandene offene
+Aufgaben bleiben unverändert und können normal erledigt werden.
+
+Nach Ablauf von **Pausiert bis** wird die Vorlage ohne manuellen Eingriff wieder
+aktiv. Fälligkeiten innerhalb der Pause werden nicht nachträglich erzeugt; im
+Wochenplan erscheinen aber bereits schreibgeschützte Vorschauen für Termine nach
+der Reaktivierung. **Jetzt fortsetzen** beendet die Pause sofort. Die bestehende
+Option **Aufgabe aktiv** bleibt für eine unbefristete Deaktivierung erhalten.
+Pausen werden mit der übrigen Vorlagenkonfiguration exportiert und importiert.
+
 ### Abhängige Aufgaben
 
 Eine Vorlage kann nach ihrer Erledigung eine oder mehrere andere Vorlagen

@@ -40,6 +40,7 @@ escalation, and a multilingual management panel.
 - Local smart capture and entity-based setup suggestions.
 - Actionable diagnostics, routine notification digests, and Assist intents.
 - Context-aware daily planning, natural moves, and drag-and-drop week planning.
+- Temporary per-template pauses with automatic reactivation and preserved open work.
 - Transparent local habit suggestions, reusable task stacks, and flexible series.
 - Task context menus, device records, bounded photo/PDF attachments, and an
   offline action queue.
