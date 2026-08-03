@@ -22,6 +22,13 @@ def test_task_activation_supports_temporary_and_permanent_pauses():
     assert not task_activation_decision({"enabled": False}, after)["allowed"]
     assert not task_activation_decision({"paused_until": "invalid"}, after)["allowed"]
 
+    naive = task_activation_decision(
+        {"paused_until": "2026-08-04T12:00:00"},
+        datetime(2026, 8, 3, 8),
+    )
+    assert not naive["allowed"]
+    assert naive["paused_until"] == "2026-08-04T12:00:00+00:00"
+
 
 def test_vacation_modes_pause_reduce_and_delegate():
     """Vacation policies deliberately pause, filter, or delegate tasks."""

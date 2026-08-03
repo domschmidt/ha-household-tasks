@@ -5219,7 +5219,7 @@ class HouseholdTaskEngine:
     ) -> str | None:
         activation = task_activation_decision(task, dt_util.now())
         if not activation["allowed"]:
-            self._record_decision(task_id, task, due, activation)
+            self._record_creation_decision(task_id, task, due, activation)
             return None
         if (
             task.get("assignment", {}).get("type") == "per_person"
