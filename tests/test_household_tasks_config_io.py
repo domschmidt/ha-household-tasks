@@ -61,6 +61,8 @@ class ConfigIoTests(unittest.TestCase):
             },
             "tasks": {
                 "ice": {
+                    "enabled": True,
+                    "paused_until": "2026-08-15T12:00:00+00:00",
                     "name": "Prevent ice",
                     "schedule": {
                         "type": "weather_trigger",
@@ -149,6 +151,10 @@ class ConfigIoTests(unittest.TestCase):
         self.assertEqual(
             imported["tasks"]["first_frost"]["assignment"]["type"],
             "per_person",
+        )
+        self.assertEqual(
+            imported["tasks"]["ice"]["paused_until"],
+            "2026-08-15T12:00:00+00:00",
         )
 
 

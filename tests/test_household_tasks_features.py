@@ -6,8 +6,21 @@ from custom_components.household_tasks.features import (
     dependency_cycles,
     mode_decision,
     season_decision,
+    task_activation_decision,
     template_gallery,
 )
+
+
+def test_task_activation_supports_temporary_and_permanent_pauses():
+    """A pause blocks only references before its configured end."""
+    before = datetime(2026, 8, 3, 8, tzinfo=UTC)
+    after = datetime(2026, 8, 5, 8, tzinfo=UTC)
+    task = {"enabled": True, "paused_until": "2026-08-04T12:00:00+00:00"}
+
+    assert task_activation_decision(task, before)["code"] == "template_paused"
+    assert task_activation_decision(task, after)["allowed"]
+    assert not task_activation_decision({"enabled": False}, after)["allowed"]
+    assert not task_activation_decision({"paused_until": "invalid"}, after)["allowed"]
 
 
 def test_vacation_modes_pause_reduce_and_delegate():

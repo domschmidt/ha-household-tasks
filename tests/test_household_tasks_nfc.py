@@ -1,16 +1,8 @@
 """Tests for NFC task matching."""
 
-import importlib.util
 import unittest
-from pathlib import Path
 
-MODULE_PATH = (
-    Path(__file__).parents[1] / "custom_components" / "household_tasks" / "nfc.py"
-)
-SPEC = importlib.util.spec_from_file_location("household_tasks_nfc", MODULE_PATH)
-nfc = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader
-SPEC.loader.exec_module(nfc)
+from custom_components.household_tasks import nfc
 
 
 class NfcTests(unittest.TestCase):
@@ -27,6 +19,17 @@ class NfcTests(unittest.TestCase):
         }
         self.assertEqual(nfc.task_for_tag(tasks, " target ")[0], "active")
         self.assertIsNone(nfc.task_for_tag(tasks, "same"))
+
+    def test_task_for_tag_ignores_temporarily_paused_tasks(self):
+        tasks = {
+            "paused": {
+                "enabled": True,
+                "paused_until": "2999-01-01T00:00:00+00:00",
+                "nfc": {"tag_id": "target"},
+            }
+        }
+
+        self.assertIsNone(nfc.task_for_tag(tasks, "target"))
 
     def test_open_occurrence_returns_oldest_due(self):
         occurrences = {

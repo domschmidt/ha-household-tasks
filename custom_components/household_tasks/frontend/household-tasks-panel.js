@@ -37,6 +37,7 @@ class HouseholdTasksPanel extends HTMLElement {
     this._referencesLoaded = false;
     this._lastRefreshAt = 0;
     this._refreshTimer = null;
+    this._pauseTimer = null;
     this._updateSubscription = null;
     this._updateSubscriptionConnection = null;
     this._offlineActions = new Set(["complete", "snooze", "move_occurrence", "bulk"]);
@@ -123,6 +124,8 @@ class HouseholdTasksPanel extends HTMLElement {
     window.removeEventListener("scroll", this._viewportHandler, true);
     clearTimeout(this._refreshTimer);
     this._refreshTimer = null;
+    clearTimeout(this._pauseTimer);
+    this._pauseTimer = null;
     this._teardownUpdateSubscription();
   }
 
@@ -729,6 +732,7 @@ class HouseholdTasksPanel extends HTMLElement {
         nfc_device_id: "Optionales Gerät zur Erkennung der scannenden Person bei NFC-Ereignissen.",
       },
       "task-form": {
+        paused_until: "Unterdrückt neue Aufgaben nur bis zu diesem Zeitpunkt und aktiviert die Vorlage danach automatisch wieder.",
         assignment_type: "Bestimmt, ob die Zuständigkeit fest, rotierend, fair verteilt oder offen ist.",
         assignment_person: "Diese Personen dürfen bei Rotation, fairer Verteilung oder offener Zuweisung berücksichtigt werden.",
         presence_required: "Berücksichtigt bei automatischer Zuweisung nur aktuell anwesende Personen.",
@@ -794,6 +798,9 @@ class HouseholdTasksPanel extends HTMLElement {
         esc_second: "Stunden bis zur zweiten Eskalationsstufe.",
         esc_second_action: "Aktion, die in der zweiten Eskalationsstufe ausgeführt wird.",
         esc_final: "Stunden bis zur Benachrichtigung aller Haushaltsmitglieder.",
+      },
+      "task-pause-form": {
+        paused_until: "Zeitpunkt, ab dem die Vorlage automatisch wieder neue Aufgaben erzeugen darf.",
       },
       "quick-task-form": {
         due: "Datum und Uhrzeit, zu denen die einmalige Aufgabe fällig wird.",
@@ -1114,6 +1121,20 @@ class HouseholdTasksPanel extends HTMLElement {
     this._bind();
     this._localize();
     this._enhanceAccessibility();
+    this._schedulePauseRefresh();
+  }
+
+  _schedulePauseRefresh() {
+    clearTimeout(this._pauseTimer);
+    this._pauseTimer = null;
+    const next = Object.values(this._data?.tasks || {})
+      .filter((task) => task.enabled !== false && task.paused_until)
+      .map((task) => new Date(task.paused_until).getTime())
+      .filter((timestamp) => Number.isFinite(timestamp) && timestamp > Date.now())
+      .sort((left, right) => left - right)[0];
+    if (!next) return;
+    const delay = Math.min(next - Date.now() + 250, 2_147_000_000);
+    this._pauseTimer = setTimeout(() => this._render(), delay);
   }
 
   _modeBadge(data) {
@@ -1579,21 +1600,28 @@ class HouseholdTasksPanel extends HTMLElement {
   _taskCard(id, task) {
     const assignment = this._assignmentLabel(task);
     const isFavorite = (this._data.favorites?.[this._currentPersonId()] || []).includes(id);
-    const disabledClass = task.enabled === false ? "disabled" : "";
+    const pausedUntil = this._taskPausedUntil(task);
+    const unavailable = task.enabled === false || pausedUntil;
+    const disabledClass = unavailable ? "disabled" : "";
     const nfcLabel = task.nfc?.tag_id ? " · NFC" : "";
-    const status = task.enabled === false ? "Pausiert" : "Aktiv";
+    let status = this._t("Aktiv");
+    if (task.enabled === false) status = this._t("Deaktiviert");
+    else if (pausedUntil) status = `${this._t("Pausiert bis")} ${pausedUntil.toLocaleString(this._locale(), { dateStyle: "short", timeStyle: "short" })}`;
     const description = task.description ? `<p class="description">${this._e(task.description)}</p>` : "";
     const habit = this._taskHabit(id);
     const market = this._taskMarket(task.market);
     const favorite = this._taskFavoriteButton(id, isFavorite);
-    const createDisabled = task.enabled === false ? 'disabled title="Aufgabe ist pausiert"' : "";
+    const createDisabled = unavailable ? 'disabled title="Aufgabe ist pausiert"' : "";
+    let pauseAction = "";
+    if (pausedUntil) pauseAction = `<button data-resume-task="${this._e(id)}">Jetzt fortsetzen</button>`;
+    else if (task.enabled !== false) pauseAction = `<button data-pause-task="${this._e(id)}">Temporär pausieren</button>`;
     const adminActions = this._data.is_admin
-      ? `<button data-edit-task="${this._e(id)}">Bearbeiten</button><button class="danger-button" data-delete-task="${this._e(id)}">Löschen</button>`
+      ? `${pauseAction}<button data-edit-task="${this._e(id)}">Bearbeiten</button><button class="danger-button" data-delete-task="${this._e(id)}">Löschen</button>`
       : "";
     return `<article class="config-card ${disabledClass}">
       <div class="card-top"><span class="avatar">${this._e(assignment.icon)}</span>
       <div><h3>${this._e(task.name)}</h3><p>${this._e(assignment.label)} · ${this._e(this._scheduleLabel(task.schedule))}${nfcLabel}</p></div>
-      <span class="status">${status}</span></div>
+      <span class="status">${this._e(status)}</span></div>
       ${description}${habit}${market}
       <div class="actions">${favorite}
         <button data-create="${this._e(id)}" ${createDisabled}>Jetzt erzeugen</button>
@@ -1601,6 +1629,26 @@ class HouseholdTasksPanel extends HTMLElement {
         ${adminActions}
       </div>
     </article>`;
+  }
+
+  _taskPausedUntil(task) {
+    if (!task.paused_until) return null;
+    const until = new Date(task.paused_until);
+    return Number.isNaN(until.getTime()) || until <= new Date() ? null : until;
+  }
+
+  _activationMessage(activation) {
+    if (activation.code === "template_paused" && activation.paused_until) {
+      const until = new Date(activation.paused_until);
+      return `${this._t("Pausiert bis")} ${until.toLocaleString(this._locale(), { dateStyle: "short", timeStyle: "short" })}`;
+    }
+    const messages = {
+      template_disabled: "Die Aufgabenvorlage ist dauerhaft deaktiviert.",
+      template_active: "Die Aufgabenvorlage ist aktiv.",
+      template_pause_elapsed: "Die zeitlich begrenzte Pause ist beendet.",
+      template_pause_invalid: "Der Pausenzeitpunkt ist ungültig.",
+    };
+    return this._t(messages[activation.code] || activation.message || "Die Aufgabenvorlage ist aktiv.");
   }
 
   _taskHabit(id) {
@@ -2099,6 +2147,14 @@ class HouseholdTasksPanel extends HTMLElement {
     });
     this.shadowRoot.querySelectorAll("[data-explain-task]").forEach((b) => b.onclick = () => this._showWhyNot(b.dataset.explainTask));
     this.shadowRoot.querySelectorAll("[data-edit-task]").forEach((b) => b.onclick = () => this._showTaskEditor(b.dataset.editTask));
+    this.shadowRoot.querySelectorAll("[data-pause-task]").forEach((b) => b.onclick = () => this._showTaskPauseDialog(b.dataset.pauseTask));
+    this.shadowRoot.querySelectorAll("[data-resume-task]").forEach((b) => b.onclick = async () => {
+      const taskId = b.dataset.resumeTask;
+      const task = structuredClone(this._data.tasks[taskId]);
+      delete task.paused_until;
+      await this._call("save_task", { task_id: taskId, task });
+      this._toast(this._t("Aufgabe wieder aktiviert"));
+    });
     this.shadowRoot.querySelectorAll("[data-delete-task]").forEach((b) => b.onclick = async () => {
       if (await this._confirm("Diese Aufgabenvorlage wirklich löschen?")) {
         await this._call("delete_task", { task_id: b.dataset.deleteTask });
@@ -2772,12 +2828,14 @@ class HouseholdTasksPanel extends HTMLElement {
       const modal = this.shadowRoot.querySelector("#modal");
       const returnFocus = this.shadowRoot.activeElement;
       const excluded = explanation.excluded_candidates || [];
-      const negation = explanation.mode.allowed && explanation.season.allowed ? "" : "nicht ";
+      const activation = explanation.activation || { allowed: true, code: "template_active" };
+      const negation = activation.allowed && explanation.mode.allowed && explanation.season.allowed ? "" : "nicht ";
       const forecast = this._whyNotForecast(explanation.forecast_trace);
       const excludedMarkup = this._whyNotExcluded(excluded);
       const recent = this._whyNotRecent(explanation.recent_decisions);
       modal.innerHTML = `<div class="backdrop"><div class="modal-card small">
         <div class="modal-head"><div><div class="eyebrow">ENTSCHEIDUNGSHILFE</div><h2>Warum wird die Aufgabe ${negation}erzeugt?</h2></div><button class="icon-button close" aria-label="Schließen">×</button></div>
+        <div class="decision-line ${activation.allowed ? "ok" : "blocked"}"><strong>Vorlagenstatus</strong><span>${this._e(this._activationMessage(activation))}</span></div>
         <div class="decision-line ${explanation.mode.allowed ? "ok" : "blocked"}"><strong>Haushaltsmodus</strong><span>${this._e(explanation.mode.message)}</span></div>
         <div class="decision-line ${explanation.season.allowed ? "ok" : "blocked"}"><strong>Saison</strong><span>${this._e(explanation.season.message)}</span></div>
         ${forecast}
@@ -3026,6 +3084,53 @@ class HouseholdTasksPanel extends HTMLElement {
     }
   }
 
+  _showTaskPauseDialog(taskId) {
+    const task = this._data.tasks[taskId];
+    if (!task) return;
+    const modal = this.shadowRoot.querySelector("#modal");
+    const returnFocus = this.shadowRoot.activeElement;
+    const suggested = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const minimum = new Date(Date.now() + 60 * 1000);
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card small">
+      <div class="modal-head"><div><div class="eyebrow">AUFGABENVORLAGE</div><h2>„${this._e(task.name)}“ pausieren</h2></div><button class="icon-button close" aria-label="Schließen">×</button></div>
+      <p>Während der Pause werden keine neuen Aufgaben erzeugt. Bereits vorhandene offene Aufgaben bleiben erhalten.</p>
+      <form id="task-pause-form" class="form-grid">
+        <label class="full">Pausiert bis<input name="paused_until" type="datetime-local" required min="${this._localDateTimeValue(minimum)}" value="${this._localDateTimeValue(suggested)}"><span class="hint">Die Vorlage wird nach diesem Zeitpunkt automatisch wieder aktiv.</span></label>
+        <div class="full quick-presets" aria-label="Schnelle Pausendauer">
+          <button type="button" data-pause-hours="12">12 Stunden</button>
+          <button type="button" data-pause-hours="24">1 Tag</button>
+          <button type="button" data-pause-hours="168">1 Woche</button>
+        </div>
+        <div class="full modal-actions"><button type="button" class="cancel">Abbrechen</button><button class="primary" type="submit">Pausieren</button></div>
+      </form></div></div>`;
+    this._localize(modal);
+    const close = () => { modal.replaceChildren(); returnFocus?.focus(); };
+    modal.querySelector(".close").onclick = close;
+    modal.querySelector(".cancel").onclick = close;
+    this._activateDialog(modal, close);
+    modal.querySelectorAll("[data-pause-hours]").forEach((button) => {
+      button.onclick = () => {
+        const until = new Date(Date.now() + Number(button.dataset.pauseHours) * 60 * 60 * 1000);
+        modal.querySelector("[name=paused_until]").value = this._localDateTimeValue(until);
+      };
+    });
+    modal.querySelector("#task-pause-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const rawUntil = new FormData(event.currentTarget).get("paused_until");
+      const until = new Date(rawUntil);
+      if (Number.isNaN(until.getTime()) || until <= new Date()) {
+        this._toast(this._t("Bitte einen zukünftigen Zeitpunkt auswählen"), true);
+        return;
+      }
+      const updated = structuredClone(task);
+      updated.enabled = true;
+      updated.paused_until = until.toISOString();
+      await this._call("save_task", { task_id: taskId, task: updated });
+      close();
+      this._toast(this._t("Aufgabe temporär pausiert"));
+    };
+  }
+
   _showTaskEditor(id = null, options = {}) {
     const guided = true;
     const task = this._editorTask(id, options);
@@ -3042,6 +3147,7 @@ class HouseholdTasksPanel extends HTMLElement {
     const absencePolicy = task.assignment?.absence_policy || "wait";
     const fallbackPeople = task.assignment?.fallback_people || [];
     const fallbackStrategy = task.assignment?.fallback_strategy || "fair";
+    const pausedUntil = this._taskPausedUntil(task);
     const modal = this.shadowRoot.querySelector("#modal");
     const returnFocus = this.shadowRoot.activeElement;
     modal.innerHTML = `<div class="backdrop"><div class="modal-card task-editor ${guided ? "task-editor--wizard" : "task-editor--direct"}">
@@ -3058,6 +3164,7 @@ class HouseholdTasksPanel extends HTMLElement {
           ).join("")}
         </select></label>
         <label class="checkbox" data-task-step="1"><input name="enabled" type="checkbox" ${task.enabled !== false ? "checked" : ""}> Aufgabe aktiv</label>
+        <label class="full" data-task-step="1">Temporär pausiert bis<input name="paused_until" type="datetime-local" value="${pausedUntil ? this._localDateTimeValue(pausedUntil) : ""}"><span class="hint">Optional. Bis zu diesem Zeitpunkt werden keine neuen Aufgaben erzeugt; bestehende offene Aufgaben bleiben erhalten.</span></label>
         <label class="full fixed-assignee" data-task-step="2">Zuständig<select name="assignee">${Object.entries(this._data.people).map(([pid, p]) => `<option value="${this._e(pid)}" ${pid === task.assignee ? "selected" : ""}>${this._e(p.name)}</option>`).join("")}</select></label>
         <div class="full assignment-candidates" data-task-step="2">
           <span class="field-label">Teilnehmende Personen</span>
@@ -4190,6 +4297,14 @@ class HouseholdTasksPanel extends HTMLElement {
       enabled: f.get("enabled") === "on", name: f.get("name").trim(),
       schedule, assignment: { type: assignmentType },
     };
+    const rawPausedUntil = f.get("paused_until");
+    if (value.enabled && rawPausedUntil) {
+      const pausedUntil = new Date(rawPausedUntil);
+      if (Number.isNaN(pausedUntil.getTime()) || pausedUntil <= new Date()) {
+        throw new Error("Die temporäre Pause muss in der Zukunft enden.");
+      }
+      value.paused_until = pausedUntil.toISOString();
+    }
     if (f.get("presence_required") === "on") value.assignment.presence_required = true;
     if (assignmentType === "fixed") {
       value.assignee = f.get("assignee");
