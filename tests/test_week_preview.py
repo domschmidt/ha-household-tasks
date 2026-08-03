@@ -110,6 +110,18 @@ def test_week_preview_projects_fanout_and_dynamic_assignment_without_mutation(ha
     assert sum(item["task_id"] == "seasonal" for item in preview) == 1
 
 
+def test_week_preview_hides_only_dates_inside_a_temporary_pause(hass):
+    """Occurrences after automatic reactivation remain visible in planning."""
+    engine = _engine(hass)
+    engine.tasks["bins"]["paused_until"] = "2026-08-04T12:00:00+00:00"
+    start = datetime(2026, 8, 3, 8, tzinfo=UTC)
+
+    bins = [item for item in engine.week_preview(start) if item["task_id"] == "bins"]
+
+    assert len(bins) == 2
+    assert all(datetime.fromisoformat(item["due"]).weekday() == 2 for item in bins)
+
+
 def test_week_preview_is_replaced_by_matching_real_occurrence(hass):
     """A persisted occurrence suppresses only its matching projected card."""
     engine = _engine(hass)

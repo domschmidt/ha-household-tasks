@@ -26,6 +26,33 @@ async def _native_engine(hass, tasks, people=None):
     return engine, []
 
 
+@pytest.mark.asyncio
+async def test_temporary_pause_blocks_manual_creation_until_it_expires(hass):
+    """Paused templates reject new work without altering open occurrences."""
+    task = {
+        "enabled": True,
+        "paused_until": "2999-01-01T00:00:00+00:00",
+        "name": "Paused routine",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {"type": "manual"},
+    }
+    engine, _ = await _native_engine(hass, {"paused": task})
+    engine.state["occurrences"]["existing"] = {
+        "id": "existing",
+        "task_id": "paused",
+        "resolved": False,
+    }
+
+    with pytest.raises(vol.Invalid, match="disabled"):
+        await engine.async_create_manual("paused")
+
+    assert list(engine.state["occurrences"]) == ["existing"]
+    engine.tasks["paused"]["paused_until"] = "2020-01-01T00:00:00+00:00"
+    await engine.async_create_manual("paused")
+    assert len(engine.state["occurrences"]) == 2
+
+
 def _first_frost_task():
     """Return a realistic forecast/fan-out rule used by runtime tests."""
     return {
@@ -114,6 +141,30 @@ async def test_diamond_follow_up_chain_creates_shared_target_once(hass):
     ]
     assert len(finish) == 1
     assert not finish[0]["resolved"]
+
+
+async def test_temporary_pause_suppresses_follow_up_creation(hass):
+    """Completing a source does not bypass a target template pause."""
+    tasks = {
+        "source": _manual(
+            "Source",
+            [{"task_id": "target", "delay": "00:00:00"}],
+        ),
+        "target": {
+            **_manual("Target"),
+            "paused_until": "2999-01-01T00:00:00+00:00",
+        },
+    }
+    engine, _ = await _native_engine(hass, tasks)
+
+    await engine.async_create_manual("source")
+    source_id, source = next(iter(engine.state["occurrences"].items()))
+    await engine._resolve_occurrence(source_id, source, completed_by="alex")
+
+    assert not any(
+        occurrence["task_id"] == "target"
+        for occurrence in engine.state["occurrences"].values()
+    )
 
 
 async def test_weather_trigger_combines_attributes_edges_and_open_deduplication(hass):

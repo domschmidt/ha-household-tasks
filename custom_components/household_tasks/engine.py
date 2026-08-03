@@ -66,6 +66,7 @@ from .features import (
     dependency_cycles,
     mode_decision,
     season_decision,
+    task_activation_decision,
     template_gallery,
 )
 from .forecast_rules import (
@@ -603,6 +604,9 @@ class HouseholdTaskEngine:
                     f"task '{task_id}' needs explicit fallback people for "
                     f"absence policy '{absence_policy}'"
                 )
+            paused_until = task.get("paused_until")
+            if paused_until and dt_util.parse_datetime(str(paused_until)) is None:
+                errors.append(f"task '{task_id}' paused_until must be an ISO date-time")
             schedule = task.get("schedule", {})
             schedule_type = schedule.get("type")
             if schedule_type not in {
@@ -1467,7 +1471,7 @@ class HouseholdTaskEngine:
         preview: list[dict[str, Any]] = []
 
         for task_id, task in self.tasks.items():
-            if not task.get("enabled", True):
+            if task.get("enabled", True) is False:
                 continue
             schedule = task.get("schedule", {})
             if schedule.get("type") not in {
@@ -1482,6 +1486,8 @@ class HouseholdTaskEngine:
                 start - timedelta(microseconds=1),
                 end,
             ):
+                if not self._task_is_active(task, due):
+                    continue
                 targets: list[str | None] = [None]
                 if task.get("assignment", {}).get("type") == "per_person":
                     targets = self._fanout_targets(task)
@@ -1550,7 +1556,7 @@ class HouseholdTaskEngine:
 
         for task_id, task in self.tasks.items():
             schedule = task.get("schedule", {})
-            if not task.get("enabled", True) or schedule.get("type") != "calendar":
+            if task.get("enabled", True) is False or schedule.get("type") != "calendar":
                 continue
             preview.extend(
                 await self._calendar_task_week_preview(
@@ -1593,7 +1599,7 @@ class HouseholdTaskEngine:
         result = []
         for event in events:
             due = dt_util.parse_datetime(event["due"])
-            if due is None:
+            if due is None or not self._task_is_active(task, due):
                 continue
             for target_person in targets:
                 item = self._calendar_week_preview_item(
@@ -1737,6 +1743,13 @@ class HouseholdTaskEngine:
             mode["changed_at"] = dt_util.utcnow().isoformat()
             self.state["household_mode"] = mode
         return mode
+
+    @staticmethod
+    def _task_is_active(
+        task: dict[str, Any], reference: datetime | None = None
+    ) -> bool:
+        """Return whether a template may create work at the reference time."""
+        return task_activation_decision(task, reference)["allowed"]
 
     def configuration_health(self) -> dict[str, Any]:
         """Return actionable configuration findings without exposing secrets."""
@@ -2332,6 +2345,7 @@ class HouseholdTaskEngine:
         if task is None:
             raise vol.Invalid(f"Unknown task_id: {task_id}")
         now = dt_util.now()
+        activation = task_activation_decision(task, now)
         mode = mode_decision(self._current_household_mode(), task)
         season = self._season_decision(task, now)
         weather = self._weather_decision(task)
@@ -2354,6 +2368,7 @@ class HouseholdTaskEngine:
                 )
         return {
             "task_id": task_id,
+            "activation": activation,
             "mode": mode,
             "season": season,
             "weather": weather,
@@ -2989,7 +3004,7 @@ class HouseholdTaskEngine:
             task = self.tasks.get(task_id)
             if task is None:
                 raise vol.Invalid(f"Unknown task_id: {task_id}")
-            if not task.get("enabled", True):
+            if not self._task_is_active(task):
                 raise vol.Invalid(f"Task is disabled: {task_id}")
             await self._create_occurrence(
                 task_id, task, dt_util.now(), manual=True, context=context
@@ -3283,7 +3298,7 @@ class HouseholdTaskEngine:
         task = self.tasks.get(task_id)
         if task is None:
             raise vol.Invalid(f"Unknown task_id: {task_id}")
-        if not task.get("enabled", True):
+        if not self._task_is_active(task):
             raise vol.Invalid(f"Task is disabled: {task_id}")
         await self._create_occurrence(
             task_id,
@@ -3297,7 +3312,7 @@ class HouseholdTaskEngine:
         """Return task trigger and automatically discovered printer entities."""
         entities: set[str] = set()
         for task in self.tasks.values():
-            if not task.get("enabled", True):
+            if task.get("enabled", True) is False:
                 continue
             entities.update(
                 str(condition.get("entity_id"))
@@ -3521,7 +3536,7 @@ class HouseholdTaskEngine:
                 await self._save()
 
         for task_id, task in self.tasks.items():
-            if not task.get("enabled", True):
+            if not self._task_is_active(task):
                 continue
             schedule = task.get("schedule", {})
             if schedule.get("type") not in {
@@ -4197,7 +4212,7 @@ class HouseholdTaskEngine:
     ) -> None:
         """Evaluate and potentially create one weather-triggered task."""
         schedule = task.get("schedule", {})
-        if not task.get("enabled", True) or schedule.get("type") != "weather_trigger":
+        if not self._task_is_active(task) or schedule.get("type") != "weather_trigger":
             return
         decision = self._weather_decision(task)
         previous = bool(matches.get(task_id, False))
@@ -4243,7 +4258,7 @@ class HouseholdTaskEngine:
         for task_id, task in self.tasks.items():
             schedule = task.get("schedule", {})
             if (
-                not task.get("enabled", True)
+                not self._task_is_active(task)
                 or schedule.get("type") != "forecast_trigger"
             ):
                 continue
@@ -4522,7 +4537,7 @@ class HouseholdTaskEngine:
         self, start: datetime, end: datetime
     ) -> None:
         for task_id, task in self.tasks.items():
-            if not task.get("enabled", True):
+            if task.get("enabled", True) is False:
                 continue
             schedule = task["schedule"]
             if schedule.get("type") in {
@@ -4537,6 +4552,8 @@ class HouseholdTaskEngine:
             }:
                 continue
             for due in self._scheduled_times(schedule, start, end):
+                if not self._task_is_active(task, due):
+                    continue
                 await self._create_occurrence(task_id, task, due)
 
     async def _ensure_after_completion_starts(self, planning_end: datetime) -> None:
@@ -4544,7 +4561,7 @@ class HouseholdTaskEngine:
         for task_id, task in self.tasks.items():
             schedule = task.get("schedule", {})
             if (
-                not task.get("enabled", True)
+                task.get("enabled", True) is False
                 or schedule.get("type")
                 not in {"after_completion", "flexible_after_completion"}
                 or any(
@@ -4561,6 +4578,8 @@ class HouseholdTaskEngine:
                     tzinfo=ZoneInfo(self.hass.config.time_zone)
                 )
             if dt_util.as_local(first_due) <= planning_end:
+                if not self._task_is_active(task, first_due):
+                    continue
                 await self._create_occurrence(task_id, task, first_due)
 
     async def _process_weekly_summary(self, now: datetime) -> None:
@@ -4747,7 +4766,7 @@ class HouseholdTaskEngine:
         zone = ZoneInfo(self.hass.config.time_zone)
         for task_id, source_days in self.state["daily_triggers"].items():
             task = self.tasks.get(task_id)
-            if not task or not task.get("enabled", True):
+            if not task or not self._task_is_active(task):
                 continue
             schedule = task["schedule"]
             task_time = self._parse_time(schedule.get("time", "18:00:00"))
@@ -4809,7 +4828,7 @@ class HouseholdTaskEngine:
         self, start: datetime, end: datetime
     ) -> None:
         for task_id, task in self.tasks.items():
-            if not task.get("enabled", True):
+            if task.get("enabled", True) is False:
                 continue
             schedule = task["schedule"]
             if schedule.get("type") != "calendar":
@@ -4849,6 +4868,8 @@ class HouseholdTaskEngine:
                     continue
                 due = event_start + offset
                 if start < due <= end:
+                    if not self._task_is_active(task, due):
+                        continue
                     await self._create_occurrence(
                         task_id,
                         task,
@@ -5196,6 +5217,10 @@ class HouseholdTaskEngine:
         rule_reference: datetime | None = None,
         _target_person: str | None = None,
     ) -> str | None:
+        activation = task_activation_decision(task, dt_util.now())
+        if not activation["allowed"]:
+            self._record_decision(task_id, task, due, activation)
+            return None
         if (
             task.get("assignment", {}).get("type") == "per_person"
             and _target_person is None
@@ -6124,7 +6149,7 @@ class HouseholdTaskEngine:
         current_template = self.tasks.get(source_task_id)
         if (
             current_template
-            and current_template.get("enabled", True)
+            and self._task_is_active(current_template)
             and current_template.get("schedule", {}).get("type")
             in {"after_completion", "flexible_after_completion"}
         ):
@@ -6140,7 +6165,7 @@ class HouseholdTaskEngine:
         for follow_up in source_task.get("follow_ups", []):
             target_id = follow_up.get("task_id")
             target = self.tasks.get(target_id)
-            if not target or not target.get("enabled", True):
+            if not target or not self._task_is_active(target):
                 continue
             delay = self._parse_duration(follow_up.get("delay", "00:00:00"))
             await self._create_occurrence(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .features import task_activation_decision
+
 NFC_ACTIONS = {"create_or_complete", "create", "complete"}
 NFC_FEEDBACK_MODES = {"off", "errors", "always"}
 NFC_FEEDBACK_RECIPIENTS = {"scanner", "assignee", "both"}
@@ -17,7 +19,7 @@ def task_for_tag(
     for task_id, task in tasks.items():
         nfc = task.get("nfc")
         if (
-            task.get("enabled", True)
+            task_activation_decision(task)["allowed"]
             and isinstance(nfc, dict)
             and str(nfc.get("tag_id", "")).strip() == clean_tag_id
         ):

@@ -55,6 +55,43 @@ test("legacy dashboard links remain compatible and open ranking", async ({ page 
   await expect(panel.locator(".hero")).toHaveCount(0);
 });
 
+test("task templates can be paused temporarily and resumed without touching open work", async ({ page }) => {
+  const panel = await openPanel(page);
+  await panel.getByRole("link", { name: "Aufgaben", exact: true }).click();
+  await panel.getByRole("button", { name: "Temporär pausieren" }).first().click();
+  const dialog = panel.getByRole("dialog", { name: /Frostschutz.*pausieren/ });
+  await dialog.getByRole("button", { name: "1 Woche" }).click();
+  await dialog.getByRole("button", { name: "Pausieren", exact: true }).click();
+
+  const pauseCall = await page.evaluate(() => window.__householdTaskCalls.findLast(
+    (call) => call.type === "household_tasks/save_task"
+  ));
+  expect(pauseCall.task_id).toBe("frostschutz");
+  expect(pauseCall.task.paused_until).toBe("2026-08-08T10:00:00.000Z");
+  expect(pauseCall.task.enabled).toBe(true);
+  expect(pauseCall.task).not.toHaveProperty("occurrences");
+
+  await page.evaluate(() => window.__setHouseholdTasksFixture({
+    tasks: {
+      frostschutz: {
+        enabled: true,
+        paused_until: "2026-08-02T12:00:00.000Z",
+        name: "Frostschutz beim eigenen Auto prüfen",
+        assignee: "dominik",
+        assignment: { type: "fixed" },
+        schedule: { type: "manual" },
+      },
+    },
+  }));
+  await panel.getByRole("button", { name: "Jetzt fortsetzen" }).click();
+  const resumeCall = await page.evaluate(() => window.__householdTaskCalls.findLast(
+    (call) => call.type === "household_tasks/save_task"
+  ));
+  expect(resumeCall.task).not.toHaveProperty("paused_until");
+  await panel.getByRole("link", { name: "Heute", exact: true }).click();
+  await expect(panel.getByRole("heading", { name: "Frostschutz beim eigenen Auto prüfen" })).toBeVisible();
+});
+
 test("live updates and iOS resume refresh stale panel data", async ({ page }) => {
   const panel = await openPanel(page);
   await expect.poll(async () => page.evaluate(() => window.__householdTaskSubscriptions)).toEqual([
