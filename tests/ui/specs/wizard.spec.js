@@ -67,6 +67,30 @@ test("existing tasks expose every editor section and keep their stable ID", asyn
   await expect(dialog.getByRole("button", { name: "Speichern" })).toBeVisible();
 });
 
+test("task editor configures automatic credit with a default person and grace period", async ({ page }) => {
+  const panel = await openPanel(page);
+  await panel.getByRole("link", { name: "Aufgaben", exact: true }).click();
+  await panel.getByRole("button", { name: "Bearbeiten" }).first().click();
+  const dialog = panel.getByRole("dialog", { name: "Aufgabe bearbeiten" });
+  await dialog.locator('[data-task-wizard-step="4"]').click();
+  await dialog.locator("details.advanced-fields").evaluate((element) => { element.open = true; });
+
+  const automatic = dialog.getByRole("checkbox", { name: "Ohne Bestätigung automatisch gutschreiben" });
+  await automatic.check();
+  await dialog.getByRole("combobox", { name: "Standardperson" }).selectOption("alina");
+  await dialog.getByRole("textbox", { name: "Kulanzzeit nach Fälligkeit" }).fill("06:30:00");
+  await dialog.getByRole("button", { name: "Speichern" }).click();
+
+  const saveCall = await page.evaluate(() => window.__householdTaskCalls.findLast(
+    (call) => call.type === "household_tasks/save_task"
+  ));
+  expect(saveCall.task.automatic_completion).toEqual({
+    enabled: true,
+    default_person: "alina",
+    after: "06:30:00",
+  });
+});
+
 test("dirty task editors require confirmation before discarding changes", async ({ page }) => {
   const { dialog } = await openWizard(page);
   await dialog.getByRole("textbox", { name: "Name" }).fill("Nicht verlieren");

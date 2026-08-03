@@ -868,6 +868,29 @@ class HouseholdTaskEngine:
                         f"task '{task_id}' market points must be non-negative"
                     )
 
+            automatic_completion = task.get("automatic_completion")
+            if automatic_completion is not None:
+                if not isinstance(automatic_completion, dict):
+                    errors.append(
+                        f"task '{task_id}' automatic completion must be a mapping"
+                    )
+                elif automatic_completion.get("enabled", False):
+                    default_person = automatic_completion.get("default_person")
+                    if default_person not in self.people:
+                        errors.append(
+                            f"task '{task_id}' automatic completion needs a configured default person"
+                        )
+                    try:
+                        delay = self._parse_duration(
+                            automatic_completion.get("after", "12:00:00")
+                        )
+                        if delay < timedelta(0):
+                            raise ValueError
+                    except (TypeError, ValueError, vol.Invalid):
+                        errors.append(
+                            f"task '{task_id}' automatic completion delay is invalid"
+                        )
+
             modes = task.get("modes", {})
             if not isinstance(modes, dict):
                 errors.append(f"task '{task_id}' mode settings must be a mapping")
@@ -4180,6 +4203,7 @@ class HouseholdTaskEngine:
             await self._scan_weather_tasks(current)
             await self._scan_forecast_tasks(current)
             await self._process_waiting_occurrences(current)
+            await self._process_automatic_completions(current)
             await self._process_escalations(current)
             await self._process_weekly_summary(current)
             await self._process_notification_digest(current)
@@ -5767,6 +5791,38 @@ class HouseholdTaskEngine:
                         occurrence["first_notification_at"] = now.isoformat()
                     occurrence["sent_steps"].append(index)
 
+    async def _process_automatic_completions(self, now: datetime) -> None:
+        """Credit unattended routine work to its configured default person."""
+        for occurrence_id, occurrence in list(self.state["occurrences"].items()):
+            if occurrence.get("resolved") or occurrence.get("status") == "blocked":
+                continue
+            task = occurrence.get("task") or self.tasks.get(occurrence.get("task_id"))
+            settings = task.get("automatic_completion") if task else None
+            if not isinstance(settings, dict) or not settings.get("enabled", False):
+                continue
+            due = dt_util.parse_datetime(str(occurrence.get("due", "")))
+            if due is None:
+                continue
+            deadline = dt_util.as_local(due) + self._parse_duration(
+                settings.get("after", "12:00:00")
+            )
+            if now < deadline:
+                continue
+            default_person = settings.get("default_person")
+            if default_person not in self.people:
+                _LOGGER.error(
+                    "Automatic completion for %s references unknown person %s",
+                    occurrence_id,
+                    default_person,
+                )
+                continue
+            await self._resolve_occurrence(
+                occurrence_id,
+                occurrence,
+                completed_by=default_person,
+                completion_source="automatic",
+            )
+
     def _is_home(self, person_id: str) -> bool:
         """Return presence, defaulting safely to available if not configured."""
         entity_id = self.people[person_id].get("presence")
@@ -6079,6 +6135,7 @@ class HouseholdTaskEngine:
         completed_by: str | None = None,
         award_point: bool = True,
         resolution_reason: str = "completed",
+        completion_source: str | None = None,
     ) -> None:
         if occurrence.get("resolved"):
             return
@@ -6089,6 +6146,8 @@ class HouseholdTaskEngine:
         )
         occurrence["resolved_at"] = resolved_at.isoformat()
         occurrence["resolution_reason"] = resolution_reason
+        if completion_source:
+            occurrence["completion_source"] = completion_source
         for pending in self.state.setdefault("notification_queue", {}).values():
             if isinstance(pending, dict):
                 pending.pop(occurrence_id, None)
@@ -6115,7 +6174,10 @@ class HouseholdTaskEngine:
             if occurrence["status"] == "completed"
             else "task_cancelled",
             actor=completed_by,
-            details={"reason": resolution_reason},
+            details={
+                "reason": resolution_reason,
+                **({"source": completion_source} if completion_source else {}),
+            },
         )
         if resolution_reason == "completed":
             await self._create_completion_followups(occurrence, resolved_at)

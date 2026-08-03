@@ -33,6 +33,7 @@ escalation, and a multilingual management panel.
 - Guided entity selection, inline creation, and side-effect-free rule previews.
 - Vacation and guest modes, seasonal rules, and curated household templates.
 - Open task marketplace with priorities, points, rewards, and voluntary help.
+- Optional automatic credit for routine work when nobody confirms completion within a configurable grace period.
 - Global command search, explainable skipped decisions, health checks, and undo.
 - Progressive forms and a mobile top-three quick-action view.
 - Personal task inbox, seven-day planner with read-only schedule projections,
@@ -142,6 +143,18 @@ assignment:
 Temporary household handovers transfer both open and future work. They can be
 scheduled with an end time, carry an audit reason, and never rewrite the
 underlying task definitions.
+
+Routine work that is assumed to happen can use automatic completion. A manual
+completion during the grace period always credits the actual person. Only if
+nobody confirms the task does the configured default person receive the points.
+Blocked tasks are never completed automatically.
+
+```yaml
+automatic_completion:
+  enabled: true
+  default_person: alex
+  after: "12:00:00"
+```
 
 ### Scheduling
 
