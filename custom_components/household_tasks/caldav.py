@@ -55,9 +55,9 @@ INVALID_SYNC_TOKEN = "Invalid sync token"
 
 DAV = "DAV:"
 CALDAV = "urn:ietf:params:xml:ns:caldav"
-CS = "http://calendarserver.org/ns/"  # NOSONAR: XML namespace, never fetched.
-APPLE = "http://apple.com/ns/ical/"  # NOSONAR: XML namespace, never fetched.
-ICAL = "http://apple.com/ns/ical/"  # NOSONAR: XML namespace, never fetched.
+# These are standardized XML namespace identifiers and are never dereferenced.
+CS = "http://calendarserver.org/ns/"  # NOSONAR
+APPLE = "http://apple.com/ns/ical/"  # NOSONAR
 
 ET.register_namespace("D", DAV)
 ET.register_namespace("C", CALDAV)
@@ -951,7 +951,7 @@ class CalDAVService:
         if method == "REPORT":
             return await self._report(request, principal, path)
         if method in {"GET", "HEAD"}:
-            return await self._get(request, principal, path)
+            return self._get(request, principal, path)
         if method == "PUT":
             return await self._put(request, principal, path)
         if method == "DELETE":
@@ -1663,7 +1663,7 @@ class CalDAVService:
             resource,
         )
 
-    async def _get(
+    def _get(
         self,
         request: web.Request,
         principal: Principal,
