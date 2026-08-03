@@ -94,6 +94,7 @@ export const fixture = {
       allow_client_update: true,
       allow_client_delete: true,
       delete_mode: "cancel",
+      include_completed: false,
       expose_completed_days: 90,
       default_reminder_minutes: 0,
     },

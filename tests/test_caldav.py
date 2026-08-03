@@ -157,15 +157,19 @@ def test_vtodo_rendering_is_stable_folded_and_contains_checklist_relations():
         "task": {"market": {"priority": "high", "points": 3}},
         "dependencies": ["first"],
     }
-    parent = _render_vtodo("task:1", occurrence)
+    parent = _render_vtodo("task:1", occurrence, assignee_name="Alex")
     child = _render_vtodo(
         "task:1",
         occurrence,
         checklist={"id": "photo", "title": "Foto", "completed": True},
+        assignee_name="Alex",
     )
 
     assert b"\r\n " in parent
     assert b"DESCRIPTION:Zeile 1\\nZeile 2" in parent
+    assert b"SUMMARY:[Alex] Eine sehr lange Aufgabe" in parent
+    assert b"Zust" in parent
+    assert parse_vtodo(parent, UTC).description == "Zeile 1\nZeile 2"
     assert b"X-HOUSEHOLD-REVISION:4" in parent
     assert b"RELTYPE=DEPENDS-ON" in parent
     assert b"RELATED-TO;RELTYPE=PARENT" in child
@@ -208,7 +212,12 @@ async def _configured_runtime(hass, unused_tcp_port):
     service = get_caldav_service(hass)
     assert service is not None
     await service.async_save_settings(
-        {**service.state["settings"], "enabled": True, "require_tls": False}
+        {
+            **service.state["settings"],
+            "enabled": True,
+            "require_tls": False,
+            "include_completed": True,
+        }
     )
     created = await service.async_create_credential(
         person_id="alex",
@@ -268,7 +277,7 @@ async def test_caldav_discovery_query_get_put_sync_and_conflict_round_trip(
     assert response.status == 200
     initial_etag = response.headers["ETag"]
     task_data = await response.read()
-    assert b"SUMMARY:Filter" in task_data
+    assert b"SUMMARY:[Alex] Filter" in task_data
     completed_data = task_data.replace(
         b"STATUS:NEEDS-ACTION", b"STATUS:COMPLETED"
     ).replace(b"PERCENT-COMPLETE:0", b"PERCENT-COMPLETE:100")
@@ -315,6 +324,38 @@ async def test_caldav_discovery_query_get_put_sync_and_conflict_round_trip(
     )
     assert "password_hash" not in str(service.public_status())
     assert credential["password"] not in str(service.state)
+
+
+async def test_completed_tasks_disappear_by_default_and_emit_sync_tombstones(
+    hass, hass_client, unused_tcp_port
+):
+    """A completion removes stale reminders unless history sync is opted in."""
+    _, _, service, credential = await _configured_runtime(hass, unused_tcp_port)
+    await service.async_save_settings(
+        {**service.state["settings"], "include_completed": False}
+    )
+    client = await hass_client()
+    headers = _auth(credential["username"], credential["password"])
+    calendar = f"{CALDAV_BASE}/calendars/{credential['username']}/tasks/"
+    _, token, _ = await _sync(client, calendar, headers)
+    parent_href, etag, task_data = await _parent_resource(client, calendar, headers)
+    completed_data = task_data.replace(
+        b"STATUS:NEEDS-ACTION", b"STATUS:COMPLETED"
+    ).replace(b"PERCENT-COMPLETE:0", b"PERCENT-COMPLETE:100")
+
+    response = await client.put(
+        parent_href,
+        headers={**headers, "If-Match": etag},
+        data=completed_data,
+    )
+    assert response.status == 204
+    response = await client.get(parent_href, headers=headers)
+    assert response.status == 404
+
+    _, next_token, changes = await _sync(client, calendar, headers, token)
+    assert next_token != token
+    assert parent_href in changes
+    assert all(status.endswith("404 Not Found") for status in changes.values())
 
 
 async def test_caldav_scope_read_only_delete_and_revocation(
@@ -615,7 +656,8 @@ async def test_two_clients_detect_conflicts_and_sync_without_lost_updates(
     assert first_etag == second_etag
 
     first_update = first_copy.replace(
-        b"SUMMARY:Filter pr\xc3\xbcfen", b"SUMMARY:Filter am Samstag pr\xc3\xbcfen"
+        b"SUMMARY:[Alex] Filter pr\xc3\xbcfen",
+        b"SUMMARY:[Alex] Filter am Samstag pr\xc3\xbcfen",
     )
     response = await client.put(
         first_href,
@@ -625,7 +667,8 @@ async def test_two_clients_detect_conflicts_and_sync_without_lost_updates(
     assert response.status == 204
 
     stale_second_update = second_copy.replace(
-        b"SUMMARY:Filter pr\xc3\xbcfen", b"SUMMARY:Filter sofort pr\xc3\xbcfen"
+        b"SUMMARY:[Alex] Filter pr\xc3\xbcfen",
+        b"SUMMARY:[Alex] Filter sofort pr\xc3\xbcfen",
     )
     response = await client.put(
         second_href,

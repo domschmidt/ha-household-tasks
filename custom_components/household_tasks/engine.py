@@ -3207,7 +3207,7 @@ class HouseholdTaskEngine:
         if item is None:
             raise vol.Invalid("Unknown checklist item")
         completed = parsed.status == "COMPLETED"
-        item["title"] = parsed.summary
+        item["title"] = re.sub(r"^\[[^\]]+\]\s*", "", parsed.summary)
         item["completed"] = completed
         if completed:
             item["completed_at"] = dt_util.utcnow().isoformat()
@@ -3228,7 +3228,8 @@ class HouseholdTaskEngine:
         assignee_name = self.people.get(occurrence.get("assignee"), {}).get(
             "name", "Offen"
         )
-        occurrence["title"] = f"[{assignee_name}] {parsed.summary}"
+        plain_summary = re.sub(r"^\[[^\]]+\]\s*", "", parsed.summary)
+        occurrence["title"] = f"[{assignee_name}] {plain_summary}"
         occurrence["description"] = parsed.description or None
         if parsed.due is None:
             occurrence["caldav_no_due"] = True

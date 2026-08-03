@@ -55,7 +55,8 @@ Open **Household Tasks → Settings → CalDAV for Apple Reminders**.
 | List name | Name shown by the CalDAV client. | Household Tasks |
 | Color | `#RRGGBB` or `#RRGGBBAA`. | Any |
 | Description | Human-readable list description. | Optional |
-| Show completed tasks | Retention window visible to clients. | 90 days |
+| Synchronize completed tasks | Keeps completed/cancelled items visible in clients. Off prevents old tasks from reappearing. | Off |
+| Completed task retention | Retention window when completed synchronization is enabled. | 90 days |
 | Default reminder | Adds a display alarm before due time if none exists. | 0 |
 | Create in client | Allows new reminders to become native ad-hoc tasks. | On |
 | Edit/complete in client | Allows title, notes, due date, priority and state writes. | On |
@@ -85,6 +86,10 @@ The generated password is displayed once. Only a PBKDF2-SHA256 verifier with a
 random salt is persisted. Losing the password requires creating a replacement;
 it cannot be recovered.
 
+The copy buttons copy the exact server URL, username, or one-time password. If
+the browser blocks its Clipboard API, the panel uses a local compatibility
+fallback and reports a visible error if neither mechanism is available.
+
 ## Configure Apple Reminders
 
 The exact Settings navigation varies by iOS version. Add a CalDAV account under
@@ -94,6 +99,12 @@ the Reminders account settings and enter:
 - **Username:** the generated CalDAV username;
 - **Password:** the one-time app password;
 - **Use SSL:** enabled.
+
+Each projected reminder includes the responsible person's name in its title.
+Its notes show the native description plus read-only status, priority, points,
+and checklist progress. Household Tasks removes that generated detail block
+before applying a client edit, so repeated offline round trips never duplicate
+the metadata.
 
 If iOS exposes an advanced path field, use
 `/api/household_tasks/caldav/`. Automatic discovery is also available at

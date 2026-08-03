@@ -1024,12 +1024,22 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   async _copyReference(value) {
+    const text = String(value ?? "");
     try {
-      await navigator.clipboard.writeText(value);
-      this._toast(`„${value}“ kopiert.`);
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+      await navigator.clipboard.writeText(text);
+      this._toast(`„${text}“ kopiert.`);
     } catch (error) {
       console.debug("Household Tasks could not copy a reference.", error);
-      this._toast(value);
+      const input = document.createElement("textarea");
+      input.value = text;
+      input.setAttribute("readonly", "");
+      input.style.cssText = "position:fixed;left:-10000px;top:0";
+      document.body.append(input);
+      input.select();
+      const copied = document.execCommand?.("copy") === true;
+      input.remove();
+      this._toast(copied ? `„${text}“ kopiert.` : `Kopieren nicht möglich: ${text}`, !copied);
     }
   }
 
@@ -1085,6 +1095,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _render() {
+    const dirtyForms = this._captureDirtyForms();
     const data = this._data;
     const modeBadge = this._modeBadge(data);
     this.shadowRoot.innerHTML = `
@@ -1122,9 +1133,41 @@ class HouseholdTasksPanel extends HTMLElement {
       <div id="modal"></div>
     `;
     this._bind();
+    this._restoreDirtyForms(dirtyForms);
     this._localize();
     this._enhanceAccessibility();
     this._schedulePauseRefresh();
+  }
+
+  _captureDirtyForms() {
+    const forms = new Map();
+    this.shadowRoot.querySelectorAll("form[id][data-dirty=true]").forEach((form) => {
+      forms.set(form.id, [...form.elements].map((control) => ({
+        name: control.name,
+        type: control.type,
+        value: control.value,
+        checked: control.checked,
+      })).filter((control) => control.name && control.type !== "file"));
+    });
+    return forms;
+  }
+
+  _restoreDirtyForms(forms) {
+    for (const [formId, controls] of forms) {
+      const form = this.shadowRoot.getElementById(formId);
+      if (!form) continue;
+      const offsets = new Map();
+      for (const saved of controls) {
+        const matches = [...form.elements].filter((control) => control.name === saved.name);
+        const index = offsets.get(saved.name) || 0;
+        const control = matches[index];
+        offsets.set(saved.name, index + 1);
+        if (!control) continue;
+        if (["checkbox", "radio"].includes(saved.type)) control.checked = saved.checked;
+        else control.value = saved.value;
+      }
+      form.dataset.dirty = "true";
+    }
   }
 
   _schedulePauseRefresh() {
@@ -1959,7 +2002,8 @@ class HouseholdTasksPanel extends HTMLElement {
         <label>Listenname<input name="calendar_name" maxlength="100" value="${this._e(settings.calendar_name || "Household Tasks")}"></label>
         <label>Farbe<input name="calendar_color" pattern="#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?" value="${this._e(settings.calendar_color || "#03A9F4FF")}"></label>
         <label class="full">Beschreibung<input name="calendar_description" maxlength="500" value="${this._e(settings.calendar_description || "")}"></label>
-        <label>Erledigte Aufgaben anzeigen<input name="expose_completed_days" type="number" min="0" max="3650" value="${Number(settings.expose_completed_days ?? 90)}"><span class="hint">Tage; 0 blendet abgeschlossene Aufgaben sofort aus.</span></label>
+        <label class="checkbox full"><input name="include_completed" type="checkbox" ${settings.include_completed ? "checked" : ""}> Abgeschlossene Aufgaben synchronisieren<span class="hint">Standardmäßig verschwinden erledigte und abgebrochene Aufgaben aus dem CalDAV-Client, damit sie nicht erneut auftauchen.</span></label>
+        <label>Aufbewahrung abgeschlossener Aufgaben<input name="expose_completed_days" type="number" min="0" max="3650" value="${Number(settings.expose_completed_days ?? 90)}"><span class="hint">Nur bei aktivierter Synchronisierung; 0 blendet sie sofort aus.</span></label>
         <label>Standard-Erinnerung<input name="default_reminder_minutes" type="number" min="0" max="525600" value="${Number(settings.default_reminder_minutes || 0)}"><span class="hint">Minuten vor Fälligkeit; 0 erzeugt keinen zusätzlichen VALARM.</span></label>
         <label class="checkbox"><input name="allow_client_create" type="checkbox" ${settings.allow_client_create ? "checked" : ""}> Aufgaben im Client anlegen</label>
         <label class="checkbox"><input name="allow_client_update" type="checkbox" ${settings.allow_client_update ? "checked" : ""}> Aufgaben im Client ändern/erledigen</label>
@@ -2292,6 +2336,13 @@ class HouseholdTasksPanel extends HTMLElement {
         await this._call("reset_config");
         this._toast("Ausgangswerte wiederhergestellt");
       }
+    });
+    this.shadowRoot.querySelectorAll(".content form[id]").forEach((form) => {
+      const markDirty = () => { form.dataset.dirty = "true"; };
+      form.addEventListener("input", markDirty);
+      form.addEventListener("change", markDirty);
+      form.addEventListener("submit", () => { delete form.dataset.dirty; });
+      form.addEventListener("reset", () => { delete form.dataset.dirty; });
     });
   }
 
@@ -2749,6 +2800,7 @@ class HouseholdTasksPanel extends HTMLElement {
       allow_client_create: values.get("allow_client_create") === "on",
       allow_client_update: values.get("allow_client_update") === "on",
       allow_client_delete: values.get("allow_client_delete") === "on",
+      include_completed: values.get("include_completed") === "on",
       delete_mode: "cancel",
       expose_completed_days: Number(values.get("expose_completed_days") || 0),
       default_reminder_minutes: Number(values.get("default_reminder_minutes") || 0),
@@ -2800,9 +2852,9 @@ class HouseholdTasksPanel extends HTMLElement {
       <div class="modal-head"><div><div class="eyebrow">NUR EINMAL SICHTBAR</div><h2>CalDAV-Zugang angelegt</h2></div><button class="icon-button close" aria-label="Schließen">×</button></div>
       <div class="health-summary warning">Kopiere das App-Passwort jetzt. Es wird ausschließlich gehasht gespeichert und kann später nicht erneut angezeigt werden.</div>
       <dl class="credential-secret">
-        <dt>Server</dt><dd><code>${this._e(created.server_url)}</code><button type="button" data-copy-secret="server_url">Kopieren</button></dd>
-        <dt>Benutzername</dt><dd><code>${this._e(created.username)}</code><button type="button" data-copy-secret="username">Kopieren</button></dd>
-        <dt>App-Passwort</dt><dd><code>${this._e(created.password)}</code><button type="button" data-copy-secret="password">Kopieren</button></dd>
+        <dt>Server</dt><dd><code>${this._e(created.server_url)}</code><button type="button" aria-label="Server kopieren" data-copy-secret="server_url">Kopieren</button></dd>
+        <dt>Benutzername</dt><dd><code>${this._e(created.username)}</code><button type="button" aria-label="Benutzername kopieren" data-copy-secret="username">Kopieren</button></dd>
+        <dt>App-Passwort</dt><dd><code>${this._e(created.password)}</code><button type="button" aria-label="App-Passwort kopieren" data-copy-secret="password">Kopieren</button></dd>
       </dl>
       <p>In Apple Erinnerungen einen CalDAV-Account mit SSL anlegen. Als Server kann die vollständige URL verwendet werden.</p>
       <div class="actions"><button type="button" class="primary close-bottom">Ich habe die Daten gespeichert</button></div>
@@ -2810,7 +2862,11 @@ class HouseholdTasksPanel extends HTMLElement {
     const close = () => modal.replaceChildren();
     modal.querySelector(".close").onclick = close;
     modal.querySelector(".close-bottom").onclick = close;
-    modal.querySelectorAll("[data-copy-secret]").forEach((button) => button.onclick = () => this._copyReference(created[button.dataset.copySecret]));
+    modal.querySelectorAll("[data-copy-secret]").forEach((button) => button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this._copyReference(created[button.dataset.copySecret]);
+    });
     this._activateDialog(modal, close);
   }
 

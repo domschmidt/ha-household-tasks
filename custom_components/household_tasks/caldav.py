@@ -52,6 +52,7 @@ FAILED_AUTH_LIMIT = 10
 MAX_ACTIVE_CREDENTIALS = 100
 MAX_AUTH_PEERS = 5_000
 INVALID_SYNC_TOKEN = "Invalid sync token"
+CALDAV_DETAILS_MARKER = "--- Household Tasks ---"
 
 DAV = "DAV:"
 CALDAV = "urn:ietf:params:xml:ns:caldav"
@@ -74,6 +75,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "allow_client_update": True,
     "allow_client_delete": True,
     "delete_mode": "cancel",
+    "include_completed": False,
     "expose_completed_days": 90,
     "default_reminder_minutes": 0,
 }
@@ -425,7 +427,9 @@ def parse_vtodo(data: bytes, timezone: Any) -> ParsedVTodo:
     return ParsedVTodo(
         uid=uid,
         summary=summary[:255],
-        description=str(_first_property(properties, "DESCRIPTION"))[:20_000],
+        description=_strip_generated_details(
+            str(_first_property(properties, "DESCRIPTION"))[:20_000]
+        ),
         status=_vtodo_status(properties),
         due=due,
         priority=priority,
@@ -441,6 +445,55 @@ def parse_vtodo(data: bytes, timezone: Any) -> ParsedVTodo:
 
 def _plain_title(value: Any) -> str:
     return re.sub(r"^\[[^\]]+\]\s*", "", str(value or "Aufgabe"))
+
+
+def _strip_generated_details(value: Any) -> str:
+    """Remove the read-only server detail block before applying client writes."""
+    return str(value or "").split(CALDAV_DETAILS_MARKER, 1)[0].rstrip()
+
+
+def _caldav_description(
+    occurrence: dict[str, Any],
+    checklist: dict[str, Any] | None,
+    assignee_name: str | None,
+) -> str:
+    """Build useful client notes without polluting the native description."""
+    base = _strip_generated_details(
+        occurrence.get("description")
+        or occurrence.get("task", {}).get("description")
+        or ""
+    )
+    task = occurrence.get("task", {})
+    market = task.get("market", {})
+    status = {
+        "open": "Offen",
+        "in_progress": "In Arbeit",
+        "blocked": "Blockiert",
+        "completed": "Erledigt",
+        "cancelled": "Abgebrochen",
+    }.get(str(occurrence.get("status", "open")), "Offen")
+    details = [
+        f"Zuständig: {assignee_name or occurrence.get('assignee') or 'Offen'}",
+        f"Status: {status}",
+    ]
+    if checklist is None:
+        priority = {
+            "critical": "Kritisch",
+            "high": "Hoch",
+            "low": "Niedrig",
+        }.get(str(market.get("priority", "normal")), "Normal")
+        details.append(f"Priorität: {priority}")
+        points = int(market.get("points", 0))
+        if points:
+            details.append(f"Punkte: {points}")
+        checklist_items = occurrence.get("checklist", [])
+        if checklist_items:
+            completed = sum(bool(item.get("completed")) for item in checklist_items)
+            details.append(f"Checkliste: {completed}/{len(checklist_items)} erledigt")
+    else:
+        details.append(f"Hauptaufgabe: {_plain_title(occurrence.get('title'))}")
+    prefix = f"{base}\n\n" if base else ""
+    return f"{prefix}{CALDAV_DETAILS_MARKER}\n" + "\n".join(details)
 
 
 def _priority_to_ical(value: str) -> int:
@@ -482,17 +535,19 @@ def _projection_fields(
     occurrence_id: str,
     occurrence: dict[str, Any],
     checklist: dict[str, Any] | None,
+    assignee_name: str | None,
 ) -> _VTodoProjection:
+    assignee_prefix = f"[{assignee_name}] " if assignee_name else ""
     if checklist is not None:
         item_id = str(checklist.get("id", "step"))
         item_hash = hashlib.sha256(item_id.encode()).hexdigest()[:12]
         completed = bool(checklist.get("completed"))
         return _VTodoProjection(
             uid=f"{_occurrence_uid(occurrence_id)}-check-{item_hash}",
-            summary=str(checklist.get("title") or "Schritt"),
+            summary=assignee_prefix + str(checklist.get("title") or "Schritt"),
             status="COMPLETED" if completed else "NEEDS-ACTION",
             percent=100 if completed else 0,
-            description=f"Unteraufgabe von {_plain_title(occurrence.get('title'))}",
+            description=_caldav_description(occurrence, checklist, assignee_name),
         )
     metadata = occurrence.get("caldav", {})
     status = occurrence.get("status", "open")
@@ -503,14 +558,10 @@ def _projection_fields(
     }.get(status, "NEEDS-ACTION")
     return _VTodoProjection(
         uid=str(metadata.get("uid") or _occurrence_uid(occurrence_id)),
-        summary=_plain_title(occurrence.get("title")),
+        summary=assignee_prefix + _plain_title(occurrence.get("title")),
         status=todo_status,
         percent=100 if status == "completed" else int(metadata.get("percent", 0)),
-        description=str(
-            occurrence.get("description")
-            or occurrence.get("task", {}).get("description")
-            or ""
-        ),
+        description=_caldav_description(occurrence, None, assignee_name),
     )
 
 
@@ -541,6 +592,7 @@ def _append_vtodo_relations(
     occurrence_id: str,
     occurrence: dict[str, Any],
     checklist: dict[str, Any] | None,
+    assignee_name: str | None,
 ) -> None:
     if checklist is not None:
         parent_uid = _ical_escape(_occurrence_uid(occurrence_id))
@@ -556,6 +608,7 @@ def _append_vtodo_relations(
             f"X-HOUSEHOLD-OCCURRENCE-ID:{_ical_escape(occurrence_id)}",
             f"X-HOUSEHOLD-REVISION:{int(occurrence.get('revision', 1))}",
             f"X-HOUSEHOLD-ASSIGNEE:{_ical_escape(occurrence.get('assignee') or '')}",
+            f"X-HOUSEHOLD-ASSIGNEE-NAME:{_ical_escape(assignee_name or '')}",
             f"X-HOUSEHOLD-POINTS:{int(task.get('market', {}).get('points', 0))}",
         ]
     )
@@ -604,10 +657,11 @@ def _render_vtodo(
     *,
     checklist: dict[str, Any] | None = None,
     default_reminder_minutes: int = 0,
+    assignee_name: str | None = None,
 ) -> bytes:
     task = occurrence.get("task", {})
     metadata = occurrence.get("caldav", {})
-    projection = _projection_fields(occurrence_id, occurrence, checklist)
+    projection = _projection_fields(occurrence_id, occurrence, checklist, assignee_name)
     created = _as_datetime(occurrence.get("created_at"))
     updated = _as_datetime(occurrence.get("updated_at"))
     lines = [
@@ -626,7 +680,7 @@ def _render_vtodo(
         f"PRIORITY:{_priority_to_ical(task.get('market', {}).get('priority', 'normal'))}",
     ]
     _append_vtodo_optional_fields(lines, occurrence, projection, metadata)
-    _append_vtodo_relations(lines, occurrence_id, occurrence, checklist)
+    _append_vtodo_relations(lines, occurrence_id, occurrence, checklist, assignee_name)
     _append_vtodo_alarms(
         lines,
         occurrence,
@@ -829,6 +883,7 @@ class CalDAVService:
             raise vol.Invalid("Calendar color must be #RRGGBB or #RRGGBBAA")
         updated["expose_completed_days"] = days
         updated["default_reminder_minutes"] = reminder
+        updated["include_completed"] = bool(updated["include_completed"])
         async with self.lock:
             self.state["settings"] = updated
             await self.store.async_save(self.state)
@@ -1146,6 +1201,8 @@ class CalDAVService:
             return False
         resolved = occurrence.get("status") in {"completed", "cancelled"}
         if resolved:
+            if not self.state["settings"].get("include_completed", False):
+                return False
             days = int(self.state["settings"].get("expose_completed_days", 90))
             resolved_at = dt_util.parse_datetime(str(occurrence.get("resolved_at", "")))
             if (
@@ -1179,11 +1236,14 @@ class CalDAVService:
         for occurrence_id, occurrence in engine.state.get("occurrences", {}).items():
             if not self._is_visible(occurrence, principal):
                 continue
+            assignee_id = occurrence.get("assignee")
+            assignee_name = engine.people.get(assignee_id, {}).get("name", assignee_id)
             name = reverse_alias.get(occurrence_id) or _resource_basename(occurrence_id)
             data = _render_vtodo(
                 occurrence_id,
                 occurrence,
                 default_reminder_minutes=reminder,
+                assignee_name=assignee_name,
             )
             resources[name] = CalendarResource(
                 name,
@@ -1199,6 +1259,7 @@ class CalDAVService:
                     occurrence_id,
                     occurrence,
                     checklist=item,
+                    assignee_name=assignee_name,
                 )
                 resources[child_name] = CalendarResource(
                     child_name,
