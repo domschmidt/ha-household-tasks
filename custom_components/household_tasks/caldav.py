@@ -18,7 +18,7 @@ import secrets
 from collections import defaultdict, deque
 from contextlib import suppress
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from typing import Any
@@ -28,6 +28,8 @@ from xml.etree import ElementTree as ET
 
 import voluptuous as vol
 from aiohttp import web
+from defusedxml import ElementTree as DefusedET
+from defusedxml.common import DefusedXmlException
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -49,12 +51,13 @@ FAILED_AUTH_WINDOW = timedelta(minutes=5)
 FAILED_AUTH_LIMIT = 10
 MAX_ACTIVE_CREDENTIALS = 100
 MAX_AUTH_PEERS = 5_000
+INVALID_SYNC_TOKEN = "Invalid sync token"
 
 DAV = "DAV:"
 CALDAV = "urn:ietf:params:xml:ns:caldav"
-CS = "http://calendarserver.org/ns/"
-APPLE = "http://apple.com/ns/ical/"
-ICAL = "http://apple.com/ns/ical/"
+CS = "http://calendarserver.org/ns/"  # NOSONAR: XML namespace, never fetched.
+APPLE = "http://apple.com/ns/ical/"  # NOSONAR: XML namespace, never fetched.
+ICAL = "http://apple.com/ns/ical/"  # NOSONAR: XML namespace, never fetched.
 
 ET.register_namespace("D", DAV)
 ET.register_namespace("C", CALDAV)
@@ -147,6 +150,27 @@ class ParsedVTodo:
     preserved_lines: list[str]
 
 
+@dataclass(slots=True)
+class _VTodoParseState:
+    """Bounded mutable state while reading one iCalendar object."""
+
+    inside: bool = False
+    alarm: dict[str, str] | None = None
+    alarms: list[dict[str, str]] = field(default_factory=list)
+    properties: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+    preserved_lines: list[str] = field(default_factory=list)
+    todo_count: int = 0
+
+
+@dataclass(slots=True)
+class _VTodoProjection:
+    uid: str
+    summary: str
+    status: str
+    percent: int
+    description: str
+
+
 def _default_state() -> dict[str, Any]:
     return {
         "version": CALDAV_STATE_VERSION,
@@ -198,8 +222,8 @@ def _parse_xml(body: bytes) -> ET.Element | None:
     if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
         raise CalDAVError(400, "Unsafe XML is not accepted")
     try:
-        return ET.fromstring(body)
-    except ET.ParseError as err:
+        return DefusedET.fromstring(body)
+    except (ET.ParseError, DefusedXmlException) as err:
         raise CalDAVError(400, "Malformed XML request") from err
 
 
@@ -280,6 +304,91 @@ def _parse_ical_datetime(value: str, timezone: Any) -> datetime | None:
     return None
 
 
+_PRESERVED_ICAL_PROPERTIES = {
+    "ATTACH",
+    "CLASS",
+    "COMMENT",
+    "CONTACT",
+    "GEO",
+    "LOCATION",
+    "RESOURCES",
+}
+
+
+def _consume_vtodo_line(state: _VTodoParseState, line: str) -> None:
+    """Consume one unfolded line without mixing parsing and validation."""
+    upper = line.upper()
+    if upper == "BEGIN:VTODO":
+        state.todo_count += 1
+        state.inside = True
+        return
+    if upper == "END:VTODO":
+        state.inside = False
+        return
+    if not state.inside:
+        return
+    if upper == "BEGIN:VALARM":
+        state.alarm = {}
+        return
+    if upper == "END:VALARM":
+        if state.alarm is not None:
+            state.alarms.append(state.alarm)
+        state.alarm = None
+        return
+    if ":" not in line:
+        return
+    raw_name, value = line.split(":", 1)
+    name = raw_name.split(";", 1)[0].upper()
+    if state.alarm is not None:
+        state.alarm[name] = _ical_unescape(value)
+        return
+    state.properties[name].append(_ical_unescape(value))
+    is_client_extension = name.startswith("X-") and not name.startswith("X-HOUSEHOLD-")
+    if name in _PRESERVED_ICAL_PROPERTIES or is_client_extension:
+        state.preserved_lines.append(f"{raw_name}:{value}")
+
+
+def _collect_vtodo(lines: list[str]) -> _VTodoParseState:
+    state = _VTodoParseState()
+    for line in lines:
+        _consume_vtodo_line(state, line)
+    if state.todo_count != 1:
+        raise CalDAVError(
+            403,
+            "Exactly one VTODO is required",
+            "valid-calendar-object-resource",
+        )
+    return state
+
+
+def _first_property(
+    properties: dict[str, list[str]], name: str, default: Any = ""
+) -> Any:
+    values = properties.get(name)
+    return values[0] if values else default
+
+
+def _bounded_vtodo_numbers(properties: dict[str, list[str]]) -> tuple[int, int]:
+    try:
+        priority = max(0, min(9, int(_first_property(properties, "PRIORITY", "0"))))
+        percent = max(
+            0,
+            min(100, int(_first_property(properties, "PERCENT-COMPLETE", "0"))),
+        )
+    except ValueError as err:
+        raise CalDAVError(
+            403, "Invalid numeric VTODO property", "valid-calendar-data"
+        ) from err
+    return priority, percent
+
+
+def _vtodo_status(properties: dict[str, list[str]]) -> str:
+    status = str(_first_property(properties, "STATUS", "NEEDS-ACTION")).upper()
+    if status in {"NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED"}:
+        return status
+    return "NEEDS-ACTION"
+
+
 def parse_vtodo(data: bytes, timezone: Any) -> ParsedVTodo:
     """Parse one bounded VCALENDAR containing exactly one VTODO."""
     if len(data) > MAX_REQUEST_BYTES:
@@ -296,78 +405,14 @@ def parse_vtodo(data: bytes, timezone: Any) -> ParsedVTodo:
             403, "METHOD is not allowed", "valid-calendar-object-resource"
         )
 
-    inside = False
-    alarm: dict[str, str] | None = None
-    alarms: list[dict[str, str]] = []
-    properties: dict[str, list[str]] = defaultdict(list)
-    preserved_lines: list[str] = []
-    todo_count = 0
-    for line in lines:
-        upper = line.upper()
-        if upper == "BEGIN:VTODO":
-            todo_count += 1
-            inside = True
-            continue
-        if upper == "END:VTODO":
-            inside = False
-            continue
-        if not inside:
-            continue
-        if upper == "BEGIN:VALARM":
-            alarm = {}
-            continue
-        if upper == "END:VALARM":
-            if alarm is not None:
-                alarms.append(alarm)
-            alarm = None
-            continue
-        if ":" not in line:
-            continue
-        raw_name, value = line.split(":", 1)
-        name = raw_name.split(";", 1)[0].upper()
-        if alarm is not None:
-            alarm[name] = _ical_unescape(value)
-        else:
-            properties[name].append(_ical_unescape(value))
-            if (
-                name
-                in {
-                    "ATTACH",
-                    "CLASS",
-                    "COMMENT",
-                    "CONTACT",
-                    "GEO",
-                    "LOCATION",
-                    "RESOURCES",
-                }
-                or name.startswith("X-")
-            ) and not name.startswith("X-HOUSEHOLD-"):
-                preserved_lines.append(f"{raw_name}:{value}")
-
-    if todo_count != 1:
-        raise CalDAVError(
-            403,
-            "Exactly one VTODO is required",
-            "valid-calendar-object-resource",
-        )
-    uid = (properties.get("UID") or [""])[0].strip()
-    summary = (properties.get("SUMMARY") or [""])[0].strip()
+    state = _collect_vtodo(lines)
+    properties = state.properties
+    uid = str(_first_property(properties, "UID")).strip()
+    summary = str(_first_property(properties, "SUMMARY")).strip()
     if not uid or not summary:
         raise CalDAVError(403, "UID and SUMMARY are required", "valid-calendar-data")
-    due = _parse_ical_datetime((properties.get("DUE") or [""])[0], timezone)
-    status = (properties.get("STATUS") or ["NEEDS-ACTION"])[0].upper()
-    if status not in {"NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED"}:
-        status = "NEEDS-ACTION"
-    try:
-        priority = max(0, min(9, int((properties.get("PRIORITY") or ["0"])[0])))
-        percent = max(
-            0,
-            min(100, int((properties.get("PERCENT-COMPLETE") or ["0"])[0])),
-        )
-    except ValueError as err:
-        raise CalDAVError(
-            403, "Invalid numeric VTODO property", "valid-calendar-data"
-        ) from err
+    due = _parse_ical_datetime(str(_first_property(properties, "DUE")), timezone)
+    priority, percent = _bounded_vtodo_numbers(properties)
     categories = [
         item.strip()
         for value in properties.get("CATEGORIES", [])
@@ -380,17 +425,17 @@ def parse_vtodo(data: bytes, timezone: Any) -> ParsedVTodo:
     return ParsedVTodo(
         uid=uid,
         summary=summary[:255],
-        description=(properties.get("DESCRIPTION") or [""])[0][:20_000],
-        status=status,
+        description=str(_first_property(properties, "DESCRIPTION"))[:20_000],
+        status=_vtodo_status(properties),
         due=due,
         priority=priority,
         percent_complete=percent,
         categories=categories[:50],
-        url=(properties.get("URL") or [None])[0],
-        related_to=(properties.get("RELATED-TO") or [None])[0],
-        alarms=alarms[:10],
+        url=_first_property(properties, "URL", None),
+        related_to=_first_property(properties, "RELATED-TO", None),
+        alarms=state.alarms[:10],
         raw_x_properties=raw_x,
-        preserved_lines=preserved_lines[:200],
+        preserved_lines=state.preserved_lines[:200],
     )
 
 
@@ -433,62 +478,55 @@ def _as_datetime(value: Any) -> datetime:
     return parsed or dt_util.utcnow()
 
 
-def _render_vtodo(
+def _projection_fields(
     occurrence_id: str,
     occurrence: dict[str, Any],
-    *,
-    checklist: dict[str, Any] | None = None,
-    default_reminder_minutes: int = 0,
-) -> bytes:
-    task = occurrence.get("task", {})
-    metadata = occurrence.get("caldav", {})
-    status = occurrence.get("status", "open")
+    checklist: dict[str, Any] | None,
+) -> _VTodoProjection:
     if checklist is not None:
         item_id = str(checklist.get("id", "step"))
-        uid = f"{_occurrence_uid(occurrence_id)}-check-{hashlib.sha256(item_id.encode()).hexdigest()[:12]}"
-        summary = str(checklist.get("title") or "Schritt")
+        item_hash = hashlib.sha256(item_id.encode()).hexdigest()[:12]
         completed = bool(checklist.get("completed"))
-        todo_status = "COMPLETED" if completed else "NEEDS-ACTION"
-        percent = 100 if completed else 0
-        description = f"Unteraufgabe von {_plain_title(occurrence.get('title'))}"
-    else:
-        uid = str(metadata.get("uid") or _occurrence_uid(occurrence_id))
-        summary = _plain_title(occurrence.get("title"))
-        todo_status = {
-            "completed": "COMPLETED",
-            "cancelled": "CANCELLED",
-            "in_progress": "IN-PROCESS",
-        }.get(status, "NEEDS-ACTION")
-        percent = 100 if status == "completed" else int(metadata.get("percent", 0))
-        description = str(
-            occurrence.get("description") or task.get("description") or ""
+        return _VTodoProjection(
+            uid=f"{_occurrence_uid(occurrence_id)}-check-{item_hash}",
+            summary=str(checklist.get("title") or "Schritt"),
+            status="COMPLETED" if completed else "NEEDS-ACTION",
+            percent=100 if completed else 0,
+            description=f"Unteraufgabe von {_plain_title(occurrence.get('title'))}",
         )
+    metadata = occurrence.get("caldav", {})
+    status = occurrence.get("status", "open")
+    todo_status = {
+        "completed": "COMPLETED",
+        "cancelled": "CANCELLED",
+        "in_progress": "IN-PROCESS",
+    }.get(status, "NEEDS-ACTION")
+    return _VTodoProjection(
+        uid=str(metadata.get("uid") or _occurrence_uid(occurrence_id)),
+        summary=_plain_title(occurrence.get("title")),
+        status=todo_status,
+        percent=100 if status == "completed" else int(metadata.get("percent", 0)),
+        description=str(
+            occurrence.get("description")
+            or occurrence.get("task", {}).get("description")
+            or ""
+        ),
+    )
 
-    created = _as_datetime(occurrence.get("created_at"))
-    updated = _as_datetime(occurrence.get("updated_at"))
-    lines = [
-        "BEGIN:VCALENDAR",
-        "PRODID:-//Household Tasks//CalDAV VTODO 1.0//EN",
-        "VERSION:2.0",
-        "CALSCALE:GREGORIAN",
-        "BEGIN:VTODO",
-        f"UID:{_ical_escape(uid)}",
-        f"DTSTAMP:{_format_ical_datetime(updated)}",
-        f"CREATED:{_format_ical_datetime(created)}",
-        f"LAST-MODIFIED:{_format_ical_datetime(updated)}",
-        f"SUMMARY:{_ical_escape(summary)}",
-        f"STATUS:{todo_status}",
-        f"PERCENT-COMPLETE:{percent}",
-        f"PRIORITY:{_priority_to_ical(task.get('market', {}).get('priority', 'normal'))}",
-    ]
-    if description:
-        lines.append(f"DESCRIPTION:{_ical_escape(description)}")
+
+def _append_vtodo_optional_fields(
+    lines: list[str],
+    occurrence: dict[str, Any],
+    projection: _VTodoProjection,
+    metadata: dict[str, Any],
+) -> None:
+    if projection.description:
+        lines.append(f"DESCRIPTION:{_ical_escape(projection.description)}")
     if not occurrence.get("caldav_no_due") and occurrence.get("due"):
         lines.append(f"DUE:{_format_ical_datetime(_as_datetime(occurrence['due']))}")
-    if todo_status == "COMPLETED" and occurrence.get("resolved_at"):
-        lines.append(
-            f"COMPLETED:{_format_ical_datetime(_as_datetime(occurrence['resolved_at']))}"
-        )
+    if projection.status == "COMPLETED" and occurrence.get("resolved_at"):
+        completed = _format_ical_datetime(_as_datetime(occurrence["resolved_at"]))
+        lines.append(f"COMPLETED:{completed}")
     categories = metadata.get("categories") or ["Household Tasks"]
     if categories:
         lines.append(
@@ -496,30 +534,48 @@ def _render_vtodo(
         )
     if metadata.get("url"):
         lines.append(f"URL:{metadata['url']}")
+
+
+def _append_vtodo_relations(
+    lines: list[str],
+    occurrence_id: str,
+    occurrence: dict[str, Any],
+    checklist: dict[str, Any] | None,
+) -> None:
     if checklist is not None:
-        lines.append(
-            f"RELATED-TO;RELTYPE=PARENT:{_ical_escape(_occurrence_uid(occurrence_id))}"
-        )
+        parent_uid = _ical_escape(_occurrence_uid(occurrence_id))
+        lines.append(f"RELATED-TO;RELTYPE=PARENT:{parent_uid}")
         lines.append(f"X-HOUSEHOLD-CHECKLIST-ID:{_ical_escape(checklist.get('id'))}")
-    else:
-        for dependency in occurrence.get("dependencies", []):
-            lines.append(
-                f"RELATED-TO;RELTYPE=DEPENDS-ON:{_ical_escape(_occurrence_uid(dependency))}"
-            )
-        lines.extend(
-            [
-                f"X-HOUSEHOLD-OCCURRENCE-ID:{_ical_escape(occurrence_id)}",
-                f"X-HOUSEHOLD-REVISION:{int(occurrence.get('revision', 1))}",
-                f"X-HOUSEHOLD-ASSIGNEE:{_ical_escape(occurrence.get('assignee') or '')}",
-                f"X-HOUSEHOLD-POINTS:{int(task.get('market', {}).get('points', 0))}",
-            ]
-        )
-        lines.extend(
-            str(line)
-            for line in metadata.get("preserved_lines", [])[:200]
-            if "\r" not in str(line) and "\n" not in str(line)
-        )
-    alarms = metadata.get("alarms", []) if checklist is None else []
+        return
+    task = occurrence.get("task", {})
+    for dependency in occurrence.get("dependencies", []):
+        dependency_uid = _ical_escape(_occurrence_uid(dependency))
+        lines.append(f"RELATED-TO;RELTYPE=DEPENDS-ON:{dependency_uid}")
+    lines.extend(
+        [
+            f"X-HOUSEHOLD-OCCURRENCE-ID:{_ical_escape(occurrence_id)}",
+            f"X-HOUSEHOLD-REVISION:{int(occurrence.get('revision', 1))}",
+            f"X-HOUSEHOLD-ASSIGNEE:{_ical_escape(occurrence.get('assignee') or '')}",
+            f"X-HOUSEHOLD-POINTS:{int(task.get('market', {}).get('points', 0))}",
+        ]
+    )
+    metadata = occurrence.get("caldav", {})
+    lines.extend(
+        str(line)
+        for line in metadata.get("preserved_lines", [])[:200]
+        if "\r" not in str(line) and "\n" not in str(line)
+    )
+
+
+def _append_vtodo_alarms(
+    lines: list[str],
+    occurrence: dict[str, Any],
+    summary: str,
+    *,
+    checklist: dict[str, Any] | None,
+    default_reminder_minutes: int,
+) -> None:
+    alarms = occurrence.get("caldav", {}).get("alarms", []) if checklist is None else []
     if not alarms and default_reminder_minutes > 0 and occurrence.get("due"):
         alarms = [
             {
@@ -540,12 +596,100 @@ def _render_vtodo(
                 "END:VALARM",
             ]
         )
+
+
+def _render_vtodo(
+    occurrence_id: str,
+    occurrence: dict[str, Any],
+    *,
+    checklist: dict[str, Any] | None = None,
+    default_reminder_minutes: int = 0,
+) -> bytes:
+    task = occurrence.get("task", {})
+    metadata = occurrence.get("caldav", {})
+    projection = _projection_fields(occurrence_id, occurrence, checklist)
+    created = _as_datetime(occurrence.get("created_at"))
+    updated = _as_datetime(occurrence.get("updated_at"))
+    lines = [
+        "BEGIN:VCALENDAR",
+        "PRODID:-//Household Tasks//CalDAV VTODO 1.0//EN",
+        "VERSION:2.0",
+        "CALSCALE:GREGORIAN",
+        "BEGIN:VTODO",
+        f"UID:{_ical_escape(projection.uid)}",
+        f"DTSTAMP:{_format_ical_datetime(updated)}",
+        f"CREATED:{_format_ical_datetime(created)}",
+        f"LAST-MODIFIED:{_format_ical_datetime(updated)}",
+        f"SUMMARY:{_ical_escape(projection.summary)}",
+        f"STATUS:{projection.status}",
+        f"PERCENT-COMPLETE:{projection.percent}",
+        f"PRIORITY:{_priority_to_ical(task.get('market', {}).get('priority', 'normal'))}",
+    ]
+    _append_vtodo_optional_fields(lines, occurrence, projection, metadata)
+    _append_vtodo_relations(lines, occurrence_id, occurrence, checklist)
+    _append_vtodo_alarms(
+        lines,
+        occurrence,
+        projection.summary,
+        checklist=checklist,
+        default_reminder_minutes=default_reminder_minutes,
+    )
     lines.extend(["END:VTODO", "END:VCALENDAR"])
     return _calendar_bytes(lines)
 
 
 def _etag(data: bytes) -> str:
     return f'"{hashlib.sha256(data).hexdigest()}"'
+
+
+def _credential_expiry(expires_at: str | None) -> datetime | None:
+    if not expires_at:
+        return None
+    expiry = dt_util.parse_datetime(expires_at)
+    if expiry is None or expiry <= dt_util.utcnow():
+        raise vol.Invalid("CalDAV credential expiry must be in the future")
+    return expiry
+
+
+def _normalize_credential_owner(
+    person_id: str | None, scope: str, people: dict[str, Any]
+) -> str | None:
+    if scope not in {"personal", "household"}:
+        raise vol.Invalid("Unknown CalDAV scope")
+    if scope == "personal":
+        if person_id not in people:
+            raise vol.Invalid("A configured person is required for personal scope")
+        return person_id
+    return person_id if person_id in people else None
+
+
+def _credential_record(
+    *,
+    username: str,
+    label: str,
+    person_id: str | None,
+    permission: str,
+    scope: str,
+    include_claimable: bool,
+    complete_checklist_on_parent: bool,
+    salt: bytes,
+    digest: bytes,
+    expiry: datetime | None,
+) -> dict[str, Any]:
+    return {
+        "username": username,
+        "label": label.strip()[:100] or "CalDAV client",
+        "person_id": person_id,
+        "permission": permission,
+        "scope": scope,
+        "include_claimable": bool(include_claimable),
+        "complete_checklist_on_parent": bool(complete_checklist_on_parent),
+        "salt": base64.b64encode(salt).decode(),
+        "password_hash": base64.b64encode(digest).decode(),
+        "iterations": PBKDF2_ITERATIONS,
+        "created_at": dt_util.utcnow().isoformat(),
+        "expires_at": expiry.isoformat() if expiry else None,
+    }
 
 
 class CalDAVService:
@@ -711,19 +855,10 @@ class CalDAVService:
         )
         if active_count >= MAX_ACTIVE_CREDENTIALS:
             raise vol.Invalid("Too many active CalDAV credentials")
-        if scope not in {"personal", "household"}:
-            raise vol.Invalid("Unknown CalDAV scope")
         if permission not in {"read_only", "read_write"}:
             raise vol.Invalid("Unknown CalDAV permission")
-        if scope == "personal" and person_id not in engine.people:
-            raise vol.Invalid("A configured person is required for personal scope")
-        if scope == "household":
-            person_id = person_id if person_id in engine.people else None
-        expiry = None
-        if expires_at:
-            expiry = dt_util.parse_datetime(expires_at)
-            if expiry is None or expiry <= dt_util.utcnow():
-                raise vol.Invalid("CalDAV credential expiry must be in the future")
+        person_id = _normalize_credential_owner(person_id, scope, engine.people)
+        expiry = _credential_expiry(expires_at)
         credential_id = uuid4().hex
         stem = re.sub(r"[^a-z0-9]+", "-", person_id or "household").strip("-")
         username = f"{stem}-{credential_id[:8]}"
@@ -736,21 +871,18 @@ class CalDAVService:
             salt,
             PBKDF2_ITERATIONS,
         )
-        now = dt_util.utcnow().isoformat()
-        record = {
-            "username": username,
-            "label": label.strip()[:100] or "CalDAV client",
-            "person_id": person_id,
-            "permission": permission,
-            "scope": scope,
-            "include_claimable": bool(include_claimable),
-            "complete_checklist_on_parent": bool(complete_checklist_on_parent),
-            "salt": base64.b64encode(salt).decode(),
-            "password_hash": base64.b64encode(digest).decode(),
-            "iterations": PBKDF2_ITERATIONS,
-            "created_at": now,
-            "expires_at": expiry.isoformat() if expiry else None,
-        }
+        record = _credential_record(
+            username=username,
+            label=label,
+            person_id=person_id,
+            permission=permission,
+            scope=scope,
+            include_claimable=include_claimable,
+            complete_checklist_on_parent=complete_checklist_on_parent,
+            salt=salt,
+            digest=digest,
+            expiry=expiry,
+        )
         async with self.lock:
             self.state["credentials"][credential_id] = record
             await self.store.async_save(self.state)
@@ -794,26 +926,7 @@ class CalDAVService:
                 raise CalDAVError(403, "CalDAV requires HTTPS")
             principal = await self._authenticate(request)
             path = self._classify_path(request.path, principal)
-            method = request.method.upper()
-            if method == "OPTIONS":
-                return self._options(path)
-            if method == "PROPFIND":
-                return await self._propfind(request, principal, path)
-            if method == "REPORT":
-                return await self._report(request, principal, path)
-            if method in {"GET", "HEAD"}:
-                return await self._get(request, principal, path)
-            if method == "PUT":
-                return await self._put(request, principal, path)
-            if method == "DELETE":
-                return await self._delete(request, principal, path)
-            if method == "PROPPATCH":
-                return await self._proppatch(request, principal, path)
-            if method == "ACL":
-                return web.Response(status=200, headers=self._dav_headers())
-            raise CalDAVError(
-                405, "Method not allowed", headers={"Allow": self._allow(path)}
-            )
+            return await self._dispatch(request, principal, path)
         except web.HTTPException:
             raise
         except CalDAVError as error:
@@ -823,6 +936,33 @@ class CalDAVService:
         except Exception:
             _LOGGER.exception("Unexpected CalDAV request failure")
             return _error_response(CalDAVError(500, "Internal CalDAV error"))
+
+    async def _dispatch(
+        self,
+        request: web.Request,
+        principal: Principal,
+        path: tuple[str, str | None],
+    ) -> web.StreamResponse:
+        method = request.method.upper()
+        if method == "OPTIONS":
+            return self._options(path)
+        if method == "PROPFIND":
+            return await self._propfind(request, principal, path)
+        if method == "REPORT":
+            return await self._report(request, principal, path)
+        if method in {"GET", "HEAD"}:
+            return await self._get(request, principal, path)
+        if method == "PUT":
+            return await self._put(request, principal, path)
+        if method == "DELETE":
+            return await self._delete(request, principal, path)
+        if method == "PROPPATCH":
+            return await self._proppatch(request, principal, path)
+        if method == "ACL":
+            return web.Response(status=200, headers=self._dav_headers())
+        raise CalDAVError(
+            405, "Method not allowed", headers={"Allow": self._allow(path)}
+        )
 
     def _engine(self) -> Any:
         from .engine import get_loaded_engine
@@ -836,13 +976,9 @@ class CalDAVService:
         base = self.hass.config.external_url or self.hass.config.internal_url or ""
         return base.rstrip("/") + path
 
-    async def _authenticate(self, request: web.Request) -> Principal:
-        header = request.headers.get("Authorization", "")
-        cache_key = hashlib.sha256(header.encode()).hexdigest()
-        cached = self._auth_cache.get(cache_key)
-        now = dt_util.utcnow()
-        if cached and cached[0] > now:
-            return cached[1]
+    def _authentication_attempts(
+        self, request: web.Request, now: datetime
+    ) -> deque[datetime]:
         peer = request.remote or "unknown"
         if peer not in self._failed_auth and len(self._failed_auth) >= MAX_AUTH_PEERS:
             self._failed_auth.clear()
@@ -853,14 +989,69 @@ class CalDAVService:
             raise CalDAVError(
                 429, "Too many authentication attempts", headers={"Retry-After": "300"}
             )
+        return attempts
+
+    def _decode_basic_credentials(
+        self, header: str, attempts: deque[datetime], now: datetime
+    ) -> tuple[str, str]:
         if not header.startswith("Basic "):
             raise self._unauthorized()
         try:
             decoded = base64.b64decode(header[6:], validate=True).decode()
             username, password = decoded.split(":", 1)
-        except (ValueError, UnicodeDecodeError) as err:
+            return username, password
+        except ValueError as err:
             attempts.append(now)
             raise self._unauthorized() from err
+
+    async def _password_matches(self, item: dict[str, Any], password: str) -> bool:
+        salt = base64.b64decode(item["salt"])
+        expected = base64.b64decode(item["password_hash"])
+        actual = await self.hass.async_add_executor_job(
+            hashlib.pbkdf2_hmac,
+            "sha256",
+            password.encode(),
+            salt,
+            int(item.get("iterations", PBKDF2_ITERATIONS)),
+        )
+        return hmac.compare_digest(actual, expected)
+
+    def _principal(self, credential_id: str, item: dict[str, Any]) -> Principal:
+        return Principal(
+            credential_id=credential_id,
+            username=item["username"],
+            person_id=item.get("person_id"),
+            permission=item.get("permission", "read_only"),
+            scope=item.get("scope", "personal"),
+            include_claimable=bool(item.get("include_claimable", True)),
+            complete_checklist_on_parent=bool(
+                item.get("complete_checklist_on_parent", True)
+            ),
+            calendar_name=item.get("calendar_name")
+            or self.state["settings"]["calendar_name"],
+            calendar_color=item.get("calendar_color")
+            or self.state["settings"]["calendar_color"],
+        )
+
+    async def _record_credential_use(self, item: dict[str, Any], now: datetime) -> None:
+        last_used = (
+            _as_datetime(item["last_used_at"]) if item.get("last_used_at") else None
+        )
+        if last_used and last_used >= now - timedelta(hours=1):
+            return
+        async with self.lock:
+            item["last_used_at"] = now.isoformat()
+            await self.store.async_save(self.state)
+
+    async def _authenticate(self, request: web.Request) -> Principal:
+        header = request.headers.get("Authorization", "")
+        cache_key = hashlib.sha256(header.encode()).hexdigest()
+        cached = self._auth_cache.get(cache_key)
+        now = dt_util.utcnow()
+        if cached and cached[0] > now:
+            return cached[1]
+        attempts = self._authentication_attempts(request, now)
+        username, password = self._decode_basic_credentials(header, attempts, now)
         matches = [
             (credential_id, item)
             for credential_id, item in self.state.get("credentials", {}).items()
@@ -870,42 +1061,14 @@ class CalDAVService:
             expires = dt_util.parse_datetime(str(item.get("expires_at") or ""))
             if expires and expires <= now:
                 continue
-            salt = base64.b64decode(item["salt"])
-            expected = base64.b64decode(item["password_hash"])
-            actual = await self.hass.async_add_executor_job(
-                hashlib.pbkdf2_hmac,
-                "sha256",
-                password.encode(),
-                salt,
-                int(item.get("iterations", PBKDF2_ITERATIONS)),
-            )
-            if not hmac.compare_digest(actual, expected):
+            if not await self._password_matches(item, password):
                 continue
-            principal = Principal(
-                credential_id=credential_id,
-                username=username,
-                person_id=item.get("person_id"),
-                permission=item.get("permission", "read_only"),
-                scope=item.get("scope", "personal"),
-                include_claimable=bool(item.get("include_claimable", True)),
-                complete_checklist_on_parent=bool(
-                    item.get("complete_checklist_on_parent", True)
-                ),
-                calendar_name=item.get("calendar_name")
-                or self.state["settings"]["calendar_name"],
-                calendar_color=item.get("calendar_color")
-                or self.state["settings"]["calendar_color"],
-            )
+            principal = self._principal(credential_id, item)
             self._auth_cache[cache_key] = (
                 now + timedelta(seconds=AUTH_CACHE_SECONDS),
                 principal,
             )
-            if not item.get("last_used_at") or _as_datetime(
-                item["last_used_at"]
-            ) < now - timedelta(hours=1):
-                async with self.lock:
-                    item["last_used_at"] = now.isoformat()
-                    await self.store.async_save(self.state)
+            await self._record_credential_use(item, now)
             attempts.clear()
             return principal
         attempts.append(now)
@@ -1003,7 +1166,7 @@ class CalDAVService:
         allowed = occurrence.get("task", {}).get("assignment", {}).get("people", [])
         return not allowed or person_id in allowed
 
-    async def _resources(self, principal: Principal) -> dict[str, CalendarResource]:
+    def _resources(self, principal: Principal) -> dict[str, CalendarResource]:
         engine = self._engine()
         aliases = (
             self.state.get("collections", {})
@@ -1088,13 +1251,13 @@ class CalDAVService:
     def _parse_sync_token(self, principal: Principal, token: str) -> int:
         prefix = f"urn:uuid:{self.state['server_id']}:{principal.collection_key}:"
         if not token.startswith(prefix):
-            raise CalDAVError(409, "Invalid sync token", "valid-sync-token")
+            raise CalDAVError(409, INVALID_SYNC_TOKEN, "valid-sync-token")
         try:
             revision = int(token[len(prefix) :])
         except ValueError as err:
-            raise CalDAVError(409, "Invalid sync token", "valid-sync-token") from err
+            raise CalDAVError(409, INVALID_SYNC_TOKEN, "valid-sync-token") from err
         if revision < 0:
-            raise CalDAVError(409, "Invalid sync token", "valid-sync-token")
+            raise CalDAVError(409, INVALID_SYNC_TOKEN, "valid-sync-token")
         return revision
 
     async def _read_body(self, request: web.Request) -> bytes:
@@ -1119,7 +1282,7 @@ class CalDAVService:
         root = _parse_xml(await self._read_body(request))
         requested = self._requested_properties(root)
         paths = self._paths(principal)
-        resources = await self._resources(principal)
+        resources = self._resources(principal)
         collection = await self._sync_collection(principal, resources)
         multistatus = ET.Element(_tag(DAV, "multistatus"))
         kind, resource_name = path
@@ -1332,15 +1495,20 @@ class CalDAVService:
         body = _parse_xml(await self._read_body(request))
         if body is None:
             raise CalDAVError(400, "REPORT body is required")
-        resources = await self._resources(principal)
+        resources = self._resources(principal)
         collection = await self._sync_collection(principal, resources)
-        if body.tag == _tag(CALDAV, "calendar-multiget"):
+        report_type = {
+            _tag(CALDAV, "calendar-multiget"): "multiget",
+            _tag(CALDAV, "calendar-query"): "query",
+            _tag(DAV, "sync-collection"): "sync",
+        }.get(body.tag)
+        if report_type == "multiget":
             names = [
                 unquote((element.text or "").rstrip("/").rsplit("/", 1)[-1])
                 for element in body.findall(_tag(DAV, "href"))
             ]
             return self._resource_multistatus(principal, resources, names, body)
-        if body.tag == _tag(CALDAV, "calendar-query"):
+        if report_type == "query":
             selected = self._filter_resources(resources, body)
             return self._resource_multistatus(
                 principal,
@@ -1348,7 +1516,7 @@ class CalDAVService:
                 list(selected)[:MAX_REPORT_RESOURCES],
                 body,
             )
-        if body.tag == _tag(DAV, "sync-collection"):
+        if report_type == "sync":
             return self._sync_report(principal, resources, collection, body)
         raise CalDAVError(403, "Unsupported REPORT", "supported-report")
 
@@ -1438,39 +1606,62 @@ class CalDAVService:
             raise CalDAVError(409, "Sync token is too old", "valid-sync-token")
         paths = self._paths(principal)
         root = ET.Element(_tag(DAV, "multistatus"))
-        if since < 0:
-            selected = [{"name": name, "deleted": False} for name in sorted(resources)]
-        else:
-            latest: dict[str, dict[str, Any]] = {}
-            for change in changes:
-                if int(change["revision"]) > since:
-                    latest[change["name"]] = change
-            selected = list(latest.values())
+        selected = self._sync_changes_since(resources, changes, since)
         requested = self._report_properties(body)
         for change in selected[:MAX_REPORT_RESOURCES]:
-            name = change["name"]
-            if change.get("deleted") or name not in resources:
-                response = ET.SubElement(root, _tag(DAV, "response"))
-                ET.SubElement(response, _tag(DAV, "href")).text = paths[
-                    "calendar"
-                ] + quote(name)
-                ET.SubElement(response, _tag(DAV, "status")).text = _status_line(404)
-            else:
-                self._add_prop_response(
-                    root,
-                    paths["calendar"] + resources[name].href_name,
-                    "resource",
-                    requested,
-                    principal,
-                    collection,
-                    resources[name],
-                )
+            self._add_sync_change(
+                root, paths, resources, change, requested, principal, collection
+            )
         ET.SubElement(root, _tag(DAV, "sync-token")).text = self._sync_token(
             principal, current_revision
         )
         response = _xml_response(root)
         response.headers.update(self._dav_headers())
         return response
+
+    @staticmethod
+    def _sync_changes_since(
+        resources: dict[str, CalendarResource],
+        changes: list[dict[str, Any]],
+        since: int,
+    ) -> list[dict[str, Any]]:
+        if since < 0:
+            return [{"name": name, "deleted": False} for name in sorted(resources)]
+        latest = {
+            change["name"]: change
+            for change in changes
+            if int(change["revision"]) > since
+        }
+        return list(latest.values())
+
+    def _add_sync_change(
+        self,
+        root: ET.Element,
+        paths: dict[str, str],
+        resources: dict[str, CalendarResource],
+        change: dict[str, Any],
+        requested: list[str],
+        principal: Principal,
+        collection: dict[str, Any],
+    ) -> None:
+        name = change["name"]
+        resource = resources.get(name)
+        if change.get("deleted") or resource is None:
+            response = ET.SubElement(root, _tag(DAV, "response"))
+            ET.SubElement(response, _tag(DAV, "href")).text = paths["calendar"] + quote(
+                name
+            )
+            ET.SubElement(response, _tag(DAV, "status")).text = _status_line(404)
+            return
+        self._add_prop_response(
+            root,
+            paths["calendar"] + resource.href_name,
+            "resource",
+            requested,
+            principal,
+            collection,
+            resource,
+        )
 
     async def _get(
         self,
@@ -1480,7 +1671,7 @@ class CalDAVService:
     ) -> web.Response:
         if path[0] != "resource":
             raise CalDAVError(405, "GET is only available for calendar objects")
-        resources = await self._resources(principal)
+        resources = self._resources(principal)
         resource = resources.get(path[1] or "")
         if resource is None:
             raise CalDAVError(404, "Calendar object not found")
@@ -1514,86 +1705,23 @@ class CalDAVService:
         name = path[1] or ""
         if not name.lower().endswith(".ics") or "/" in name or "\\" in name:
             raise CalDAVError(400, "Calendar resource name must end in .ics")
-        resources = await self._resources(principal)
+        resources = self._resources(principal)
         existing = resources.get(name)
         self._check_preconditions(request, existing)
         timezone = dt_util.get_time_zone(self.hass.config.time_zone) or UTC
         parsed = parse_vtodo(await self._read_body(request), timezone)
         engine = self._engine()
         if existing:
-            if parse_vtodo(existing.data, timezone).uid != parsed.uid:
-                raise CalDAVError(
-                    403,
-                    "UID does not match the existing calendar object",
-                    "no-uid-conflict",
-                )
-            await engine.async_apply_caldav_vtodo(
-                existing.occurrence_id,
-                parsed,
-                person_id=principal.person_id,
-                expected_revision=int(
-                    engine.state["occurrences"][existing.occurrence_id].get(
-                        "revision", 1
-                    )
-                ),
-                checklist_id=existing.checklist_id,
-                complete_checklist=principal.complete_checklist_on_parent,
+            await self._update_caldav_resource(
+                engine, principal, existing, parsed, timezone
             )
             status = 204
         else:
-            self._require_write(principal, "allow_client_create")
-            if principal.person_id not in engine.people:
-                raise CalDAVError(
-                    403, "A personal credential is required to create tasks"
-                )
-            duplicate_uid = any(
-                resource.checklist_id is None
-                and parse_vtodo(resource.data, timezone).uid == parsed.uid
-                for resource in resources.values()
+            await self._create_caldav_resource(
+                engine, principal, resources, parsed, timezone, name
             )
-            if duplicate_uid:
-                raise CalDAVError(
-                    403,
-                    "UID already exists in this calendar",
-                    "no-uid-conflict",
-                )
-            due = parsed.due or dt_util.now()
-            occurrence_id = await engine.async_create_ad_hoc(
-                parsed.summary,
-                principal.person_id,
-                due.isoformat(),
-                description=parsed.description,
-                priority=_priority_from_ical(parsed.priority),
-                points=0,
-            )
-            occurrence = engine.state["occurrences"][occurrence_id]
-            occurrence["caldav_no_due"] = parsed.due is None
-            occurrence["caldav"] = {
-                "uid": parsed.uid,
-                "categories": parsed.categories,
-                "url": parsed.url,
-                "alarms": parsed.alarms,
-                "percent": parsed.percent_complete,
-                "x_properties": parsed.raw_x_properties,
-                "preserved_lines": parsed.preserved_lines,
-            }
-            await engine.async_apply_caldav_vtodo(
-                occurrence_id,
-                parsed,
-                person_id=principal.person_id,
-                expected_revision=int(occurrence.get("revision", 1)),
-                checklist_id=None,
-                complete_checklist=principal.complete_checklist_on_parent,
-            )
-            async with self.lock:
-                collection = self.state["collections"].setdefault(
-                    principal.collection_key,
-                    {"revision": 0, "resources": {}, "changes": [], "aliases": {}},
-                )
-                collection.setdefault("aliases", {})[name] = occurrence_id
-                await self.store.async_save(self.state)
             status = 201
-        refreshed = await self._resources(principal)
+        refreshed = self._resources(principal)
         collection = await self._sync_collection(principal, refreshed)
         result = refreshed.get(name)
         headers = {
@@ -1606,6 +1734,100 @@ class CalDAVService:
             principal, int(collection.get("revision", 0))
         )
         return web.Response(status=status, headers=headers)
+
+    async def _update_caldav_resource(
+        self,
+        engine: Any,
+        principal: Principal,
+        existing: CalendarResource,
+        parsed: ParsedVTodo,
+        timezone: Any,
+    ) -> None:
+        if parse_vtodo(existing.data, timezone).uid != parsed.uid:
+            raise CalDAVError(
+                403,
+                "UID does not match the existing calendar object",
+                "no-uid-conflict",
+            )
+        occurrence = engine.state["occurrences"][existing.occurrence_id]
+        await engine.async_apply_caldav_vtodo(
+            existing.occurrence_id,
+            parsed,
+            person_id=principal.person_id,
+            expected_revision=int(occurrence.get("revision", 1)),
+            checklist_id=existing.checklist_id,
+            complete_checklist=principal.complete_checklist_on_parent,
+        )
+
+    async def _create_caldav_resource(
+        self,
+        engine: Any,
+        principal: Principal,
+        resources: dict[str, CalendarResource],
+        parsed: ParsedVTodo,
+        timezone: Any,
+        name: str,
+    ) -> None:
+        self._require_write(principal, "allow_client_create")
+        if principal.person_id not in engine.people:
+            raise CalDAVError(403, "A personal credential is required to create tasks")
+        if self._uid_exists(resources, parsed.uid, timezone):
+            raise CalDAVError(
+                403, "UID already exists in this calendar", "no-uid-conflict"
+            )
+        occurrence_id = await engine.async_create_ad_hoc(
+            parsed.summary,
+            principal.person_id,
+            (parsed.due or dt_util.now()).isoformat(),
+            description=parsed.description,
+            priority=_priority_from_ical(parsed.priority),
+            points=0,
+        )
+        occurrence = engine.state["occurrences"][occurrence_id]
+        occurrence["caldav_no_due"] = parsed.due is None
+        occurrence["caldav"] = self._caldav_metadata(parsed)
+        await engine.async_apply_caldav_vtodo(
+            occurrence_id,
+            parsed,
+            person_id=principal.person_id,
+            expected_revision=int(occurrence.get("revision", 1)),
+            checklist_id=None,
+            complete_checklist=principal.complete_checklist_on_parent,
+        )
+        await self._save_resource_alias(principal, name, occurrence_id)
+
+    @staticmethod
+    def _uid_exists(
+        resources: dict[str, CalendarResource], uid: str, timezone: Any
+    ) -> bool:
+        return any(
+            resource.checklist_id is None
+            and parse_vtodo(resource.data, timezone).uid == uid
+            for resource in resources.values()
+        )
+
+    @staticmethod
+    def _caldav_metadata(parsed: ParsedVTodo) -> dict[str, Any]:
+        return {
+            "uid": parsed.uid,
+            "categories": parsed.categories,
+            "url": parsed.url,
+            "alarms": parsed.alarms,
+            "percent": parsed.percent_complete,
+            "x_properties": parsed.raw_x_properties,
+            "preserved_lines": parsed.preserved_lines,
+        }
+
+    async def _save_resource_alias(
+        self, principal: Principal, name: str, occurrence_id: str
+    ) -> None:
+        async with self.lock:
+            collection = self.state["collections"].setdefault(
+                principal.collection_key,
+                {"revision": 0, "resources": {}, "changes": [], "aliases": {}},
+            )
+            collection.setdefault("aliases", {})[name] = occurrence_id
+            await self.store.async_save(self.state)
 
     @staticmethod
     def _check_preconditions(
@@ -1633,7 +1855,7 @@ class CalDAVService:
         if path[0] != "resource":
             raise CalDAVError(405, "Only task resources can be deleted")
         self._require_write(principal, "allow_client_delete")
-        resources = await self._resources(principal)
+        resources = self._resources(principal)
         resource = resources.get(path[1] or "")
         if resource is None:
             raise CalDAVError(404, "Calendar object not found")
@@ -1653,7 +1875,7 @@ class CalDAVService:
             resource.occurrence_id,
             expected_revision=int(occurrence.get("revision", 1)),
         )
-        refreshed = await self._resources(principal)
+        refreshed = self._resources(principal)
         await self._sync_collection(principal, refreshed)
         return web.Response(status=204, headers=self._dav_headers())
 

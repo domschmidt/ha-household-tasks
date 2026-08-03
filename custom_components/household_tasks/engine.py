@@ -119,6 +119,8 @@ _TASK_NOT_OPEN = "Die Aufgabe ist nicht mehr offen."
 _HELP_NEEDED = "Hilfe benötigt"
 _OPEN_TASK = "Aufgabe öffnen"
 _ATTACHMENT_TOO_LARGE = "Anhänge dürfen höchstens 20 MB groß sein."
+_UNKNOWN_TASK_OCCURRENCE = "Unknown task occurrence"
+_OCCURRENCE_CHANGED = "Die Aufgabe wurde zwischenzeitlich geändert. Bitte neu laden."
 ATTACHMENT_MAX_BYTES = 20_000_000
 ATTACHMENT_TOTAL_MAX_BYTES = 100_000_000
 ATTACHMENT_MAX_COUNT = 10
@@ -3177,11 +3179,9 @@ class HouseholdTaskEngine:
     ) -> dict[str, Any]:
         occurrence = self.state["occurrences"].get(occurrence_id)
         if occurrence is None:
-            raise vol.Invalid("Unknown task occurrence")
+            raise vol.Invalid(_UNKNOWN_TASK_OCCURRENCE)
         if int(occurrence.get("revision", 0)) != expected_revision:
-            raise vol.Invalid(
-                "Die Aufgabe wurde zwischenzeitlich geändert. Bitte neu laden."
-            )
+            raise vol.Invalid(_OCCURRENCE_CHANGED)
         return occurrence
 
     def _apply_caldav_checklist(
@@ -3371,11 +3371,9 @@ class HouseholdTaskEngine:
         async with self.lock:
             occurrence = self.state["occurrences"].get(occurrence_id)
             if occurrence is None:
-                raise vol.Invalid("Unknown task occurrence")
+                raise vol.Invalid(_UNKNOWN_TASK_OCCURRENCE)
             if int(occurrence.get("revision", 0)) != expected_revision:
-                raise vol.Invalid(
-                    "Die Aufgabe wurde zwischenzeitlich geändert. Bitte neu laden."
-                )
+                raise vol.Invalid(_OCCURRENCE_CHANGED)
             if occurrence.get("status") not in TERMINAL_TASK_STATUSES:
                 raise vol.Invalid("Only terminal tasks can be hidden from CalDAV")
             occurrence["caldav_deleted"] = True
@@ -3580,7 +3578,7 @@ class HouseholdTaskEngine:
     def task_history(self, occurrence_id: str) -> list[dict[str, Any]]:
         """Return the immutable event history for one task."""
         if occurrence_id not in self.state["occurrences"]:
-            raise vol.Invalid("Unknown task occurrence")
+            raise vol.Invalid(_UNKNOWN_TASK_OCCURRENCE)
         return [
             deepcopy(event)
             for event in self.state.get("task_events", [])
@@ -3592,7 +3590,7 @@ class HouseholdTaskEngine:
     ) -> dict[str, Any]:
         occurrence = self.state["occurrences"].get(occurrence_id)
         if occurrence is None:
-            raise vol.Invalid("Unknown task occurrence")
+            raise vol.Invalid(_UNKNOWN_TASK_OCCURRENCE)
         if occurrence.get("status") in TERMINAL_TASK_STATUSES:
             raise vol.Invalid(
                 "Abgeschlossene oder abgebrochene Aufgaben können nicht verändert werden."
@@ -3601,9 +3599,7 @@ class HouseholdTaskEngine:
             expected_revision is not None
             and int(occurrence.get("revision", 0)) != expected_revision
         ):
-            raise vol.Invalid(
-                "Die Aufgabe wurde zwischenzeitlich geändert. Bitte neu laden."
-            )
+            raise vol.Invalid(_OCCURRENCE_CHANGED)
         return occurrence
 
     async def _scheduled_scan(self, now: datetime) -> None:

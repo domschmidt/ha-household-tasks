@@ -13,6 +13,7 @@ from .const import DOMAIN
 from .engine import get_loaded_engine
 
 SLUG = vol.All(str, vol.Match(r"^[a-z0-9_]+$"))
+_CALDAV_NOT_LOADED = "CalDAV service is not loaded"
 
 
 def _engine(hass: HomeAssistant) -> Any:
@@ -976,7 +977,7 @@ async def websocket_caldav_save_settings(
 
     service = get_caldav_service(hass)
     if service is None:
-        raise RuntimeError("CalDAV service is not loaded")
+        raise RuntimeError(_CALDAV_NOT_LOADED)
     await service.async_save_settings(msg["settings"])
     connection.send_result(msg["id"], _engine(hass).ui_data())
 
@@ -1005,7 +1006,7 @@ async def websocket_caldav_create_credential(
 
     service = get_caldav_service(hass)
     if service is None:
-        raise RuntimeError("CalDAV service is not loaded")
+        raise RuntimeError(_CALDAV_NOT_LOADED)
     status = await service.async_create_credential(
         person_id=msg["person_id"],
         label=msg["label"],
@@ -1038,7 +1039,7 @@ async def websocket_caldav_revoke_credential(
 
     service = get_caldav_service(hass)
     if service is None:
-        raise RuntimeError("CalDAV service is not loaded")
+        raise RuntimeError(_CALDAV_NOT_LOADED)
     await service.async_revoke_credential(msg["credential_id"])
     connection.send_result(msg["id"], _engine(hass).ui_data())
 
