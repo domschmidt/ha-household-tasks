@@ -299,6 +299,71 @@ def _weather_template(
     }
 
 
+def _required(
+    key: str, name: str, domains: list[str], description: str
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "name": name,
+        "domains": domains,
+        "description": description,
+    }
+
+
+def _state_template(
+    template_id: str,
+    category: str,
+    name: str,
+    description: str,
+    task_name: str,
+    *,
+    to_state: str,
+    due_after: str = "00:00:00",
+    cooldown: str = "12:00:00",
+    trigger_domains: list[str] | None = None,
+    checklist: list[str] | None = None,
+    priority: str = "normal",
+    daily_time: str | None = None,
+) -> dict[str, Any]:
+    """Build a gallery preset around one mapped state entity."""
+    schedule_type = "daily_after_state" if daily_time else "state_trigger"
+    schedule = {
+        "type": schedule_type,
+        "triggers": [{"entity_id": "{{trigger}}", "to": to_state, "for": "00:00:00"}],
+        "skip_if_open": True,
+    }
+    if daily_time:
+        schedule["time"] = daily_time
+    else:
+        schedule.update({"due_after": due_after, "cooldown": cooldown})
+    task: dict[str, Any] = {
+        "enabled": True,
+        "name": task_name,
+        "description": description,
+        "assignment": {"type": "fair", "presence_required": False},
+        "schedule": schedule,
+        "market": {"priority": priority, "points": 2},
+    }
+    if checklist:
+        task["checklist"] = checklist
+    return {
+        "id": template_id,
+        "category": category,
+        "name": name,
+        "description": description,
+        "required_entities": [
+            _required(
+                "trigger",
+                "Auslöser",
+                trigger_domains
+                or ["binary_sensor", "sensor", "switch", "input_boolean"],
+                "Entität, deren Zustandswechsel die Aufgabe startet.",
+            )
+        ],
+        "task": task,
+    }
+
+
 def template_gallery() -> list[dict[str, Any]]:
     """Return privacy-safe templates users can copy into their configuration."""
     templates = [
@@ -582,6 +647,494 @@ def template_gallery() -> list[dict[str, Any]]:
                 priority="critical",
                 cooldown="12:00:00",
             ),
+        ]
+    )
+    templates.extend(
+        [
+            _state_template(
+                "washer_finished",
+                "Geräte",
+                "Waschmaschine fertig",
+                "Erstellt zehn Minuten nach Programmende eine Aufgabe und verhindert offene Duplikate.",
+                "Waschmaschine ausräumen",
+                to_state="off",
+                due_after="00:10:00",
+                cooldown="02:00:00",
+                trigger_domains=["binary_sensor", "sensor", "switch"],
+            ),
+            _state_template(
+                "dryer_finished_fold",
+                "Geräte",
+                "Trockner fertig und Wäsche falten",
+                "Verbindet Ausräumen und Zusammenlegen als nachvollziehbare Checkliste.",
+                "Trockner leeren und Wäsche zusammenlegen",
+                to_state="off",
+                due_after="00:10:00",
+                checklist=[
+                    "Trockner leeren",
+                    "Wäsche zusammenlegen",
+                    "Wäsche wegräumen",
+                ],
+                trigger_domains=["binary_sensor", "sensor", "switch"],
+            ),
+            _state_template(
+                "dishwasher_morning",
+                "Geräte",
+                "Spülmaschine morgens ausräumen",
+                "Merkt sich ein nächtliches Programmende und stellt die Aufgabe erst morgens bereit.",
+                "Spülmaschine ausräumen",
+                to_state="off",
+                daily_time="08:00:00",
+                trigger_domains=["binary_sensor", "sensor", "switch"],
+            ),
+            _state_template(
+                "smoke_detector_battery",
+                "Sicherheit",
+                "Rauchmelder-Batterie schwach",
+                "Erzeugt bei einer Batteriewarnung eine dringende Wartungsaufgabe.",
+                "Rauchmelder-Batterie wechseln",
+                to_state="on",
+                priority="critical",
+                cooldown="168:00:00",
+                trigger_domains=["binary_sensor"],
+                checklist=[
+                    "Betroffenen Melder identifizieren",
+                    "Batterie wechseln",
+                    "Funktionstest durchführen",
+                ],
+            ),
+            _state_template(
+                "printer_toner_low",
+                "Verbrauch",
+                "Drucker-Toner niedrig",
+                "Erinnert rechtzeitig an Bestellung oder Austausch des Toners.",
+                "Drucker-Toner bestellen",
+                to_state="on",
+                cooldown="168:00:00",
+                trigger_domains=["binary_sensor", "sensor"],
+            ),
+            _state_template(
+                "freezer_temperature_alarm",
+                "Sicherheit",
+                "Gefrierschrank zu warm",
+                "Reagiert sofort auf eine vorhandene Temperatur-Warnungsentität.",
+                "Gefrierschrank kontrollieren",
+                to_state="on",
+                priority="critical",
+                cooldown="01:00:00",
+                trigger_domains=["binary_sensor", "input_boolean"],
+                checklist=[
+                    "Tür und Dichtung kontrollieren",
+                    "Temperatur prüfen",
+                    "Lebensmittelzustand beurteilen",
+                ],
+            ),
+            _state_template(
+                "package_announced",
+                "Lieferungen",
+                "Paket angekündigt",
+                "Erzeugt aus einer Paketankündigung eine Abhol- oder Ablageaufgabe.",
+                "Paketankündigung prüfen",
+                to_state="on",
+                cooldown="12:00:00",
+                trigger_domains=["binary_sensor", "input_boolean"],
+            ),
+            _state_template(
+                "inventory_below_minimum",
+                "Vorräte",
+                "Vorrat unter Mindestbestand",
+                "Reagiert auf eine vorhandene Mindestbestands-Warnung und legt eine Einkaufsaufgabe an.",
+                "Vorrat nachkaufen",
+                to_state="on",
+                cooldown="24:00:00",
+                trigger_domains=["binary_sensor", "input_boolean"],
+            ),
+            _state_template(
+                "everyone_away_return",
+                "Anwesenheit",
+                "Aufgaben nach Abwesenheit bereitstellen",
+                "Legt zur Rückkehr eine kompakte Haushaltskontrolle an.",
+                "Haushalt nach Rückkehr kontrollieren",
+                to_state="home",
+                cooldown="12:00:00",
+                trigger_domains=["binary_sensor", "sensor", "input_boolean"],
+                checklist=[
+                    "Lüften",
+                    "Post und Lieferungen prüfen",
+                    "Pausierte Aufgaben sichten",
+                ],
+            ),
+            {
+                "id": "waste_calendar_regex",
+                "category": "Kalender",
+                "name": "Mülltonnen am Vorabend",
+                "description": "Erstellt um 18 Uhr am Vorabend Aufgaben aus passenden Entsorgungsterminen und ignoriert Problemabfall.",
+                "required_entities": [
+                    _required(
+                        "calendar",
+                        "Entsorgungskalender",
+                        ["calendar"],
+                        "Kalender des örtlichen Entsorgers.",
+                    )
+                ],
+                "task": {
+                    "enabled": True,
+                    "name": "Mülltonne rausstellen",
+                    "assignment": {"type": "fair"},
+                    "schedule": {
+                        "type": "calendar",
+                        "entity_id": "{{calendar}}",
+                        "offset": "-12:00:00",
+                        "use_event_title": True,
+                        "ignore_unmapped_events": True,
+                        "title_mappings": [
+                            {
+                                "pattern": ".*(bio|biomüll).*",
+                                "task_title": "Biotonne rausstellen",
+                            },
+                            {
+                                "pattern": ".*(rest|schwarz).*",
+                                "task_title": "Restmülltonne rausstellen",
+                            },
+                            {
+                                "pattern": ".*(papier|blau).*",
+                                "task_title": "Papiertonne rausstellen",
+                            },
+                            {
+                                "pattern": ".*(gelb|leichtverpack).*",
+                                "task_title": "Gelbe Tonne rausstellen",
+                            },
+                        ],
+                    },
+                    "market": {"priority": "high", "points": 2},
+                },
+            },
+            {
+                "id": "vacation_departure",
+                "category": "Urlaub",
+                "name": "Urlaub vorbereiten",
+                "description": "Checkliste für Pflanzen, Briefkasten, Haustiere, Mülll und Haushaltsübergabe.",
+                "task": {
+                    "enabled": True,
+                    "name": "Haushalt für Urlaub vorbereiten",
+                    "assignment": {"type": "open"},
+                    "schedule": {"type": "manual"},
+                    "checklist": [
+                        "Pflanzenversorgung klären",
+                        "Briefkasten übergeben",
+                        "Haustiere versorgen",
+                        "Müll entsorgen",
+                        "Haushaltsübergabe aktivieren",
+                    ],
+                    "market": {"priority": "high", "points": 5},
+                },
+            },
+            {
+                "id": "vacation_return",
+                "category": "Urlaub",
+                "name": "Rückkehr aus dem Urlaub",
+                "description": "Kompakte Rückkehrkontrolle für Heizung, Warmwasser, Vorräte und Post.",
+                "task": {
+                    "enabled": True,
+                    "name": "Haushalt nach Urlaub hochfahren",
+                    "assignment": {"type": "open"},
+                    "schedule": {"type": "manual"},
+                    "checklist": [
+                        "Heizung und Warmwasser normalisieren",
+                        "Post prüfen",
+                        "Vorräte auffüllen",
+                        "Urlaubsmodus beenden",
+                    ],
+                    "market": {"priority": "normal", "points": 3},
+                },
+            },
+            {
+                "id": "guest_arrival_complete",
+                "category": "Gastmodus",
+                "name": "Gäste vollständig vorbereiten",
+                "description": "Bereitet Zimmer, Handtücher, WLAN und Einkauf ausschließlich im Gastmodus vor.",
+                "task": {
+                    "enabled": True,
+                    "name": "Gästeankunft vorbereiten",
+                    "assignment": {"type": "open"},
+                    "schedule": {"type": "manual"},
+                    "modes": {"guest_only": True},
+                    "checklist": [
+                        "Gästezimmer vorbereiten",
+                        "Handtücher bereitlegen",
+                        "WLAN-Zugang prüfen",
+                        "Getränke und Frühstück einkaufen",
+                    ],
+                    "market": {"priority": "normal", "points": 4},
+                },
+            },
+            {
+                "id": "month_end_household",
+                "category": "Routine",
+                "name": "Monatsabschluss Haushalt",
+                "description": "Prüft am Monatsende Zählerstände, Budget und Vorräte.",
+                "task": {
+                    "enabled": True,
+                    "name": "Haushalts-Monatsabschluss",
+                    "assignment": {"type": "open"},
+                    "schedule": {"type": "monthly", "day": "last", "time": "18:00:00"},
+                    "checklist": [
+                        "Zählerstände dokumentieren",
+                        "Haushaltsbudget prüfen",
+                        "Vorräte und Dauerbestellungen prüfen",
+                    ],
+                    "market": {"priority": "normal", "points": 4},
+                },
+            },
+            {
+                "id": "school_morning",
+                "category": "Familie",
+                "name": "Schulmorgen",
+                "description": "Personalisierbare Morgencheckliste an jedem Schultag.",
+                "task": {
+                    "enabled": True,
+                    "name": "Schulmorgen vorbereiten",
+                    "assignment": {"type": "per_person", "people": []},
+                    "schedule": {
+                        "type": "weekly",
+                        "weekdays": ["mon", "tue", "wed", "thu", "fri"],
+                        "time": "06:45:00",
+                    },
+                    "checklist": [
+                        "Schultasche prüfen",
+                        "Frühstück und Trinkflasche",
+                        "Wettergerechte Kleidung",
+                    ],
+                    "market": {"priority": "high", "points": 2},
+                },
+            },
+            {
+                "id": "pet_medication",
+                "category": "Haustiere",
+                "name": "Haustier-Medikamente",
+                "description": "Tägliche, bestätigungspflichtige Medikamentengabe mit hoher Priorität.",
+                "task": {
+                    "enabled": True,
+                    "name": "Haustier-Medikament geben",
+                    "assignment": {"type": "fixed"},
+                    "schedule": {
+                        "type": "weekly",
+                        "weekdays": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                        "time": "08:00:00",
+                    },
+                    "checklist": [
+                        "Dosierung prüfen",
+                        "Medikament geben",
+                        "Einnahme bestätigen",
+                    ],
+                    "notify_on_create": True,
+                    "market": {"priority": "critical", "points": 2},
+                },
+            },
+            {
+                "id": "filter_runtime_maintenance",
+                "category": "Wartung",
+                "name": "Wartung nach Betriebsstunden",
+                "description": "Erzeugt beim Erreichen einer vorhandenen Wartungswarnung eine Geräteaufgabe.",
+                "required_entities": [
+                    _required(
+                        "maintenance",
+                        "Wartungswarnung",
+                        ["binary_sensor", "input_boolean"],
+                        "Warnentität, die nach Laufzeit oder Nutzung aktiv wird.",
+                    )
+                ],
+                "task": {
+                    "enabled": True,
+                    "name": "Gerätewartung durchführen",
+                    "assignment": {"type": "fair"},
+                    "schedule": {
+                        "type": "state_trigger",
+                        "triggers": [
+                            {
+                                "entity_id": "{{maintenance}}",
+                                "to": "on",
+                                "for": "00:00:00",
+                            }
+                        ],
+                        "due_after": "00:00:00",
+                        "cooldown": "168:00:00",
+                        "skip_if_open": True,
+                    },
+                    "checklist": [
+                        "Herstellerhinweise prüfen",
+                        "Filter oder Verschleißteil warten",
+                        "Wartungszähler zurücksetzen",
+                    ],
+                    "market": {"priority": "normal", "points": 3},
+                },
+            },
+            {
+                "id": "rain_open_window",
+                "category": "Wetter",
+                "name": "Offenes Fenster bei Regen",
+                "description": "Kombiniert ein geöffnetes Fenster mit hoher Niederschlagswahrscheinlichkeit.",
+                "required_entities": [
+                    _required(
+                        "window",
+                        "Fensterkontakt",
+                        ["binary_sensor"],
+                        "Kontakt eines relevanten Fensters.",
+                    ),
+                    _required(
+                        "weather",
+                        "Wetter",
+                        ["weather", "sensor"],
+                        "Entität mit precipitation_probability.",
+                    ),
+                ],
+                "task": {
+                    "enabled": True,
+                    "name": "Offenes Fenster vor Regen schließen",
+                    "assignment": {"type": "fair", "presence_required": True},
+                    "schedule": {
+                        "type": "state_trigger",
+                        "triggers": [
+                            {"entity_id": "{{window}}", "to": "on", "for": "00:05:00"}
+                        ],
+                        "due_after": "00:00:00",
+                        "cooldown": "02:00:00",
+                        "skip_if_open": True,
+                    },
+                    "weather": {
+                        "logic": "all",
+                        "conditions": [
+                            {
+                                "entity_id": "{{weather}}",
+                                "attribute": "precipitation_probability",
+                                "condition": "at_least",
+                                "threshold": 60,
+                            }
+                        ],
+                    },
+                    "market": {"priority": "high", "points": 2},
+                },
+            },
+            {
+                "id": "cold_open_window",
+                "category": "Klima",
+                "name": "Fenster bei Kälte zu lange offen",
+                "description": "Prüft ein länger offenes Fenster zusammen mit niedriger Außentemperatur.",
+                "required_entities": [
+                    _required(
+                        "window",
+                        "Fensterkontakt",
+                        ["binary_sensor"],
+                        "Kontakt des Fensters.",
+                    ),
+                    _required(
+                        "temperature",
+                        "Außentemperatur",
+                        ["sensor", "weather"],
+                        "Temperaturwert als Zustand oder temperature-Attribut.",
+                    ),
+                ],
+                "task": {
+                    "enabled": True,
+                    "name": "Fenster wegen Kälte schließen",
+                    "assignment": {"type": "fair", "presence_required": True},
+                    "schedule": {
+                        "type": "state_trigger",
+                        "triggers": [
+                            {"entity_id": "{{window}}", "to": "on", "for": "00:15:00"}
+                        ],
+                        "due_after": "00:00:00",
+                        "cooldown": "02:00:00",
+                        "skip_if_open": True,
+                    },
+                    "weather": {
+                        "logic": "all",
+                        "conditions": [
+                            {
+                                "entity_id": "{{temperature}}",
+                                "attribute": "",
+                                "condition": "below",
+                                "threshold": 5,
+                            }
+                        ],
+                    },
+                    "market": {"priority": "high", "points": 2},
+                },
+            },
+            {
+                "id": "unusual_consumption",
+                "category": "Verbrauch",
+                "name": "Ungewöhnlich hoher Verbrauch",
+                "description": "Erstellt bei Überschreitung eines anpassbaren Verbrauchsgrenzwerts eine Prüfaufgabe.",
+                "required_entities": [
+                    _required(
+                        "consumption",
+                        "Verbrauchssensor",
+                        ["sensor"],
+                        "Aktueller Strom-, Wasser- oder Gasverbrauch.",
+                    )
+                ],
+                "task": {
+                    "enabled": True,
+                    "name": "Ungewöhnlichen Verbrauch prüfen",
+                    "assignment": {"type": "fair"},
+                    "schedule": {
+                        "type": "weather_trigger",
+                        "due_after": "00:00:00",
+                        "cooldown": "12:00:00",
+                        "skip_if_open": True,
+                    },
+                    "weather": {
+                        "logic": "all",
+                        "conditions": [
+                            {
+                                "entity_id": "{{consumption}}",
+                                "attribute": "",
+                                "condition": "above",
+                                "threshold": 1000,
+                            }
+                        ],
+                    },
+                    "market": {"priority": "high", "points": 3},
+                },
+            },
+            {
+                "id": "air_quality_ventilation",
+                "category": "Klima",
+                "name": "Lüften nach Luftqualität",
+                "description": "Erinnert bei hoher CO₂- oder Schadstoffbelastung ans Lüften.",
+                "required_entities": [
+                    _required(
+                        "air",
+                        "Luftqualität",
+                        ["sensor"],
+                        "CO₂-, VOC- oder Luftqualitätssensor.",
+                    )
+                ],
+                "task": {
+                    "enabled": True,
+                    "name": "Räume stoßlüften",
+                    "assignment": {"type": "fair", "presence_required": True},
+                    "schedule": {
+                        "type": "weather_trigger",
+                        "due_after": "00:00:00",
+                        "cooldown": "02:00:00",
+                        "skip_if_open": True,
+                    },
+                    "weather": {
+                        "logic": "all",
+                        "conditions": [
+                            {
+                                "entity_id": "{{air}}",
+                                "attribute": "",
+                                "condition": "above",
+                                "threshold": 1200,
+                            }
+                        ],
+                    },
+                    "market": {"priority": "normal", "points": 1},
+                },
+            },
         ]
     )
     return deepcopy(templates)

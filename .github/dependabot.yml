@@ -10,3 +10,8 @@ updates:
     schedule:
       interval: monthly
     labels: [dependencies]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies]

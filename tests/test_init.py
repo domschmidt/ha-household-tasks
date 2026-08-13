@@ -173,6 +173,12 @@ async def test_real_runtime_service_persistence_panel_and_unload(
         }
     )
     assert weekly_preview["next_due"] is not None
+    assert len(weekly_preview["timeline"]) == 5
+    assert weekly_preview["timeline"][0]["at"] == weekly_preview["next_due"]
+    assert all(
+        item["kind"] == "scheduled" and item["reason"] == "Geplanter Auslösezeitpunkt"
+        for item in weekly_preview["timeline"]
+    )
     state_preview = await engine.async_preview_task(
         {
             "schedule": {
@@ -207,6 +213,15 @@ async def test_real_runtime_service_persistence_panel_and_unload(
     assert calendar_preview["calendar_events"][0]["task_name"] == "Schwarze Tonne"
     assert calendar_preview["calendar_ignored_events"][0]["summary"] == "Papier"
     assert calendar_preview["next_due"] is not None
+    assert calendar_preview["timeline"] == [
+        {
+            "at": calendar_preview["calendar_events"][0]["due"],
+            "would_create": True,
+            "kind": "calendar",
+            "reason": "Restmüll",
+            "blocked_by": [],
+        }
+    ]
     await engine.async_test_notification("alex")
     assert notifications[-1]["data"]["tag"] == "household_tasks_test"
 

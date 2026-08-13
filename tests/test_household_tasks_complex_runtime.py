@@ -1,5 +1,6 @@
 """Runtime tests for chained tasks and combined weather configurations."""
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -51,6 +52,175 @@ async def test_temporary_pause_blocks_manual_creation_until_it_expires(hass):
     engine.tasks["paused"]["paused_until"] = "2020-01-01T00:00:00+00:00"
     await engine.async_create_manual("paused")
     assert len(engine.state["occurrences"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_records_virtual_outcomes_without_tasks_or_notifications(
+    hass,
+):
+    """Automatic triggers remain side-effect free until explicit promotion."""
+    task = {
+        "enabled": True,
+        "name": "Shadow laundry",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {"type": "weekly", "weekdays": ["mon"], "time": "18:00:00"},
+        "shadow": {"enabled": True, "review_at": "2999-01-01T00:00:00+00:00"},
+        "notify_on_create": True,
+    }
+    engine, _ = await _native_engine(hass, {"laundry": task})
+    engine._send_notification = AsyncMock(return_value=True)
+    due = datetime(2026, 8, 17, 18, tzinfo=UTC)
+    assert await engine._create_occurrence("laundry", task, due) is None
+    assert engine.state["occurrences"] == {}
+    assert len(engine.state["shadow_evaluations"]) == 1
+    assert engine.state["shadow_evaluations"][0]["assignee"] == "alex"
+    engine._send_notification.assert_not_awaited()
+    assert await engine._create_occurrence("laundry", task, due) is None
+    assert len(engine.state["shadow_evaluations"]) == 1
+    manual_id = await engine._create_occurrence("laundry", task, due, manual=True)
+    assert manual_id in engine.state["occurrences"]
+
+
+@pytest.mark.asyncio
+async def test_wait_and_energy_policies_release_only_after_all_conditions_match(hass):
+    """A created occurrence remains waiting until state and energy gates pass."""
+    task = {
+        "enabled": True,
+        "name": "Run washer",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {"type": "manual"},
+        "notify_on_create": True,
+        "wait_for": {
+            "enabled": True,
+            "conditions": [
+                {
+                    "entity_id": "binary_sensor.laundry_ready",
+                    "condition": "equals",
+                    "value": "on",
+                }
+            ],
+        },
+        "energy": {
+            "enabled": True,
+            "wait_until_match": True,
+            "tariff_entity": "sensor.energy_price",
+            "max_price": 0.25,
+        },
+    }
+    hass.states.async_set("binary_sensor.laundry_ready", "off")
+    hass.states.async_set("sensor.energy_price", "0.40")
+    engine, _ = await _native_engine(hass, {"washer": task})
+    engine._notify = AsyncMock(return_value=True)
+    due = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    occurrence_id = await engine._create_occurrence("washer", task, due, manual=True)
+    occurrence = engine.state["occurrences"][occurrence_id]
+    assert occurrence["status"] == "waiting"
+    assert occurrence["waiting_for"]["policies"] == ["wait_for", "energy"]
+    engine._notify.assert_not_awaited()
+
+    engine._update_native_occurrence = AsyncMock()
+    hass.states.async_set("binary_sensor.laundry_ready", "on")
+    await engine._process_waiting_occurrences(due + timedelta(hours=1))
+    assert occurrence["status"] == "waiting"
+
+    hass.states.async_set("sensor.energy_price", "0.18")
+    await engine._process_waiting_occurrences(due + timedelta(hours=2))
+    assert occurrence["status"] == "open"
+    assert "waiting_for" not in occurrence
+    assert occurrence["wait_decision"]["reason"] == "all_policies_matched"
+    engine._notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_notification_budget_defers_and_later_releases_exact_message(hass):
+    """Daily interruption budgets preserve an actionable deferred message."""
+    task = {
+        "enabled": True,
+        "name": "Quiet task",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {"type": "manual"},
+        "notification_policy": {"daily_budget": 1, "quiet_behavior": "defer"},
+    }
+    engine, _ = await _native_engine(hass, {"quiet": task})
+    occurrence = {
+        "task_id": "quiet",
+        "task": task,
+        "title": "[Alex] Quiet task",
+        "assignee": "alex",
+        "notified_people": [],
+        "resolved": False,
+    }
+    engine.state["occurrences"]["one"] = occurrence
+    day = datetime.now(UTC).astimezone().date().isoformat()
+    engine.state["notification_counters"] = {"alex": {day: 1}}
+    engine._send_notification = AsyncMock(return_value=True)
+
+    assert await engine._notify("one", occurrence, ["alex"], "Due", "Exact text")
+    engine._send_notification.assert_not_awaited()
+    assert (
+        next(iter(engine.state["deferred_notifications"].values()))["message"]
+        == "Exact text"
+    )
+
+    engine.state["notification_counters"] = {}
+    await engine._process_deferred_notifications(datetime.now().astimezone())
+    engine._send_notification.assert_awaited_once()
+    assert engine.state["deferred_notifications"] == {}
+
+
+@pytest.mark.asyncio
+async def test_period_simulation_is_bounded_and_has_no_side_effects(hass):
+    task = {
+        "enabled": True,
+        "name": "Monday task",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {"type": "weekly", "weekdays": ["mon"], "time": "18:00:00"},
+    }
+    engine, _ = await _native_engine(hass, {"monday": task})
+    before = deepcopy(engine.state)
+    result = await engine.async_simulate_period(
+        {"start": "2026-08-17T00:00:00+02:00", "days": 7, "mode": "normal"}
+    )
+    assert result["summary"]["would_create"] == 1
+    assert result["timeline"][0]["assignee"] == "alex"
+    assert result["side_effects"] is False
+    assert engine.state == before
+
+
+@pytest.mark.asyncio
+async def test_manual_creations_capture_recent_state_context_for_rule_learning(hass):
+    """Only bounded local state metadata is attached to manual occurrences."""
+    task = {
+        "enabled": True,
+        "name": "Empty washer",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {"type": "manual"},
+    }
+    engine, _ = await _native_engine(hass, {"laundry": task})
+    now = datetime.now(UTC)
+    engine.state["state_observations"] = [
+        {
+            "entity_id": "binary_sensor.washer",
+            "from": "on",
+            "to": "off",
+            "at": (now - timedelta(minutes=5)).isoformat(),
+        }
+    ]
+    for index in range(3):
+        occurrence_id = await engine._create_occurrence(
+            "laundry", task, now + timedelta(days=index), manual=True
+        )
+        occurrence = engine.state["occurrences"][occurrence_id]
+        assert occurrence["manual_creation"] is True
+        assert (
+            occurrence["observation_context"][0]["entity_id"] == "binary_sensor.washer"
+        )
+    assert engine.ui_data()["observation_suggestions"][0]["samples"] == 3
 
 
 async def test_temporary_pause_is_enforced_by_the_creation_boundary(hass):
@@ -1304,3 +1474,78 @@ async def test_native_runtime_dependencies_reject_cycles_and_manual_blocked_stat
         await engine.async_set_occurrence_status(ids["two"], "blocked")
     with pytest.raises(vol.Invalid, match="blockieren"):
         await engine.async_set_occurrence_status(ids["one"], "in_progress")
+
+
+@pytest.mark.asyncio
+async def test_rule_simulator_uses_overrides_and_generated_counterexamples_without_side_effects(
+    hass,
+):
+    hass.states.async_set("sensor.outside_temperature", "8")
+    task = {
+        "enabled": True,
+        "name": "Frost check",
+        "assignee": "alex",
+        "assignment": {"type": "fixed"},
+        "schedule": {
+            "type": "weather_trigger",
+            "due_after": "00:00:00",
+            "cooldown": "24:00:00",
+            "skip_if_open": True,
+        },
+        "weather": {
+            "logic": "all",
+            "conditions": [
+                {
+                    "entity_id": "sensor.outside_temperature",
+                    "condition": "below",
+                    "threshold": 2,
+                }
+            ],
+        },
+    }
+    engine, _ = await _native_engine(hass, {"frost": task})
+    before = engine.state.copy()
+    result = await engine.async_simulate_task(
+        "frost",
+        {
+            "at": "2026-11-01T18:00:00+00:00",
+            "entity_states": {"sensor.outside_temperature": -1},
+            "condition_values": {"0": -1},
+            "mode": "normal",
+        },
+    )
+    assert result["would_create"]
+    assert result["assignee"] == "alex"
+    boundary = next(
+        item for item in result["counterexamples"] if item["id"] == "weather_boundary_0"
+    )
+    assert not boundary["would_create"]
+    assert result["side_effects"] is False
+    assert engine.state["occurrences"] == before["occurrences"] == {}
+
+
+@pytest.mark.asyncio
+async def test_gallery_install_maps_multiple_required_entities(hass):
+    hass.states.async_set("binary_sensor.kitchen_window", "off")
+    hass.states.async_set(
+        "weather.home",
+        "rainy",
+        {"precipitation_probability": 80},
+    )
+    engine, _ = await _native_engine(hass, {})
+    engine._save = AsyncMock()
+    await engine.async_install_gallery_template(
+        "rain_open_window",
+        "rain_window",
+        "alex",
+        mappings={
+            "window": "binary_sensor.kitchen_window",
+            "weather": "weather.home",
+        },
+    )
+    installed = engine.tasks["rain_window"]
+    assert (
+        installed["schedule"]["triggers"][0]["entity_id"]
+        == "binary_sensor.kitchen_window"
+    )
+    assert installed["weather"]["conditions"][0]["entity_id"] == "weather.home"

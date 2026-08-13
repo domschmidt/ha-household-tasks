@@ -4,6 +4,9 @@ import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from homeassistant.exceptions import Unauthorized
+
 from custom_components.household_tasks import ui
 
 
@@ -20,7 +23,10 @@ class _Connection:
 
 def _fake_engine() -> MagicMock:
     engine = MagicMock()
-    engine.ui_data.side_effect = lambda: {"revision": len(engine.ui_data.mock_calls)}
+    engine.ui_data.side_effect = lambda **_kwargs: {
+        "revision": len(engine.ui_data.mock_calls),
+        "tasks": {"waste": {}},
+    }
     engine.async_week_preview = AsyncMock(
         return_value=[{"task_id": "waste", "read_only": True}]
     )
@@ -57,6 +63,11 @@ def _fake_engine() -> MagicMock:
     engine.async_set_checklist_item = AsyncMock()
     engine.async_set_occurrence_dependencies = AsyncMock()
     engine.task_history.return_value = [{"type": "task_created"}]
+    engine.occurrence_decision_dossier.return_value = {"steps": []}
+    engine.async_reevaluate_occurrence = AsyncMock(return_value={"reevaluation": {}})
+    engine.async_simulate_task = AsyncMock(return_value={"would_create": True})
+    engine.async_simulate_period = AsyncMock(return_value={"side_effects": False})
+    engine.async_apply_entity_repair = AsyncMock()
     engine.async_claim_occurrence = AsyncMock()
     engine.async_set_household_mode = AsyncMock()
     engine.async_install_gallery_template = AsyncMock()
@@ -64,6 +75,11 @@ def _fake_engine() -> MagicMock:
     engine.async_snooze_occurrence = AsyncMock()
     engine.async_request_help = AsyncMock()
     engine.async_decline_occurrence = AsyncMock()
+    engine.async_promote_shadow_task = AsyncMock()
+    engine.async_preview_community_pack = AsyncMock(return_value={"pack_id": "demo"})
+    engine.async_install_community_template = AsyncMock()
+    engine.async_check_community_updates = AsyncMock(return_value={})
+    engine.async_take_control_of_community_task = AsyncMock()
     return engine
 
 
@@ -72,6 +88,64 @@ async def _call(command, hass, connection, message) -> None:
     result = inspect.unwrap(command)(hass, connection, message)
     if inspect.isawaitable(result):
         await result
+
+
+def test_private_direct_ids_are_denied_to_unlisted_household_users():
+    engine = _fake_engine()
+    engine.people = {"alex": {"user_id": "user-1"}, "sam": {"user_id": "user-2"}}
+    private_task = {
+        "assignee": "sam",
+        "visibility": {"level": "assignee", "admin_access": True},
+    }
+    engine.tasks = {"private": private_task}
+    engine.state = {
+        "occurrences": {
+            "secret": {"task_id": "private", "task": private_task, "assignee": "sam"}
+        }
+    }
+    connection = _Connection()
+    connection.user.is_admin = False
+
+    with pytest.raises(Unauthorized):
+        ui._require_task_visibility(connection, engine, "private")
+    with pytest.raises(Unauthorized):
+        ui._require_occurrence_visibility(connection, engine, "secret")
+
+
+async def test_advanced_policy_adapters_preserve_side_effect_free_and_repair_inputs(
+    hass,
+):
+    engine = _fake_engine()
+    connection = _Connection()
+    scenario = {"start": "2026-08-17T00:00:00+02:00", "days": 7}
+    with patch.object(ui, "_engine", return_value=engine):
+        await _call(
+            ui.websocket_simulate_period,
+            hass,
+            connection,
+            {"id": 1, "scenario": scenario},
+        )
+        await _call(
+            ui.websocket_repair_entity,
+            hass,
+            connection,
+            {
+                "id": 2,
+                "scope": "task",
+                "owner_id": "laundry",
+                "path": ["energy", "tariff_entity"],
+                "old_entity_id": "sensor.old_price",
+                "new_entity_id": "sensor.new_price",
+            },
+        )
+    engine.async_simulate_period.assert_awaited_once_with(scenario)
+    engine.async_apply_entity_repair.assert_awaited_once_with(
+        scope="task",
+        owner_id="laundry",
+        path=["energy", "tariff_entity"],
+        old_entity_id="sensor.old_price",
+        new_entity_id="sensor.new_price",
+    )
 
 
 async def test_caldav_admin_adapters_manage_settings_and_one_time_credentials(hass):
@@ -360,6 +434,79 @@ async def test_websocket_adapters_forward_advanced_panel_actions(hass):
         delegate_to="alex",
         until="2026-08-31T10:00:00+00:00",
         note="Holiday",
+    )
+
+
+async def test_rule_intelligence_and_community_adapters(hass):
+    """New rule APIs preserve security-sensitive parameters and side-effect boundaries."""
+    engine = _fake_engine()
+    connection = _Connection()
+    with patch.object(ui, "_engine", return_value=engine):
+        await _call(
+            ui.websocket_decision_dossier,
+            hass,
+            connection,
+            {"id": 1, "occurrence_id": "one"},
+        )
+        await _call(
+            ui.websocket_reevaluate_occurrence,
+            hass,
+            connection,
+            {"id": 2, "occurrence_id": "one"},
+        )
+        await _call(
+            ui.websocket_promote_shadow_task,
+            hass,
+            connection,
+            {"id": 3, "task_id": "laundry"},
+        )
+        await _call(
+            ui.websocket_community_preview,
+            hass,
+            connection,
+            {"id": 4, "url": "https://example.test/pack.json"},
+        )
+        await _call(
+            ui.websocket_community_install,
+            hass,
+            connection,
+            {
+                "id": 5,
+                "url": "https://example.test/pack.json",
+                "digest": "abc",
+                "template_id": "washer",
+                "task_id": "laundry",
+                "mappings": {"washer": "binary_sensor.washer"},
+                "assignee": "alex",
+                "trust_publisher": True,
+            },
+        )
+        await _call(ui.websocket_community_check_updates, hass, connection, {"id": 6})
+        await _call(
+            ui.websocket_community_take_control,
+            hass,
+            connection,
+            {"id": 7, "task_id": "laundry"},
+        )
+        await _call(
+            ui.websocket_simulate_task,
+            hass,
+            connection,
+            {"id": 8, "task_id": "laundry", "scenario": {"mode": "vacation"}},
+        )
+    assert [message_id for message_id, _ in connection.results] == list(range(1, 9))
+    engine.occurrence_decision_dossier.assert_called_once_with("one")
+    engine.async_reevaluate_occurrence.assert_awaited_once_with("one")
+    engine.async_promote_shadow_task.assert_awaited_once_with("laundry")
+    engine.async_simulate_task.assert_awaited_once_with("laundry", {"mode": "vacation"})
+    engine.async_install_community_template.assert_awaited_once_with(
+        "https://example.test/pack.json",
+        "abc",
+        "washer",
+        "laundry",
+        {"washer": "binary_sensor.washer"},
+        assignee="alex",
+        trust_publisher=True,
     )
 
 

@@ -135,3 +135,32 @@ def test_gallery_contains_weather_and_complex_household_presets():
     assert frost["schedule"]["type"] == "forecast_trigger"
     assert frost["assignment"]["type"] == "per_person"
     assert frost["repeat"]["mode"] == "once_per_season"
+
+
+def test_gallery_contains_extended_device_family_and_household_presets():
+    gallery = {entry["id"]: entry for entry in template_gallery()}
+    expected = {
+        "washer_finished",
+        "dryer_finished_fold",
+        "dishwasher_morning",
+        "rain_open_window",
+        "cold_open_window",
+        "smoke_detector_battery",
+        "printer_toner_low",
+        "freezer_temperature_alarm",
+        "waste_calendar_regex",
+        "package_announced",
+        "vacation_departure",
+        "vacation_return",
+        "guest_arrival_complete",
+        "month_end_household",
+        "school_morning",
+        "pet_medication",
+        "inventory_below_minimum",
+        "filter_runtime_maintenance",
+        "unusual_consumption",
+        "air_quality_ventilation",
+    }
+    assert expected <= set(gallery)
+    assert len(gallery["rain_open_window"]["required_entities"]) == 2
+    assert gallery["waste_calendar_regex"]["task"]["schedule"]["ignore_unmapped_events"]

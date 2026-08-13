@@ -16,6 +16,7 @@ escalation, and a multilingual management panel.
 
 [Deutsche Anleitung](docs/user-guide.md) ·
 [CalDAV / Apple Reminders](docs/caldav.md) ·
+[Community-Vorlagen](docs/community-templates.md) · Regelsimulator mit Zeitreise und Gegenbeispielen · lokale Wirkungs- und Rauschanalyse ·
 [Architecture](ARCHITECTURE.md) ·
 [Contributing](CONTRIBUTING.md) ·
 [Security](SECURITY.md)
@@ -32,6 +33,13 @@ escalation, and a multilingual management panel.
 - Escalations, snoozing, help requests, takeover, and actionable notifications.
 - Visual resource rules and unlimited, structured escalation stages.
 - Guided entity selection, inline creation, and side-effect-free rule previews.
+- Side-effect-free 1-to-31-day what-if laboratory for schedules, calendars,
+  state snapshots, assignments, and waiting outcomes.
+- State-gated and energy-aware tasks with tariff, PV-surplus, preferred-hour,
+  timeout, and audit information.
+- Quiet hours and interruption budgets with deferred delivery, digest routing,
+  and an explicit critical-priority bypass.
+- Server-enforced private tasks and confirmed self-healing entity suggestions.
 - Vacation and guest modes, seasonal rules, and curated household templates.
 - Open task marketplace with priorities, points, rewards, and voluntary help.
 - Optional automatic credit for routine work when nobody confirms completion within a configurable grace period.
@@ -61,7 +69,7 @@ escalation, and a multilingual management panel.
 
 ## Requirements
 
-- Home Assistant 2024.10.0 or newer
+- Home Assistant 2026.8.1 or newer (Python 3.14 runtime)
 - HACS 2.0 or newer for the recommended installation path
 - The Home Assistant mobile app for actionable push notifications
 - Optional: Home Assistant tags/NFC, calendar entities, presence entities, or

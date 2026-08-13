@@ -14,8 +14,62 @@ const callWS = async (message) => {
   if (message.type === "household_tasks/task_history") {
     return [{ type: "task_completed", occurred_at: "2026-07-28T18:12:00+02:00", actor: "alina", details: { status: "completed" } }];
   }
+  if (message.type === "household_tasks/decision_dossier") return {
+    occurrence_id: message.occurrence_id,
+    steps: [
+      { kind: "trigger", title: "Kalenderereignis erkannt", detail: "Restmüll", passed: true },
+      { kind: "assignment", title: "Zuständigkeit entschieden", detail: "Alina", passed: true },
+      { kind: "notification", title: "Benachrichtigung zugestellt", detail: "Alina", passed: true },
+    ],
+  };
+  if (message.type === "household_tasks/reevaluate_occurrence") return {
+    reevaluation: {
+      would_create: true,
+      activation: { message: "Die Aufgabenvorlage ist aktiv." },
+      mode: { message: "Normalbetrieb ist aktiv." },
+      season: { message: "Keine saisonale Einschränkung." },
+      weather: { message: "Keine Wetterbedingung." },
+    },
+  };
   if (message.type === "household_tasks/task_projection") return { risk: "low", message: "Eine Aufgabe" };
-  if (message.type === "household_tasks/preview_task") return { matches: true, message: "Regel ist gültig." };
+  if (message.type === "household_tasks/preview_task") return {
+    matches: true,
+    message: "Regel ist gültig.",
+    next_due: "2026-08-03T18:00:00+02:00",
+    timeline: [
+      { at: "2026-08-03T18:00:00+02:00", would_create: true, kind: "scheduled", reason: "Geplanter Auslösezeitpunkt", blocked_by: [] },
+      { at: "2026-08-10T18:00:00+02:00", would_create: true, kind: "scheduled", reason: "Geplanter Auslösezeitpunkt", blocked_by: [] },
+      { at: "2026-08-17T18:00:00+02:00", would_create: true, kind: "scheduled", reason: "Geplanter Auslösezeitpunkt", blocked_by: [] },
+    ],
+  };
+  if (message.type === "household_tasks/simulate_task") return {
+    task_id: message.task_id,
+    at: message.scenario.at,
+    would_create: true,
+    assignee: "dominik",
+    side_effects: false,
+    would_notify: ["dominik"],
+    steps: [
+      { kind: "activation", allowed: true, message: "Vorlage ist aktiv." },
+      { kind: "trigger", allowed: true, message: "Simulierter Auslöser passt." },
+      { kind: "assignment", allowed: true, message: "Dominik würde ausgewählt." },
+    ],
+    counterexamples: [
+      { id: "vacation_mode", title: "Urlaubsmodus aktiv", reason: "Prüft die Urlaubskonfiguration.", would_create: false },
+    ],
+  };
+  if (message.type === "household_tasks/simulate_period") return {
+    start: message.scenario.start,
+    end: "2026-08-24T00:00:00+02:00",
+    days: message.scenario.days,
+    side_effects: false,
+    summary: { evaluations: 3, would_create: 2, waiting: 1, by_person: { dominik: 2, alina: 0 } },
+    timeline: [
+      { source: "schedule", title: "Restmüll rausstellen", task_id: "waste", at: "2026-08-17T18:00:00+02:00", would_create: true, initial_status: "open", assignee: "dominik", steps: [] },
+      { source: "snapshot", title: "Waschmaschine starten", task_id: "washer", at: "2026-08-18T12:00:00+02:00", would_create: true, initial_status: "waiting", assignee: "dominik", steps: [] },
+      { source: "schedule", title: "Blocked", task_id: "blocked", at: "2026-08-19T18:00:00+02:00", would_create: false, initial_status: "open", assignee: null, steps: [] },
+    ],
+  };
   if (message.type === "household_tasks/add_attachment_chunk") return { complete: true };
   if (message.type === "household_tasks/caldav_create_credential") {
     const result = clone(state);
