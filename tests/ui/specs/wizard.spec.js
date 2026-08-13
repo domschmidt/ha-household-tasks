@@ -22,17 +22,21 @@ test("new tasks use a validated five-step wizard with generated IDs and preview"
 
   await name.fill("Fenster & Rahmen putzen");
   await expect(dialog.locator('[name="id"]')).toHaveValue("fenster_rahmen_putzen");
+  await expect(dialog.locator("[data-rule-sentence]")).toContainText("Fenster & Rahmen putzen");
   await dialog.getByRole("button", { name: "Weiter" }).click();
   await expect(dialog.getByRole("combobox", { name: "Zuweisung" })).toBeVisible();
   await dialog.getByRole("button", { name: "Weiter" }).click();
   await expect(dialog.getByRole("combobox", { name: "Zeitplan" })).toBeVisible();
   await dialog.getByRole("button", { name: "Weiter" }).click();
-  await expect(dialog.getByText(/Expertenoptionen/)).toBeVisible();
+  await expect(dialog.getByText("Optionale Verfeinerungen", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "Weiter" }).click();
 
   await expect(dialog.getByRole("heading", { name: "So wird die Aufgabe angelegt" })).toBeVisible();
   await expect(dialog.locator("[data-review-name]")).toHaveText("Fenster & Rahmen putzen");
   await expect(dialog.locator("[data-review-preview]")).toContainText("Eine Aufgabe");
+  await expect(dialog.locator("[data-review-rule]")).toContainText("jeden Mo um 18:00");
+  await expect(dialog.locator("[data-simulation-timeline] li")).toHaveCount(3);
+  await expect(dialog.locator("[data-review-changes]")).toContainText("Neue Vorlage");
   await dialog.getByRole("button", { name: "Speichern" }).click();
   await expect(dialog).toBeHidden();
 
@@ -67,6 +71,23 @@ test("existing tasks expose every editor section and keep their stable ID", asyn
   await expect(dialog.getByRole("button", { name: "Speichern" })).toBeVisible();
 });
 
+test("existing tasks require a concrete change review before saving", async ({ page }) => {
+  const panel = await openPanel(page);
+  await panel.getByRole("link", { name: "Aufgaben", exact: true }).click();
+  await panel.getByRole("button", { name: "Bearbeiten" }).first().click();
+  const dialog = panel.getByRole("dialog", { name: "Aufgabe bearbeiten" });
+  await dialog.getByRole("textbox", { name: "Name" }).fill("Frostschutz rechtzeitig prüfen");
+  await dialog.getByRole("button", { name: "Speichern" }).click();
+
+  await expect(dialog.getByRole("heading", { name: "So wird die Aufgabe angelegt" })).toBeVisible();
+  await expect(dialog.locator("[data-review-changes]")).toContainText("Name");
+  await expect(dialog.locator("[data-review-changes]")).toContainText("Frostschutz rechtzeitig prüfen");
+  expect(await page.evaluate(() => window.__householdTaskCalls.some((call) => call.type === "household_tasks/save_task"))).toBe(false);
+
+  await dialog.getByRole("button", { name: "Speichern" }).click();
+  await expect(dialog).toBeHidden();
+});
+
 test("task editor configures automatic credit with a default person and grace period", async ({ page }) => {
   const panel = await openPanel(page);
   await panel.getByRole("link", { name: "Aufgaben", exact: true }).click();
@@ -79,6 +100,8 @@ test("task editor configures automatic credit with a default person and grace pe
   await automatic.check();
   await dialog.getByRole("combobox", { name: "Standardperson" }).selectOption("alina");
   await dialog.getByRole("textbox", { name: "Kulanzzeit nach Fälligkeit" }).fill("06:30:00");
+  await dialog.getByRole("button", { name: "Speichern" }).click();
+  await expect(dialog.locator("[data-review-changes]")).toContainText("automatische Gutschrift");
   await dialog.getByRole("button", { name: "Speichern" }).click();
 
   const saveCall = await page.evaluate(() => window.__householdTaskCalls.findLast(
@@ -148,4 +171,30 @@ test("wizard navigation is localized in English", async ({ page }) => {
   await expect(dialog.getByRole("button", { name: "Next" })).toBeVisible();
   await expect(dialog.locator('[data-task-wizard-step="5"]')).toContainText("Review");
   await expect(dialog.getByRole("checkbox", { name: "Require the full checklist before completion" })).toBeVisible();
+});
+
+test("configuration guidance is localized in English", async ({ page }) => {
+  await page.goto("/tests/ui/harness/?lang=en&view=settings");
+  const panel = page.locator("household-tasks-panel");
+  await expect(panel.getByRole("heading", { name: "What would you like to configure?" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "What currently applies to the household?" })).toBeVisible();
+  await expect(panel.getByText("Show optional automation settings", { exact: true })).toBeVisible();
+});
+
+test("new automatic rules can remain safely in shadow mode until explicit promotion", async ({ page }) => {
+  const { dialog } = await openWizard(page);
+  await dialog.locator('[name="name"]').fill("Waschmaschine leeren");
+  await dialog.getByRole("button", { name: "Weiter" }).click();
+  await dialog.getByRole("button", { name: "Weiter" }).click();
+  await dialog.getByRole("button", { name: "Weiter" }).click();
+  await dialog.getByText("Optionale Verfeinerungen").click();
+  await dialog.getByLabel("Neue automatische Auslösungen nur beobachten").check();
+  await expect(dialog.getByLabel("Prüfung empfohlen ab")).toBeVisible();
+  await dialog.getByRole("button", { name: "Weiter" }).click();
+  await expect(dialog.getByText("Shadow Mode").last()).toBeVisible();
+  await dialog.getByRole("button", { name: "Speichern" }).click();
+  const calls = await page.evaluate(() => window.__householdTaskCalls);
+  const save = calls.findLast((item) => item.type === "household_tasks/save_task");
+  expect(save.task.shadow.enabled).toBe(true);
+  expect(save.task.shadow.review_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 });

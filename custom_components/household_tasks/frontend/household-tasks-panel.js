@@ -15,6 +15,7 @@ const HT_PANEL_VIEW_URLS = Object.freeze({
   mine: "/haushaltsaufgaben?view=mine",
   week: "/haushaltsaufgaben?view=week",
   tasks: "/haushaltsaufgaben?view=tasks",
+  rules: "/haushaltsaufgaben?view=rules",
   people: "/haushaltsaufgaben?view=people",
   analytics: "/haushaltsaufgaben?view=analytics",
   ranking: "/haushaltsaufgaben?view=ranking",
@@ -1096,6 +1097,7 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _render() {
     const dirtyForms = this._captureDirtyForms();
+    const openDetails = this._captureOpenDetails();
     const data = this._data;
     const modeBadge = this._modeBadge(data);
     this.shadowRoot.innerHTML = `
@@ -1119,6 +1121,7 @@ class HouseholdTasksPanel extends HTMLElement {
           ${this._navButton("mine", "Meine Aufgaben")}
           ${this._navButton("week", "Wochenplan")}
           ${this._navButton("tasks", "Aufgaben")}
+          ${this._navButton("rules", "Regeln")}
           ${this._navButton("people", "Personen")}
           ${this._navButton("analytics", "Auswertung")}
           ${this._navButton("history", "Verlauf")}
@@ -1134,9 +1137,22 @@ class HouseholdTasksPanel extends HTMLElement {
     `;
     this._bind();
     this._restoreDirtyForms(dirtyForms);
+    this._restoreOpenDetails(openDetails);
     this._localize();
     this._enhanceAccessibility();
     this._schedulePauseRefresh();
+  }
+
+  _captureOpenDetails() {
+    return new Set([...this.shadowRoot.querySelectorAll("details[data-disclosure][open]")]
+      .map((details) => details.dataset.disclosure));
+  }
+
+  _restoreOpenDetails(openDetails) {
+    for (const key of openDetails) {
+      const details = this.shadowRoot.querySelector(`details[data-disclosure="${CSS.escape(key)}"]`);
+      if (details) details.open = true;
+    }
   }
 
   _captureDirtyForms() {
@@ -1203,6 +1219,7 @@ class HouseholdTasksPanel extends HTMLElement {
     if (this._view === "mine") return this._renderMine();
     if (this._view === "week") return this._renderWeek();
     if (this._view === "tasks") return this._renderTasks();
+    if (this._view === "rules") return this._renderRules();
     if (this._view === "people") return this._renderPeople();
     if (this._view === "analytics") return this._renderAnalytics();
     if (this._view === "history") return this._renderHistory();
@@ -1482,7 +1499,7 @@ class HouseholdTasksPanel extends HTMLElement {
         ${marketBadges}
         ${item.assignment_reason ? `<details class="assignment-explanation"><summary>Warum wurde mir das zugewiesen?</summary><p>${this._e(this._assignmentReason(item.assignment_reason))}</p></details>` : ""}
         ${item.help_status === "requested" ? `<p class="help-status">Hilfe wurde im Haushalt angefragt.</p>` : ""}
-        ${item.waiting_for ? `<p class="help-status">Wartet auf Anwesenheit.</p>` : ""}
+        ${item.waiting_for ? `<p class="help-status">${item.waiting_for.type === "presence" ? "Wartet auf Anwesenheit." : `Wartet auf ${item.waiting_for.policies?.includes("energy") ? "ein passendes Energiefenster" : "den konfigurierten Zustand"}.`}</p>` : ""}
         ${dueWindow}
         ${attachmentCount}
         ${dependencies}
@@ -1635,6 +1652,77 @@ class HouseholdTasksPanel extends HTMLElement {
       <div class="cards">${taskCards}</div>`;
   }
 
+  _renderRules() {
+    const graph = this._data.rule_graph || { nodes: [], edges: [], issues: [] };
+    const insights = this._data.rule_insights || { effects: {}, noise_findings: [], improvement_suggestions: [] };
+    const suggestions = this._data.observation_suggestions || [];
+    const evaluations = this._data.shadow_evaluations || [];
+    const shadowTasks = Object.entries(this._data.tasks || {})
+      .filter(([, task]) => task.shadow?.enabled);
+    const observationMarkup = suggestions.length
+      ? suggestions.map((item) => `<article class="rule-suggestion"><div><span class="eyebrow">${item.samples} BEOBACHTUNGEN</span><h3>${this._e(item.task_name)}</h3><p>${this._e(item.entity_id)}: ${this._e(item.from)} → ${this._e(item.to)} · typisch nach ${this._e(this._formatSeconds(item.typical_delay_seconds))}</p></div>${this._data.is_admin ? `<button data-observation-rule="${this._e(item.id)}">Als Regel prüfen</button>` : ""}</article>`).join("")
+      : '<p class="positive">Noch kein wiederkehrendes Muster aus manuellen Aufgaben erkannt.</p>';
+    const shadowMarkup = shadowTasks.length
+      ? shadowTasks.map(([taskId, task]) => {
+        const rows = evaluations.filter((item) => item.task_id === taskId);
+        const ready = task.shadow?.review_at && new Date(task.shadow.review_at) <= new Date();
+        return `<article class="shadow-card"><div><span class="status ${ready ? "home" : ""}">${ready ? "Bereit zur Prüfung" : "Beobachtet"}</span><h3>${this._e(task.name)}</h3><p>${rows.length} virtuelle Auslösungen · keine Aufgaben oder Benachrichtigungen erzeugt</p>${rows.slice(-3).reverse().map((row) => `<small>${new Date(row.due).toLocaleString(this._locale())} · ${this._e(this._data.people[row.assignee]?.name || "Zuweisung noch offen")}</small>`).join("")}</div>${this._data.is_admin ? `<div class="actions"><button data-edit-task="${this._e(taskId)}">Regel bearbeiten</button><button class="primary" data-promote-shadow="${this._e(taskId)}">Produktiv schalten</button></div>` : ""}</article>`;
+      }).join("")
+      : '<p class="positive">Aktuell läuft keine Regel im Shadow Mode.</p>';
+    const issues = graph.issues.length
+      ? `<div class="graph-issues">${graph.issues.map((issue) => `<p class="${this._e(issue.severity)}"><strong>${issue.type === "cycle" ? "Zyklus" : "Möglicher Konflikt"}</strong> ${this._e(issue.message)} ${this._e((issue.task_ids || []).join(" → "))}</p>`).join("")}</div>`
+      : '<p class="positive">Keine Zyklen oder offensichtlichen Regelduplikate erkannt.</p>';
+    const effects = Object.values(insights.effects || {}).sort((a, b) => b.generated - a.generated).map((item) => `<article class="effect-card"><div><h3>${this._e(item.name)}</h3><p>${item.generated} erzeugt · ${item.completed} erledigt · ${item.overdue} überfällig</p><small>${item.completion_rate == null ? "Noch keine belastbare Quote" : `${item.completion_rate} % erledigt`}${item.median_delay_minutes == null ? "" : ` · Median ${Math.round(item.median_delay_minutes)} Min. nach Fälligkeit`} · ${item.virtual_triggers} virtuelle Treffer</small></div><button data-rule-simulator="${this._e(item.task_id)}">Simulieren</button></article>`).join("") || '<p class="positive">Noch keine Wirkungsmessung verfügbar.</p>';
+    const noise = (insights.noise_findings || []).map((item) => `<article class="insight-finding ${this._e(item.severity)}"><strong>${this._e(this._data.tasks[item.task_id]?.name || item.task_id)}</strong><p>${this._e(item.message)}</p></article>`).join("") || '<p class="positive">Keine auffällig lauten oder dauerhaft ignorierten Regeln erkannt.</p>';
+    const improvements = (insights.improvement_suggestions || []).map((item, index) => `<article class="insight-finding"><div><strong>${this._e(item.title)}</strong><p>${this._e(this._data.tasks[item.task_id]?.name || item.task_id)} · ${this._e(item.message)}</p></div>${this._data.is_admin ? `<button data-improvement="${index}">Vorschlag prüfen</button>` : ""}</article>`).join("") || '<p class="positive">Aktuell gibt es keine datenbasierten Verbesserungsvorschläge.</p>';
+    return `<div class="toolbar"><div><div class="eyebrow">REGELINTELLIGENZ</div><h2>Regeln verstehen und sicher verbessern</h2><p>Beobachtungen, virtuelle Testläufe und Abhängigkeiten bleiben vollständig lokal.</p></div>${this._data.is_admin ? '<div class="toolbar-actions"><button id="open-what-if-lab">Was-wäre-wenn-Labor</button><button class="primary" id="open-rule-simulator">Regel simulieren</button></div>' : ""}</div>
+      <section class="rules-section"><header><div><h3>Wirkung der Regeln</h3><p>Auslösungen, Erledigungen, Verzögerungen und virtuelle Treffer der letzten 90 Tage.</p></div></header><div class="effect-list">${effects}</div></section>
+      <section class="rules-section"><header><div><h3>Rauschfilter</h3><p>Findet Regeln, die häufig auslösen, aber selten erledigt werden oder Rückstände erzeugen.</p></div></header><div class="insight-list">${noise}</div></section>
+      <section class="rules-section"><header><div><h3>Automatische Verbesserungsvorschläge</h3><p>Erkannte Gewohnheiten werden als prüfbarer Entwurf geöffnet und niemals automatisch gespeichert.</p></div></header><div class="insight-list">${improvements}</div></section>
+      <section class="rules-section"><header><div><h3>Aus Beobachtungen lernen</h3><p>Nach mindestens drei ähnlichen manuellen Abläufen wird ein prüfbarer Regelentwurf angeboten.</p></div></header><div class="rule-suggestion-list">${observationMarkup}</div></section>
+      <section class="rules-section"><header><div><h3>Shadow Mode</h3><p>Virtuelle Auslösungen zeigen Zeitpunkt, Zuweisung und geplante Benachrichtigungen – ohne Seiteneffekte.</p></div></header><div class="shadow-list">${shadowMarkup}</div></section>
+      <section class="rules-section"><header><div><h3>Abhängigkeitsgraph</h3><p>Entitäten steuern Regeln, Regeln erzeugen Aufgaben und Aufgaben können weitere Regeln starten oder blockieren.</p></div></header>${issues}${this._ruleGraphSvg(graph)}${this._ruleGraphList(graph)}</section>`;
+  }
+
+  _formatSeconds(seconds) {
+    const minutes = Math.round(Number(seconds || 0) / 60);
+    return minutes < 1 ? "sofort" : `${minutes} Min.`;
+  }
+
+  _ruleGraphSvg(graph) {
+    if (!graph.nodes.length) return '<div class="empty card"><p>Noch keine Regeln für den Graphen vorhanden.</p></div>';
+    const order = ["entity", "rule", "task", "person"];
+    const labels = { entity: "Entität", rule: "Regel", task: "Aufgabe", person: "Person" };
+    const columns = Object.fromEntries(order.map((kind, index) => [kind, { x: 30 + index * 250, nodes: graph.nodes.filter((node) => node.kind === kind) }]));
+    const positions = {};
+    let maxRows = 1;
+    for (const column of Object.values(columns)) {
+      maxRows = Math.max(maxRows, column.nodes.length);
+      column.nodes.forEach((node, index) => { positions[node.id] = { x: column.x, y: 55 + index * 76 }; });
+    }
+    const width = 960;
+    const height = 90 + maxRows * 76;
+    const edges = graph.edges.map((edge) => {
+      const from = positions[edge.source]; const to = positions[edge.target];
+      if (!from || !to) return "";
+      return `<path class="edge ${this._e(edge.kind)}" d="M ${from.x + 180} ${from.y + 22} C ${from.x + 215} ${from.y + 22}, ${to.x - 35} ${to.y + 22}, ${to.x} ${to.y + 22}"><title>${this._e(edge.label)}</title></path>`;
+    }).join("");
+    const nodes = graph.nodes.map((node) => {
+      const point = positions[node.id];
+      const label = String(node.label).length > 24 ? `${String(node.label).slice(0, 23)}…` : node.label;
+      return `<g class="node ${this._e(node.kind)}" transform="translate(${point.x} ${point.y})"><rect width="180" height="44" rx="10"></rect><text x="12" y="18">${this._e(labels[node.kind] || node.kind)}</text><text class="node-label" x="12" y="35">${this._e(label)}</text><title>${this._e(node.label)}</title></g>`;
+    }).join("");
+    return `<div class="rule-graph-scroll" aria-hidden="true"><svg class="rule-graph" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${edges}${nodes}</svg></div>`;
+  }
+
+  _ruleGraphList(graph) {
+    return `<details class="graph-accessible"><summary>Graph als Text anzeigen</summary><ul>${graph.edges.map((edge) => {
+      const source = graph.nodes.find((node) => node.id === edge.source)?.label || edge.source;
+      const target = graph.nodes.find((node) => node.id === edge.target)?.label || edge.target;
+      return `<li>${this._e(source)} <strong>${this._e(edge.label)}</strong> ${this._e(target)}</li>`;
+    }).join("") || "<li>Keine Verbindungen</li>"}</ul></details>`;
+  }
+
   _galleryStrip(gallery) {
     if (!gallery.length) return "";
     const entries = gallery.slice(0, 3).map((entry) =>
@@ -1652,6 +1740,7 @@ class HouseholdTasksPanel extends HTMLElement {
     const nfcLabel = task.nfc?.tag_id ? " · NFC" : "";
     let status = this._t("Aktiv");
     if (task.enabled === false) status = this._t("Deaktiviert");
+    else if (task.shadow?.enabled) status = "Shadow Mode";
     else if (pausedUntil) status = `${this._t("Pausiert bis")} ${pausedUntil.toLocaleString(this._locale(), { dateStyle: "short", timeStyle: "short" })}`;
     const description = task.description ? `<p class="description">${this._e(task.description)}</p>` : "";
     const habit = this._taskHabit(id);
@@ -1666,12 +1755,13 @@ class HouseholdTasksPanel extends HTMLElement {
     if (pausedUntil) pauseAction = `<button data-resume-task="${this._e(id)}">Jetzt fortsetzen</button>`;
     else if (task.enabled !== false) pauseAction = `<button data-pause-task="${this._e(id)}">Temporär pausieren</button>`;
     const adminActions = this._data.is_admin
-      ? `${pauseAction}<button data-edit-task="${this._e(id)}">Bearbeiten</button><button class="danger-button" data-delete-task="${this._e(id)}">Löschen</button>`
+      ? `${pauseAction}<button data-edit-task="${this._e(id)}">Bearbeiten</button>${task.community?.managed ? `<button data-community-control="${this._e(id)}">Vorlage übernehmen</button>` : ""}${task.shadow?.enabled ? `<button class="primary" data-promote-shadow="${this._e(id)}">Produktiv schalten</button>` : ""}<button class="danger-button" data-delete-task="${this._e(id)}">Löschen</button>`
       : "";
     return `<article class="config-card ${disabledClass}">
       <div class="card-top"><span class="avatar">${this._e(assignment.icon)}</span>
       <div><h3>${this._e(task.name)}</h3><p>${this._e(assignment.label)} · ${this._e(this._scheduleLabel(task.schedule))}${nfcLabel}</p></div>
       <span class="status">${this._e(status)}</span></div>
+      ${task.community ? `<p class="community-origin">Community · ${this._e(task.community.pack_id)} ${this._e(task.community.version)}</p>` : ""}
       ${description}${habit}${market}${automaticCompletion}
       <div class="actions">${favorite}
         <button data-create="${this._e(id)}" ${createDisabled}>Jetzt erzeugen</button>
@@ -1821,11 +1911,14 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _renderHistory() {
+    const suggestions = this._data.observation_suggestions || [];
+    const suggestedByTask = new Map(suggestions.map((item) => [item.task_id, item]));
     const resolved = this._data.occurrences
       .filter((item) => item.resolved)
       .sort((a, b) => new Date(b.resolved_at) - new Date(a.resolved_at))
       .slice(0, 60);
     return `<div class="toolbar"><div><h2>Verlauf</h2><p>Erledigte Aufgaben der letzten 90 Tage</p></div></div>
+      ${suggestions.length ? `<aside class="observation-banner"><div><span class="eyebrow">MUSTER ERKANNT</span><strong>${suggestions.length} mögliche automatische ${suggestions.length === 1 ? "Regel" : "Regeln"}</strong><p>Die Vorschläge beruhen auf wiederholten manuellen Aufgaben nach ähnlichen Zustandswechseln.</p></div><button data-view="rules">Vorschläge prüfen</button></aside>` : ""}
       ${resolved.length ? `<div class="timeline">${resolved.map((item) => {
         const attachments = this._data.attachments?.[item.id] || [];
         const evidence = attachments.length
@@ -1838,10 +1931,11 @@ class HouseholdTasksPanel extends HTMLElement {
           completedBy = ` · ${preposition} ${this._e(this._data.people[item.completed_by].name)}`;
         }
         if (item.completion_source === "automatic") completedBy += ` · ${this._t("automatisch gutgeschrieben")}`;
+        const suggestion = suggestedByTask.get(item.task_id);
         return `<div class="history-row"><span class="check">✓</span><div class="history-main"><h3>${this._e(this._plainTitle(item.title))}</h3>
         <p>${status} ${new Date(item.resolved_at).toLocaleString(this._locale(), { dateStyle: "medium", timeStyle: "short" })}
         ${completedBy}</p></div>
-        <div class="history-actions">${evidence}<button data-task-history="${this._e(item.id)}">Akte öffnen</button></div></div>`;
+        <div class="history-actions">${evidence}${suggestion && this._data.is_admin ? `<button data-observation-rule="${this._e(suggestion.id)}">Daraus eine Regel machen</button>` : ""}<button data-task-history="${this._e(item.id)}">Akte öffnen</button></div></div>`;
       }).join("")}</div>`
       : `<div class="empty card"><h2>Noch kein Verlauf</h2><p>Erledigte Aufgaben erscheinen hier.</p></div>`}`;
   }
@@ -1870,8 +1964,23 @@ class HouseholdTasksPanel extends HTMLElement {
     const modeControls = this._modeControls(householdMode);
     const healthMarkup = this._healthMarkup(health);
     const discoveryMarkup = this._discoveryMarkup(suggestions);
+    const recommendationsMarkup = this._configurationRecommendations(suggestions);
     const digestChecked = digest.enabled ? "checked" : "";
-    return `<div class="toolbar"><div><h2>Einstellungen</h2><p>Globale Regeln und Datenquelle</p></div></div>
+    return `<div class="toolbar"><div><h2>Einstellungen</h2><p>Haushaltsverhalten, Automatisierung und verbundene Apps an einem Ort.</p></div></div>
+      <section class="configuration-guide" aria-labelledby="configuration-guide-title">
+        <div><div class="eyebrow">ORIENTIERUNG</div><h3 id="configuration-guide-title">Was möchtest du einrichten?</h3>
+        <p>Die meisten Haushalte benötigen nur Personen und Aufgabenvorlagen. Alles Weitere ist optional und kann später ergänzt werden.</p></div>
+        <nav class="settings-jump-links" aria-label="Einstellungsbereiche">
+          <a href="#settings-operation">Aktueller Betrieb <small>Urlaub &amp; Gesundheit</small></a>
+          <a href="#settings-connections">Apps verbinden <small>CalDAV &amp; Autodiscovery</small></a>
+          <a href="#settings-automation">Automatik verfeinern <small>Hinweise, Geräte &amp; Regeln</small></a>
+          <a href="#settings-data">Daten verwalten <small>Sichern &amp; importieren</small></a>
+        </nav>
+        <label class="settings-search">Einstellungen durchsuchen<input type="search" id="settings-search" placeholder="Zum Beispiel Kalender, NFC oder Benachrichtigung"><span class="hint">Passende Bereiche werden automatisch geöffnet; deine Konfiguration wird dabei nicht verändert.</span><output id="settings-search-result" aria-live="polite"></output></label>
+        <ol class="configuration-path"><li><b>1</b><span><strong>Personen anlegen</strong><small>Push und Anwesenheit verbinden</small></span></li><li><b>2</b><span><strong>Vorlage auswählen</strong><small>Mit einem einfachen Zeitplan starten</small></span></li><li><b>3</b><span><strong>Optional erweitern</strong><small>Nur benötigte Integrationen öffnen</small></span></li></ol>
+      </section>
+      ${recommendationsMarkup}
+      <section class="settings-group" id="settings-operation"><header><div><span class="eyebrow">AKTUELLER BETRIEB</span><h3>Was gilt gerade im Haushalt?</h3><p>Diese Einstellungen wirken unmittelbar auf neue Aufgaben und zeigen Konfigurationsprobleme.</p></div><span class="group-count">2 Bereiche</span></header>
       <article class="settings-card mode-card">
         <h3>Urlaubs- und Gastmodus</h3>
         <p>Steuert zentral, ob automatische Aufgaben normal laufen, reduziert, pausiert oder an eine Vertretung gegeben werden.</p>
@@ -1882,12 +1991,18 @@ class HouseholdTasksPanel extends HTMLElement {
         ${this._data.is_admin ? `<button id="refresh-health">Neu prüfen</button>` : ""}</div>
         ${healthMarkup}
       </article>
+      </section>
+      <section class="settings-group" id="settings-connections"><header><div><span class="eyebrow">VERBINDUNGEN</span><h3>Apps und Home Assistant verbinden</h3><p>Optional: Aufgaben in Apple Erinnerungen nutzen oder geeignete HA-Entitäten vorschlagen lassen.</p></div><span class="group-count">3 Bereiche</span></header>
       ${this._caldavSettings(caldav)}
+      ${this._communityTemplateSettings()}
       <article class="settings-card">
         <h3>Home-Assistant-Autodiscovery</h3>
         <p>Lokale Entitäten werden auf mögliche Geräte-, Kalender-, Batterie- und Wartungsregeln geprüft. Es werden keine Daten übertragen.</p>
         ${discoveryMarkup}
       </article>
+      </section>
+      <section class="settings-group" id="settings-automation"><header><div><span class="eyebrow">AUTOMATIK &amp; KOMFORT</span><h3>Wie soll das System im Alltag reagieren?</h3><p>Die Standardwerte funktionieren ohne weitere Anpassung. Öffne diese Sammlung nur, wenn du das Verhalten gezielt verfeinern möchtest.</p></div><span class="group-count">6 optional</span></header>
+      <details class="settings-collection" data-disclosure="optional-automation"><summary><span>Optionale Automatik-Einstellungen anzeigen</span><small>Benachrichtigungen, Eskalation, Sensorregeln, Wochenabschluss, NFC und Drucker</small></summary><div class="settings-collection-body">
       <article class="settings-card">
         <h3>Intelligente Benachrichtigungsbündelung</h3>
         <p>Routinehinweise werden pro Person gesammelt. Kritische Aufgaben, Hilferufe und offene Übernahmen bleiben sofort sichtbar.</p>
@@ -1964,6 +2079,8 @@ class HouseholdTasksPanel extends HTMLElement {
           <div class="full"><button class="primary" type="submit">Druckerüberwachung speichern</button></div>
         </form>` : `<p>${printer.enabled ? "Überwachung aktiv" : "Überwachung nicht aktiviert"}</p>`}
       </article>
+      </div></details></section>
+      <section class="settings-group" id="settings-data"><header><div><span class="eyebrow">DATEN &amp; SICHERHEIT</span><h3>Konfiguration sichern und übertragen</h3><p>Hier verwaltest du ausschließlich Einstellungen. Laufende und erledigte Aufgaben bleiben getrennt.</p></div><span class="group-count">1 Bereich</span></header>
       <article class="settings-card">
         <h3>Konfigurationsquelle</h3>
         <p>Personen, Vorlagen und Eskalationen werden vollständig im Home-Assistant-Speicher verwaltet.</p>
@@ -1974,7 +2091,27 @@ class HouseholdTasksPanel extends HTMLElement {
           <div class="actions"><button id="export-config">Exportieren</button><button id="import-config">Importieren</button>
           <input id="import-file" class="hidden" type="file" accept="application/json,.json"></div></div>` : ""}
         ${this._data.is_admin ? `<button id="reset-config" class="danger-button">Auf Ausgangswerte zurücksetzen</button>` : ""}
-      </article>`;
+      </article></section>`;
+  }
+
+  _configurationRecommendations(suggestions) {
+    const de = householdTasksLocale(this._hass) === "de";
+    const recommendations = suggestions.slice(0, 3).map((item) => ({
+      title: item.reason || "Passende Home-Assistant-Entität erkannt",
+      detail: `${item.name} · ${item.entity_id}`,
+      action: `<button data-install-discovery="${this._e(item.id)}">Vorschlag einrichten</button>`,
+    }));
+    const missingPresence = Object.values(this._data.people || {})
+      .filter((person) => !person.presence).length;
+    if (missingPresence) {
+      recommendations.push({
+        title: de ? `${missingPresence} Personen ohne Anwesenheit` : `${missingPresence} people without presence tracking`,
+        detail: de ? "Anwesenheitsabhängige Aufgaben können diese Personen noch nicht berücksichtigen." : "Presence-dependent tasks cannot consider these people yet.",
+        action: `<button data-recommend-view="people">${de ? "Personen prüfen" : "Review people"}</button>`,
+      });
+    }
+    if (!recommendations.length) return "";
+    return `<section class="recommendation-panel" aria-labelledby="recommendation-title"><div><span class="eyebrow">FÜR DEIN ZUHAUSE</span><h3 id="recommendation-title">Sinnvolle nächste Schritte</h3><p>Diese Vorschläge entstehen ausschließlich aus deiner lokalen Home-Assistant-Konfiguration.</p></div><div class="recommendation-list">${recommendations.slice(0, 3).map((item) => `<article><div><strong>${this._e(item.title)}</strong><small>${this._e(item.detail)}</small></div>${item.action}</article>`).join("")}</div></section>`;
   }
 
   _caldavCredentialRow(item) {
@@ -1995,7 +2132,7 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _caldavAdminForms(settings, people) {
     if (!this._data.is_admin) return "";
-    return `<details class="advanced-fields" open><summary>Serveroptionen</summary>
+    return `<details class="advanced-fields" data-disclosure="caldav-server"><summary><span>Serveroptionen</span><small>Aktivierung, Listenname, Client-Rechte und Aufbewahrung</small></summary>
       <form id="caldav-settings-form" class="form-grid">
         <label class="checkbox full"><input name="enabled" type="checkbox" ${settings.enabled ? "checked" : ""}> CalDAV-Server aktivieren<span class="hint">Ohne gültiges App-Passwort ist auch ein aktiver Server nicht nutzbar.</span></label>
         <label class="checkbox full"><input name="require_tls" type="checkbox" ${settings.require_tls ? "checked" : ""}> HTTPS erzwingen<span class="hint">Für produktive Systeme unbedingt aktiviert lassen. Nur für isolierte lokale Tests abschalten.</span></label>
@@ -2012,7 +2149,7 @@ class HouseholdTasksPanel extends HTMLElement {
         <div class="full"><button class="primary" type="submit">CalDAV-Einstellungen speichern</button></div>
       </form>
     </details>
-    <details class="advanced-fields"><summary>App-Passwort anlegen</summary>
+    <details class="advanced-fields" data-disclosure="caldav-credential"><summary>App-Passwort anlegen</summary>
       <form id="caldav-credential-form" class="form-grid">
         <label>Bezeichnung<input name="label" required maxlength="100" placeholder="Mein iPhone"></label>
         <label>Person<select name="person_id"><option value="">Keine feste Person</option>${people.map(([id, person]) => `<option value="${this._e(id)}">${this._e(person.name)}</option>`).join("")}</select><span class="hint">Für persönliche Listen und neue Aufgaben erforderlich.</span></label>
@@ -2041,7 +2178,7 @@ class HouseholdTasksPanel extends HTMLElement {
       ${settings.require_tls && !String(caldav.server_url || "").startsWith("https://") ? `<div class="health-summary warning">HTTPS ist vorgeschrieben, aber die konfigurierte Home-Assistant-URL ist nicht HTTPS. Externer Zugriff wird abgewiesen.</div>` : ""}
       ${this._caldavAdminForms(settings, people)}
       <h4>Aktive Zugänge</h4><div class="caldav-credentials">${credentialRows}</div>
-      <details class="advanced-fields"><summary>Einrichtung und Synchronisationsverhalten</summary>
+      <details class="advanced-fields" data-disclosure="caldav-help"><summary>Einrichtung und Synchronisationsverhalten</summary>
         <ol class="setup-steps"><li>In iOS/iPadOS <strong>Einstellungen → Apps → Erinnerungen → Accounts → Account hinzufügen → Andere → CalDAV-Account</strong> öffnen.</li><li>Als Server die oben angezeigte HTTPS-URL und das einmalig erzeugte Paar aus Benutzername und App-Passwort verwenden.</li><li>SSL aktivieren. Änderungen werden offline vorgemerkt und nach Wiederverbindung synchronisiert.</li><li>Bei parallelen Änderungen verhindert der ETag eine stille Überschreibung; der Client lädt die aktuelle Fassung neu.</li></ol>
         <p class="hint">Jedes Gerät erhält ein eigenes, widerrufbares App-Passwort. Verwende niemals dein Home-Assistant-Kennwort.</p>
       </details>
@@ -2095,6 +2232,30 @@ class HouseholdTasksPanel extends HTMLElement {
       return `<div class="${this._e(finding.severity)}"><strong>${this._e(finding.severity)}</strong><span>${this._e(finding.message)}</span>${action}</div>`;
     }).join("");
     return `<div class="health-summary ${this._e(health.status)}">${summary}</div><div class="health-list">${findings}</div>`;
+  }
+
+  _showEntityRepair(action) {
+    const suggestions = action.suggestions || [];
+    if (!suggestions.length) return this._toast("Keine sichere Ersatz-Entität gefunden.", true);
+    const modal = this.shadowRoot.querySelector("#modal");
+    const returnFocus = this.shadowRoot.activeElement;
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card small"><div class="modal-head"><div><div class="eyebrow">SELBSTHEILENDE KONFIGURATION</div><h2>Entität ersetzen</h2><p><code>${this._e(action.old_entity_id)}</code> fehlt. Wähle einen geprüften Kandidaten; gespeichert wird erst nach deiner Bestätigung.</p></div><button class="icon-button close" aria-label="Schließen">×</button></div><form id="entity-repair-form" class="form-grid"><label class="full">Ersatz-Entität<select name="new_entity_id">${suggestions.map((item) => `<option value="${this._e(item.entity_id)}">${this._e(item.friendly_name || item.entity_id)} · ${Math.round(item.score * 100)} % ähnlich</option>`).join("")}</select></label><div class="full health-summary warning">Die Reparatur ändert ausschließlich dieses eine Feld. Regeln und offene Aufgaben werden nicht neu erzeugt.</div><div class="full modal-actions"><button type="button" class="cancel">Abbrechen</button><button class="primary" type="submit">Ersetzen und prüfen</button></div></form></div></div>`;
+    this._localize(modal);
+    this._enhanceAccessibility(modal);
+    const close = () => { modal.replaceChildren(); returnFocus?.focus(); };
+    modal.querySelector(".close").onclick = close; modal.querySelector(".cancel").onclick = close;
+    this._activateDialog(modal, close);
+    modal.querySelector("#entity-repair-form").onsubmit = async (event) => {
+      event.preventDefault();
+      try {
+        await this._call("repair_entity", {
+          scope: action.scope, owner_id: action.owner_id, path: action.path,
+          old_entity_id: action.old_entity_id,
+          new_entity_id: new FormData(event.currentTarget).get("new_entity_id"),
+        });
+        close(); this._toast("Entität ersetzt und Konfiguration erneut geprüft");
+      } catch (error) { this._toast(this._errorText(error), true); }
+    };
   }
 
   _discoveryMarkup(suggestions) {
@@ -2276,6 +2437,21 @@ class HouseholdTasksPanel extends HTMLElement {
     });
     this.shadowRoot.querySelectorAll("[data-explain-task]").forEach((b) => b.onclick = () => this._showWhyNot(b.dataset.explainTask));
     this.shadowRoot.querySelectorAll("[data-edit-task]").forEach((b) => b.onclick = () => this._showTaskEditor(b.dataset.editTask));
+    this.shadowRoot.querySelectorAll("[data-observation-rule]").forEach((button) => button.onclick = () => this._showObservationRule(button.dataset.observationRule));
+    this.shadowRoot.querySelector("#open-rule-simulator")?.addEventListener("click", () => this._showRuleSimulator());
+    this.shadowRoot.querySelector("#open-what-if-lab")?.addEventListener("click", () => this._showWhatIfLab());
+    this.shadowRoot.querySelectorAll("[data-rule-simulator]").forEach((button) => button.onclick = () => this._showRuleSimulator(button.dataset.ruleSimulator));
+    this.shadowRoot.querySelectorAll("[data-improvement]").forEach((button) => button.onclick = () => this._showImprovement(Number(button.dataset.improvement)));
+    this.shadowRoot.querySelectorAll("[data-promote-shadow]").forEach((button) => button.onclick = async () => {
+      if (!await this._confirm("Shadow Mode beenden und diese Regel produktiv schalten? Ab dann können Aufgaben und Benachrichtigungen entstehen.")) return;
+      await this._call("promote_shadow_task", { task_id: button.dataset.promoteShadow });
+      this._toast("Regel wurde produktiv geschaltet");
+    });
+    this.shadowRoot.querySelectorAll("[data-community-control]").forEach((button) => button.onclick = async () => {
+      if (!await this._confirm("Verknüpfung zum Community-Paket lösen? Die aktuelle Konfiguration bleibt erhalten, erhält danach aber keine Paketupdates mehr.")) return;
+      await this._call("community_take_control", { task_id: button.dataset.communityControl });
+      this._toast("Vorlage zur lokalen Anpassung übernommen");
+    });
     this.shadowRoot.querySelectorAll("[data-pause-task]").forEach((b) => b.onclick = () => this._showTaskPauseDialog(b.dataset.pauseTask));
     this.shadowRoot.querySelectorAll("[data-resume-task]").forEach((b) => b.onclick = async () => {
       const taskId = b.dataset.resumeTask;
@@ -2310,6 +2486,22 @@ class HouseholdTasksPanel extends HTMLElement {
     this.shadowRoot.querySelector("#notification-digest-form")?.addEventListener("submit", (event) => this._saveNotificationDigest(event));
     this.shadowRoot.querySelector("#caldav-settings-form")?.addEventListener("submit", (event) => this._saveCalDAVSettings(event));
     this.shadowRoot.querySelector("#caldav-credential-form")?.addEventListener("submit", (event) => this._createCalDAVCredential(event));
+    this.shadowRoot.querySelector("#community-import-form")?.addEventListener("submit", (event) => this._previewCommunityImport(event));
+    this.shadowRoot.querySelector("#check-community-updates")?.addEventListener("click", async () => {
+      await this._call("community_check_updates");
+      this._toast("Community-Vorlagen wurden geprüft");
+    });
+    this.shadowRoot.querySelectorAll("[data-community-update]").forEach((button) => button.addEventListener("click", async () => {
+      try {
+        const pack = await this._hass.callWS({
+          type: "household_tasks/community_preview",
+          url: button.dataset.communityUrl,
+        });
+        this._showCommunityPack(pack, button.dataset.communityTemplate, button.dataset.communityUpdate);
+      } catch (error) {
+        this._toast(this._errorText(error), true);
+      }
+    }));
     this.shadowRoot.querySelectorAll("[data-revoke-caldav]").forEach((button) => button.onclick = async () => {
       if (!await this._confirm("Dieses CalDAV-App-Passwort sofort widerrufen? Das Gerät kann danach nicht mehr synchronisieren.")) return;
       await this._call("caldav_revoke_credential", { credential_id: button.dataset.revokeCaldav });
@@ -2321,9 +2513,12 @@ class HouseholdTasksPanel extends HTMLElement {
       const action = finding?.action;
       if (action?.type === "edit_person") this._showPersonEditor(action.person_id);
       else if (action?.type === "edit_task") this._showTaskEditor(action.task_id);
+      else if (action?.type === "repair_entity") this._showEntityRepair(action);
       else if (action?.type === "open_integration") window.location.href = "/config/integrations/integration/household_tasks";
     });
     this.shadowRoot.querySelectorAll("[data-install-discovery]").forEach((button) => button.onclick = () => this._showDiscoveryInstall(button.dataset.installDiscovery));
+    this.shadowRoot.querySelectorAll("[data-recommend-view]").forEach((button) => button.onclick = () => this._navigateToView(button.dataset.recommendView));
+    this._bindSettingsSearch();
     this.shadowRoot.querySelector("#printer-form")?.addEventListener("submit", (event) => this._savePrinters(event));
     this.shadowRoot.querySelector("#resources-form")?.addEventListener("submit", (event) => this._saveResources(event));
     this._bindEscalationEditor(this.shadowRoot);
@@ -2344,6 +2539,16 @@ class HouseholdTasksPanel extends HTMLElement {
       form.addEventListener("submit", () => { delete form.dataset.dirty; });
       form.addEventListener("reset", () => { delete form.dataset.dirty; });
     });
+  }
+
+  _communityTemplateSettings() {
+    const sources = Object.entries(this._data.community_sources || {});
+    const installed = sources.length
+      ? `<div class="community-source-list">${sources.map(([taskId, source]) => `<div><span><strong>${this._e(this._data.tasks[taskId]?.name || taskId)}</strong><small>${this._e(source.publisher)} · ${this._e(source.version)}${source.update_available ? ` · Update ${this._e(source.update_available)} verfügbar` : ""}${source.last_error ? ` · ${this._e(source.last_error)}` : ""}</small></span><span class="community-source-actions">${source.update_available ? `<button data-community-update="${this._e(taskId)}" data-community-url="${this._e(source.url)}" data-community-template="${this._e(source.template_id)}">Update ansehen</button>` : ""}${this._data.tasks[taskId]?.community?.managed ? `<button data-community-control="${this._e(taskId)}">Vorlage übernehmen</button>` : ""}</span></div>`).join("")}</div>`
+      : '<p class="hint">Noch keine Community-Vorlage installiert.</p>';
+    return `<article class="settings-card community-card"><div class="settings-heading"><div><h3>Versionierte Community-Vorlagen</h3><p>Signierte Pakete per HTTPS prüfen, benötigte Entitäten zuordnen und kontrolliert installieren.</p></div>${this._data.is_admin && sources.length ? '<button id="check-community-updates">Updates prüfen</button>' : ""}</div>
+      ${this._data.is_admin ? `<form id="community-import-form" class="form-grid"><label class="full">Paket-URL<input name="url" type="url" required pattern="https://.*" placeholder="https://…/household-tasks-pack.json"><span class="hint">Vor der Installation werden Version, Signatur, Publisher und Entitätsanforderungen angezeigt.</span></label><div class="full"><button type="submit">URL prüfen</button></div></form>` : ""}
+      ${installed}</article>`;
   }
 
   _bindActionMenus() {
@@ -2539,7 +2744,10 @@ class HouseholdTasksPanel extends HTMLElement {
   async _showTaskHistory(occurrenceId) {
     const occurrence = this._data.occurrences.find((item) => item.id === occurrenceId);
     if (!occurrence) return this._toast("Aufgabe nicht gefunden.", true);
-    const events = await this._hass.callWS({ type: "household_tasks/task_history", occurrence_id: occurrenceId });
+    const [events, dossier] = await Promise.all([
+      this._hass.callWS({ type: "household_tasks/task_history", occurrence_id: occurrenceId }),
+      this._hass.callWS({ type: "household_tasks/decision_dossier", occurrence_id: occurrenceId }),
+    ]);
     const attachments = this._data.attachments?.[occurrenceId] || [];
     const modal = this.shadowRoot.querySelector("#modal");
     const returnFocus = this.shadowRoot.activeElement;
@@ -2575,6 +2783,7 @@ class HouseholdTasksPanel extends HTMLElement {
       </div>
       <section><h3>Checkliste</h3><div class="history-checklist">${checklistMarkup}</div></section>
       <section><h3>Fotos und Belege <span class="history-count">${attachments.length}</span></h3><div class="attachment-list readonly-attachments">${attachmentMarkup}</div></section>
+      <section class="decision-dossier"><div class="settings-heading"><div><h3>Entscheidungsakte</h3><p>So entstand die Aufgabe – vom Auslöser bis zur Benachrichtigung.</p></div><button type="button" data-reevaluate-occurrence="${this._e(occurrenceId)}">Mit aktuellen Daten erneut auswerten</button></div><ol data-decision-steps>${this._decisionStepsMarkup(dossier.steps)}</ol><div class="reevaluation-result" aria-live="polite"></div></section>
       <section><h3>Änderungsverlauf</h3><div class="task-event-list">${eventMarkup}</div></section>
       <div class="modal-actions"><button type="button" class="close-bottom">Schließen</button></div>
     </div></div>`;
@@ -2583,6 +2792,23 @@ class HouseholdTasksPanel extends HTMLElement {
     modal.querySelector(".close-bottom").onclick = close;
     this._activateDialog(modal, close);
     modal.querySelectorAll("[data-open-attachment]").forEach((button) => button.onclick = () => this._openAttachment(occurrenceId, button.dataset.openAttachment));
+    modal.querySelector("[data-reevaluate-occurrence]").onclick = async (event) => {
+      const output = modal.querySelector(".reevaluation-result");
+      output.textContent = "Aktuelle Regel wird ohne Seiteneffekte geprüft …";
+      try {
+        const current = await this._hass.callWS({ type: "household_tasks/reevaluate_occurrence", occurrence_id: event.currentTarget.dataset.reevaluateOccurrence });
+        const preview = current.reevaluation;
+        const explanation = current.current_explanation || {};
+        const candidateNames = (explanation.eligible_candidates || []).map((personId) => this._data.people[personId]?.name || personId);
+        const excludedNames = (explanation.excluded_candidates || []).map((item) => `${this._data.people[item.person_id]?.name || item.person_id}: ${item.reason === "not_home" ? "nicht anwesend" : item.reason}`);
+        const details = [preview.mode?.message, preview.season?.message, preview.weather?.message].filter(Boolean);
+        output.innerHTML = `<strong>${preview.would_create ? "Würde aktuell erzeugen" : "Würde aktuell nicht erzeugen"}</strong><p>${this._e(details.join(" · "))}</p>${candidateNames.length ? `<p><strong>Aktuell berücksichtigt:</strong> ${this._e(candidateNames.join(", "))}</p>` : ""}${excludedNames.length ? `<p><strong>Aktuell ausgeschlossen:</strong> ${this._e(excludedNames.join(", "))}</p>` : ""}<small>Diese Prüfung hat keine Aufgabe, Zuweisung oder Benachrichtigung erzeugt.</small>`;
+      } catch (error) { output.textContent = this._errorText(error); }
+    };
+  }
+
+  _decisionStepsMarkup(steps = []) {
+    return steps.map((step) => `<li class="${step.passed === false ? "blocked" : "passed"}"><span>${step.passed === false ? "–" : "✓"}</span><div><strong>${this._e(step.title)}</strong><small>${this._e(step.detail)}</small></div></li>`).join("") || "<li><div><strong>Keine Entscheidungsdaten vorhanden</strong><small>Ältere Aufgaben enthalten möglicherweise noch keine vollständige Spur.</small></div></li>";
   }
 
   _historyEventsMarkup(events, labels) {
@@ -2994,17 +3220,19 @@ class HouseholdTasksPanel extends HTMLElement {
   _showGallery(selectedId = null) {
     const gallery = this._data.template_gallery || [];
     const selected = gallery.find((entry) => entry.id === selectedId) || gallery[0];
+    const categories = [...new Set(gallery.map((entry) => entry.category))].sort((a, b) => a.localeCompare(b, this._locale()));
     const modal = this.shadowRoot.querySelector("#modal");
     const returnFocus = this.shadowRoot.activeElement;
     modal.innerHTML = `<div class="backdrop"><div class="modal-card">
       <div class="modal-head"><div><div class="eyebrow">VORLAGENGALERIE</div><h2>Bewährte Routinen übernehmen</h2></div><button class="icon-button close" aria-label="Schließen">×</button></div>
-      <div class="gallery-modal">${gallery.map((entry) => `<button type="button" data-pick-template="${this._e(entry.id)}" class="${entry.id === selected?.id ? "selected" : ""}"><span>${this._e(entry.category)}</span><strong>${this._e(entry.name)}</strong><small>${this._e(entry.description)}</small></button>`).join("")}</div>
+      <div class="gallery-filters"><input id="gallery-search" type="search" placeholder="Vorlagen durchsuchen"><select id="gallery-category"><option value="">Alle Kategorien</option>${categories.map((category) => `<option value="${this._e(category)}">${this._e(category)}</option>`).join("")}</select></div><div class="gallery-modal">${gallery.map((entry) => `<button type="button" data-pick-template="${this._e(entry.id)}" data-gallery-category="${this._e(entry.category)}" data-gallery-search="${this._e(`${entry.name} ${entry.description}`.toLocaleLowerCase(this._locale()))}" class="${entry.id === selected?.id ? "selected" : ""}"><span>${this._e(entry.category)}</span><strong>${this._e(entry.name)}</strong><small>${this._e(entry.description)}</small></button>`).join("")}</div>
       <form id="gallery-form" class="form-grid">
         <input type="hidden" name="template_id" value="${this._e(selected?.id || "")}">
         <label>Eigene ID<input name="task_id" required pattern="[a-z0-9_]+" value="${this._e(selected?.id || "")}"></label>
         <label class="gallery-assignee">Zuständig<select name="assignee">${Object.entries(this._data.people).map(([id, person]) => `<option value="${this._e(id)}">${this._e(person.name)}</option>`).join("")}</select></label>
         <div class="full gallery-people hidden"><span class="field-label">Je eine Aufgabe für</span><div class="candidate-grid">${Object.entries(this._data.people).map(([id, person]) => `<label class="checkbox"><input type="checkbox" name="people" value="${this._e(id)}" checked> ${this._e(person.name)}</label>`).join("")}</div><p class="hint">Jede ausgewählte Person erhält eine eigene Aufgabe und saisonale Sperre.</p></div>
         <label class="full gallery-entity">Auslöser-Entität${this._entityInput("entity_id", "", [], { placeholder: "Sensor oder Warnungs-Entität auswählen" })}</label>
+        <div class="full gallery-requirements"></div>
         <div class="full gallery-preview"></div>
         <div class="full modal-actions"><button type="button" class="cancel">Abbrechen</button><button class="primary" type="submit">Vorlage übernehmen</button></div>
       </form></div></div>`;
@@ -3014,6 +3242,13 @@ class HouseholdTasksPanel extends HTMLElement {
     modal.querySelector(".cancel").onclick = close;
     this._activateDialog(modal, close);
     const form = modal.querySelector("#gallery-form");
+    const filterGallery = () => {
+      const query = modal.querySelector("#gallery-search").value.trim().toLocaleLowerCase(this._locale());
+      const category = modal.querySelector("#gallery-category").value;
+      modal.querySelectorAll("[data-pick-template]").forEach((button) => { button.classList.toggle("hidden", Boolean((category && button.dataset.galleryCategory !== category) || (query && !button.dataset.gallerySearch.includes(query)))); });
+    };
+    modal.querySelector("#gallery-search").oninput = filterGallery;
+    modal.querySelector("#gallery-category").onchange = filterGallery;
     const templateInput = form.querySelector("[name=template_id]");
     const taskIdInput = form.querySelector("[name=task_id]");
     const select = (id) => {
@@ -3024,7 +3259,10 @@ class HouseholdTasksPanel extends HTMLElement {
       modal.querySelectorAll("[data-pick-template]").forEach((button) => button.classList.toggle("selected", button.dataset.pickTemplate === id));
       const needsEntity = entry.task.schedule?.triggers?.some((trigger) => !trigger.entity_id)
         || entry.task.weather?.conditions?.some((condition) => !condition.entity_id);
-      modal.querySelector(".gallery-entity").classList.toggle("hidden", !needsEntity);
+      modal.querySelector(".gallery-entity").classList.toggle("hidden", !needsEntity || Boolean(entry.required_entities?.length));
+      const requirements = modal.querySelector(".gallery-requirements");
+      requirements.innerHTML = (entry.required_entities || []).map((item) => `<label>${this._e(item.name)}${this._entityInput(`mapping_${item.key}`, "", item.domains || [], { placeholder: item.description || "Home-Assistant-Entität auswählen" })}<span class="hint">${this._e(item.description || "")}</span></label>`).join("");
+      this._enhanceAccessibility(requirements);
       const perPerson = entry.task.assignment?.type === "per_person";
       modal.querySelector(".gallery-assignee").classList.toggle("hidden", perPerson);
       modal.querySelector(".gallery-people").classList.toggle("hidden", !perPerson);
@@ -3043,6 +3281,9 @@ class HouseholdTasksPanel extends HTMLElement {
         if (!payload.people.length) throw new Error("Bitte wähle mindestens eine Person aus.");
       }
       if (data.get("entity_id")?.trim()) payload.entity_id = data.get("entity_id").trim();
+      if (entry?.required_entities?.length) {
+        payload.mappings = Object.fromEntries(entry.required_entities.map((item) => [item.key, String(data.get(`mapping_${item.key}`) || "").trim()]));
+      }
       await this._call("install_gallery_template", payload);
       close();
       this._toast("Vorlage übernommen");
@@ -3138,6 +3379,55 @@ class HouseholdTasksPanel extends HTMLElement {
 
   async _confirm(message) {
     return window.confirm(this._t(message));
+  }
+
+  _bindSettingsSearch() {
+    const input = this.shadowRoot.querySelector("#settings-search");
+    if (!input) return;
+    const output = this.shadowRoot.querySelector("#settings-search-result");
+    const groups = [...this.shadowRoot.querySelectorAll(".settings-group")];
+    const automaticallyOpened = new Set();
+    const normalize = (value) => String(value || "").normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase(this._locale());
+    input.oninput = () => {
+      const query = normalize(input.value.trim());
+      let matches = 0;
+      for (const group of groups) {
+        const cards = [...group.querySelectorAll(":scope .settings-card")];
+        const headerMatches = query && normalize(group.querySelector(":scope > header")?.textContent).includes(query);
+        let groupMatches = false;
+        for (const card of cards) {
+          const cardMatches = !query || headerMatches || normalize(card.textContent).includes(query);
+          card.hidden = !cardMatches;
+          if (!query || !cardMatches) continue;
+          groupMatches = true;
+          matches += 1;
+          const collection = card.closest("details.settings-collection");
+          if (collection && !collection.open) {
+            collection.open = true;
+            automaticallyOpened.add(collection);
+          }
+          card.querySelectorAll("details[data-disclosure]").forEach((details) => {
+            if (!details.open && normalize(details.textContent).includes(query)) {
+              details.open = true;
+              automaticallyOpened.add(details);
+            }
+          });
+        }
+        group.hidden = Boolean(query) && !headerMatches && !groupMatches;
+      }
+      if (!query) {
+        groups.forEach((group) => { group.hidden = false; });
+        this.shadowRoot.querySelectorAll(".settings-card[hidden]").forEach((card) => { card.hidden = false; });
+        automaticallyOpened.forEach((details) => { details.open = false; });
+        automaticallyOpened.clear();
+        output.textContent = "";
+        return;
+      }
+      output.textContent = matches
+        ? (householdTasksLocale(this._hass) === "de" ? `${matches} passende Bereiche` : `${matches} matching sections`)
+        : this._t("Keine passende Einstellung gefunden");
+    };
   }
 
   async _saveDefaults(event) {
@@ -3358,6 +3648,159 @@ class HouseholdTasksPanel extends HTMLElement {
     };
   }
 
+  _showImprovement(index) {
+    const suggestion = this._data.rule_insights?.improvement_suggestions?.[index];
+    const original = this._data.tasks[suggestion?.task_id];
+    if (!suggestion || !original) return;
+    const prefill = structuredClone(original);
+    Object.entries(suggestion.patch || {}).forEach(([path, value]) => {
+      const parts = path.split("."); let target = prefill;
+      parts.slice(0, -1).forEach((part) => { target[part] ||= {}; target = target[part]; });
+      target[parts.at(-1)] = value;
+    });
+    this._showTaskEditor(suggestion.task_id, { prefill });
+    this._toast("Verbesserung als prüfbarer Entwurf geöffnet");
+  }
+
+  _isPersonHome(personId) {
+    const entityId = this._data.people?.[personId]?.presence;
+    return entityId ? this._hass.states[entityId]?.state === "home" || this._hass.states[entityId]?.state === "on" : false;
+  }
+
+  _showWhatIfLab() {
+    const modal = this.shadowRoot.querySelector("#modal");
+    const returnFocus = this.shadowRoot.activeElement;
+    const localNow = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card simulator-modal"><div class="modal-head"><div><div class="eyebrow">WAS-WÄRE-WENN-LABOR</div><h2>Den ganzen Haushalt vorausberechnen</h2><p>Simuliert Zeitpläne, Kalenderregeln und optionale Zustands-Snapshots für bis zu 31 Tage – vollständig ohne Seiteneffekte.</p></div><button class="icon-button close" aria-label="Schließen">×</button></div>
+      <form id="what-if-form" class="form-grid"><label>Start<input name="start" type="datetime-local" value="${localNow}" required></label><label>Dauer<select name="days"><option value="1">1 Tag</option><option value="7" selected>7 Tage</option><option value="14">14 Tage</option><option value="31">31 Tage</option></select></label><label>Haushaltsmodus<select name="mode"><option value="normal">Normal</option><option value="vacation">Urlaub</option><option value="guest">Gast</option></select></label><div class="full"><span class="field-label">Anwesenheit im gesamten Szenario</span><div class="candidate-grid">${Object.entries(this._data.people).map(([id, person]) => `<label class="checkbox"><input type="checkbox" name="presence" value="${this._e(id)}" ${this._isPersonHome(id) ? "checked" : ""}> ${this._e(person.name)}</label>`).join("")}</div></div><label class="full">Zustands-Snapshots (optional)<textarea name="snapshots" rows="5" placeholder='[{"at":"2026-08-14T12:00:00+02:00","entity_states":{"sensor.strompreis":0.18}}]'></textarea><span class="hint">JSON-Liste für Zustands-, Wetter- und Energieänderungen. Maximal 100 Snapshots; Werte werden nur in dieser Simulation verwendet.</span></label><div class="full modal-actions"><button type="button" class="cancel">Abbrechen</button><button class="primary" type="submit">Zeitraum simulieren</button></div></form><section class="simulator-result" aria-live="polite"></section></div></div>`;
+    this._localize(modal);
+    this._enhanceAccessibility(modal);
+    const close = () => { modal.replaceChildren(); returnFocus?.focus(); };
+    modal.querySelector(".close").onclick = close; modal.querySelector(".cancel").onclick = close;
+    this._activateDialog(modal, close);
+    modal.querySelector("#what-if-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const data = new FormData(event.currentTarget);
+      const output = modal.querySelector(".simulator-result");
+      let snapshots = [];
+      try {
+        snapshots = String(data.get("snapshots") || "").trim() ? JSON.parse(data.get("snapshots")) : [];
+        if (!Array.isArray(snapshots)) throw new Error("Snapshots müssen eine JSON-Liste sein.");
+      } catch (error) { output.textContent = this._errorText(error); return; }
+      const selectedPresence = data.getAll("presence");
+      const presence = Object.fromEntries(Object.keys(this._data.people).map((id) => [id, selectedPresence.includes(id)]));
+      output.textContent = "Haushalt wird simuliert …";
+      try {
+        const result = await this._hass.callWS({ type: "household_tasks/simulate_period", scenario: { start: new Date(data.get("start")).toISOString(), days: Number(data.get("days")), mode: data.get("mode"), presence, snapshots } });
+        const summary = result.summary;
+        const rows = result.timeline.map((item) => `<article class="lab-timeline-row ${item.would_create ? "match" : "blocked"}"><time>${this._e(new Date(item.at).toLocaleString(this._locale(), { dateStyle: "short", timeStyle: "short" }))}</time><div><strong>${this._e(item.title)}</strong><small>${item.would_create ? `${item.initial_status === "waiting" ? "Würde wartend angelegt" : "Würde erzeugt"}${item.assignee ? ` · ${this._e(this._data.people[item.assignee]?.name || item.assignee)}` : ""}` : "Würde nicht erzeugt"}</small></div><span>${item.source === "snapshot" ? "Snapshot" : "Zeitplan"}</span></article>`).join("") || "<p>Im gewählten Zeitraum sind keine auswertbaren Regeln vorhanden.</p>";
+        const people = Object.entries(summary.by_person).map(([id, count]) => `${this._data.people[id]?.name || id}: ${count}`).join(" · ");
+        output.innerHTML = `<div class="simulator-verdict match"><strong>${summary.would_create} mögliche Aufgaben aus ${summary.evaluations} Auswertungen</strong><span>${summary.waiting} würden zunächst warten · ${this._e(people)}</span></div><div class="lab-timeline">${rows}</div><p class="hint">Der Lauf hat keine Aufgabe, Benachrichtigung oder Konfiguration verändert.</p>`;
+      } catch (error) { output.textContent = this._errorText(error); }
+    };
+  }
+
+  _showRuleSimulator(selectedTaskId = null) {
+    const tasks = Object.entries(this._data.tasks || {});
+    if (!tasks.length) return this._toast("Lege zuerst eine Regel an.", true);
+    const modal = this.shadowRoot.querySelector("#modal");
+    const returnFocus = this.shadowRoot.activeElement;
+    const initial = selectedTaskId && this._data.tasks[selectedTaskId] ? selectedTaskId : tasks[0][0];
+    const localNow = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card simulator-modal"><div class="modal-head"><div><div class="eyebrow">REGEL-SIMULATOR</div><h2>Zeitreise ohne Nebenwirkungen</h2><p>Datum, Modus, Anwesenheit und Entitätswerte verändern. Es entstehen keine Aufgaben oder Benachrichtigungen.</p></div><button class="icon-button close" aria-label="Schließen">×</button></div>
+      <form id="rule-simulator-form" class="form-grid"><label class="full">Regel<select name="task_id">${tasks.map(([id, task]) => `<option value="${this._e(id)}" ${id === initial ? "selected" : ""}>${this._e(task.name)}</option>`).join("")}</select></label><label>Zeitpunkt<input name="at" type="datetime-local" value="${localNow}" required></label><label>Haushaltsmodus<select name="mode"><option value="normal">Normal</option><option value="vacation">Urlaub</option><option value="guest">Gast</option></select></label><label class="full simulator-calendar hidden">Kalendertitel<input name="calendar_title" placeholder="Beispieltermin"></label><div class="full simulator-values"></div><div class="full"><span class="field-label">Anwesenheit im Szenario</span><div class="candidate-grid">${Object.entries(this._data.people).map(([id, person]) => `<label class="checkbox"><input type="checkbox" name="presence" value="${this._e(id)}" ${this._isPersonHome(id) ? "checked" : ""}> ${this._e(person.name)}</label>`).join("")}</div></div><div class="full modal-actions"><button type="button" class="cancel">Abbrechen</button><button class="primary" type="submit">Szenario auswerten</button></div></form><section class="simulator-result" aria-live="polite"></section></div></div>`;
+    const close = () => { modal.replaceChildren(); returnFocus?.focus(); };
+    modal.querySelector(".close").onclick = close; modal.querySelector(".cancel").onclick = close;
+    this._activateDialog(modal, close);
+    const form = modal.querySelector("#rule-simulator-form");
+    const renderValues = () => {
+      const task = this._data.tasks[form.elements.task_id.value] || {};
+      const triggers = task.schedule?.triggers || [];
+      const conditions = task.weather?.conditions || [];
+      const policyEntities = [
+        ...(task.wait_for?.conditions || []), ...(task.energy?.conditions || []),
+        task.energy?.tariff_entity ? { entity_id: task.energy.tariff_entity } : null,
+        task.energy?.surplus_entity ? { entity_id: task.energy.surplus_entity } : null,
+      ].filter(Boolean).filter((item, index, all) => all.findIndex((candidate) => candidate.entity_id === item.entity_id) === index);
+      modal.querySelector(".simulator-calendar").classList.toggle("hidden", task.schedule?.type !== "calendar");
+      modal.querySelector(".simulator-values").innerHTML = `<div class="simulator-value-grid">${triggers.map((item) => `<label>${this._e(item.entity_id)}<input name="state_${this._e(item.entity_id)}" value="${this._e(this._hass.states[item.entity_id]?.state || item.to || "")}"><span class="hint">Zielzustand: ${this._e(item.to)}</span></label>`).join("")}${policyEntities.map((item) => `<label>${this._e(item.entity_id)}<input name="state_${this._e(item.entity_id)}" value="${this._e(this._hass.states[item.entity_id]?.state || "")}"><span class="hint">Warte-/Energiebedingung</span></label>`).join("")}${conditions.map((item, index) => { const current = item.attribute ? this._hass.states[item.entity_id]?.attributes?.[item.attribute] : this._hass.states[item.entity_id]?.state; return `<label>${this._e(item.entity_id)}${item.attribute ? ` · ${this._e(item.attribute)}` : ""}<input name="condition_${index}" value="${this._e(current ?? item.threshold ?? "")}"><span class="hint">${this._e(item.condition)} ${this._e(item.threshold)}</span></label>`; }).join("")}</div>`;
+    };
+    form.elements.task_id.onchange = renderValues; renderValues();
+    form.onsubmit = async (event) => {
+      event.preventDefault(); const data = new FormData(form); const task = this._data.tasks[data.get("task_id")];
+      const presence = Object.fromEntries(Object.keys(this._data.people).map((id) => [id, data.getAll("presence").includes(id)]));
+      const entityStates = {}; [...(task.schedule?.triggers || []), ...(task.wait_for?.conditions || []), ...(task.energy?.conditions || []), task.energy?.tariff_entity ? { entity_id: task.energy.tariff_entity } : null, task.energy?.surplus_entity ? { entity_id: task.energy.surplus_entity } : null].filter(Boolean).forEach((item) => { entityStates[item.entity_id] = data.get(`state_${item.entity_id}`); });
+      const conditionValues = {}; (task.weather?.conditions || []).forEach((item, index) => { const raw = data.get(`condition_${index}`); conditionValues[String(index)] = raw !== "" && Number.isFinite(Number(raw)) ? Number(raw) : raw; });
+      const scenario = { at: new Date(data.get("at")).toISOString(), mode: data.get("mode"), presence, entity_states: entityStates, condition_values: conditionValues, calendar_title: data.get("calendar_title") || "" };
+      const output = modal.querySelector(".simulator-result"); output.textContent = "Szenario wird ausgewertet …";
+      try {
+        const result = await this._hass.callWS({ type: "household_tasks/simulate_task", task_id: data.get("task_id"), scenario });
+        const steps = result.steps.map((step) => `<li class="${step.allowed ? "passed" : "blocked"}"><span>${step.allowed ? "✓" : "–"}</span><div><strong>${this._e(step.kind)}</strong><small>${this._e(step.message)}</small></div></li>`).join("");
+        const counters = (result.counterexamples || []).map((item) => `<article><div><strong>${this._e(item.title)}</strong><p>${this._e(item.reason)}</p></div><span class="status ${item.would_create ? "home" : ""}">${item.would_create ? "würde auslösen" : "würde blockieren"}</span></article>`).join("") || "<p>Für diese Regel konnten keine automatischen Grenzfälle abgeleitet werden.</p>";
+        output.innerHTML = `<div class="simulator-verdict ${result.would_create ? "match" : "blocked"}"><strong>${result.would_create ? "Aufgabe würde erzeugt" : "Aufgabe würde nicht erzeugt"}</strong><span>${result.assignee ? `Zuweisung: ${this._e(this._data.people[result.assignee]?.name || result.assignee)}` : "Keine feste Zuweisung"}</span></div><ol class="decision-dossier">${steps}</ol><h3>Automatisch erzeugte Gegenbeispiele</h3><div class="counterexample-list">${counters}</div><p class="hint">Simulation und Gegenbeispiele verändern keinerlei Zustand.</p>`;
+      } catch (error) { output.textContent = this._errorText(error); }
+    };
+  }
+
+  _showObservationRule(suggestionId) {
+    const suggestion = (this._data.observation_suggestions || []).find((item) => item.id === suggestionId);
+    const original = this._data.tasks[suggestion?.task_id];
+    if (!suggestion || !original) return this._toast("Der Regelvorschlag ist nicht mehr verfügbar.", true);
+    const prefill = structuredClone(original);
+    prefill.schedule = structuredClone(suggestion.proposed_schedule);
+    prefill.shadow = {
+      enabled: true,
+      started_at: new Date().toISOString(),
+      review_at: new Date(Date.now() + 7 * 86400000).toISOString(),
+    };
+    this._showTaskEditor(suggestion.task_id, { prefill });
+    this._toast("Regelentwurf geöffnet – bitte Vorschau und Shadow Mode prüfen");
+  }
+
+  async _previewCommunityImport(event) {
+    event.preventDefault();
+    const url = new FormData(event.currentTarget).get("url").trim();
+    try {
+      const pack = await this._hass.callWS({ type: "household_tasks/community_preview", url });
+      this._showCommunityPack(pack);
+    } catch (error) {
+      this._toast(this._errorText(error), true);
+    }
+  }
+
+  _showCommunityPack(pack, selectedId = null, existingTaskId = null) {
+    const selected = pack.templates.find((item) => item.id === selectedId) || pack.templates[0];
+    const modal = this.shadowRoot.querySelector("#modal");
+    const returnFocus = this.shadowRoot.activeElement;
+    const requirementFields = selected.required_entities.map((item) => `<label class="full">${this._e(item.name)}${this._entityInput(`mapping_${item.key}`, "", item.domains, { placeholder: item.description || "Home-Assistant-Entität auswählen" })}<span class="hint">${this._e(item.description)}${item.domains.length ? ` · ${this._e(item.domains.join(", "))}` : ""}</span></label>`).join("");
+    modal.innerHTML = `<div class="backdrop"><div class="modal-card community-preview-modal"><div class="modal-head"><div><div class="eyebrow">SIGNIERTES COMMUNITY-PAKET</div><h2>${this._e(pack.name)} ${this._e(pack.version)}</h2><p>${this._e(pack.publisher.name)} · Fingerprint ${this._e(pack.publisher.fingerprint.slice(0, 16))}…</p></div><button class="icon-button close">×</button></div>
+      <div class="signature-status ${pack.publisher.trusted ? "trusted" : "untrusted"}"><strong>${pack.publisher.trusted ? "Publisher bereits vertraut" : "Neuer Publisher"}</strong><span>Ed25519-Signatur gültig. ${pack.publisher.trusted ? "Der Schlüssel entspricht der früheren Installation." : "Prüfe den Fingerprint über einen unabhängigen Kanal."}</span></div>
+      <div class="gallery-modal">${pack.templates.map((item) => `<button type="button" data-community-template="${this._e(item.id)}" class="${item.id === selected.id ? "selected" : ""}"><span>${this._e(item.category)}</span><strong>${this._e(item.name)}</strong><small>${this._e(item.description)}</small></button>`).join("")}</div>
+      <form id="community-install-form" class="form-grid"><input type="hidden" name="template_id" value="${this._e(selected.id)}"><label class="full">Lokale Vorlagen-ID<input name="task_id" required pattern="[a-z0-9_]+" value="${this._e(existingTaskId || this._generatedTaskId(selected.name))}" ${existingTaskId ? "readonly" : ""}></label>${requirementFields}
+      <label class="full">Zuständig<select name="assignee">${Object.entries(this._data.people).map(([id, person]) => `<option value="${this._e(id)}">${this._e(person.name)}</option>`).join("")}</select></label>
+      ${pack.publisher.trusted ? "" : `<label class="full checkbox trust-publisher"><input name="trust_publisher" type="checkbox" required> Publisher-Fingerprint geprüft und diesem Schlüssel künftig vertrauen</label>`}
+      <div class="full modal-actions"><button type="button" class="cancel">Abbrechen</button><button class="primary" type="submit">${existingTaskId ? "Update installieren" : "Vorlage installieren"}</button></div></form></div></div>`;
+    this._localize(modal); this._enhanceAccessibility(modal);
+    const close = () => { modal.innerHTML = ""; returnFocus?.focus(); };
+    modal.querySelector(".close").onclick = close; modal.querySelector(".cancel").onclick = close;
+    this._activateDialog(modal, close);
+    modal.querySelectorAll("[data-community-template]").forEach((button) => button.onclick = () => this._showCommunityPack(pack, button.dataset.communityTemplate, existingTaskId));
+    modal.querySelector("#community-install-form").onsubmit = async (submitEvent) => {
+      submitEvent.preventDefault();
+      const form = submitEvent.currentTarget; const values = new FormData(form); const mappings = {};
+      selected.required_entities.forEach((item) => { mappings[item.key] = String(values.get(`mapping_${item.key}`) || "").trim(); });
+      try {
+        await this._call("community_install", {
+          url: pack.url, digest: pack.digest, template_id: selected.id,
+          task_id: values.get("task_id").trim(), mappings,
+          assignee: values.get("assignee") || undefined,
+          trust_publisher: values.get("trust_publisher") === "on" || pack.publisher.trusted,
+        });
+        close(); this._toast("Community-Vorlage installiert");
+      } catch (error) { this._toast(this._errorText(error), true); }
+    };
+  }
+
   _showTaskEditor(id = null, options = {}) {
     const guided = true;
     const task = this._editorTask(id, options);
@@ -3376,6 +3819,13 @@ class HouseholdTasksPanel extends HTMLElement {
     const absencePolicy = task.assignment?.absence_policy || "wait";
     const fallbackPeople = task.assignment?.fallback_people || [];
     const fallbackStrategy = task.assignment?.fallback_strategy || "fair";
+    const shadow = task.shadow || {};
+    const waitFor = task.wait_for || {};
+    const waitCondition = waitFor.conditions?.[0] || {};
+    const energy = task.energy || {};
+    const visibility = task.visibility || {};
+    const notificationPolicy = task.notification_policy || {};
+    const shadowReviewAt = shadow.review_at ? new Date(shadow.review_at) : new Date(Date.now() + 7 * 86400000);
     const pausedUntil = this._taskPausedUntil(task);
     const modal = this.shadowRoot.querySelector("#modal");
     const returnFocus = this.shadowRoot.activeElement;
@@ -3386,7 +3836,10 @@ class HouseholdTasksPanel extends HTMLElement {
       </ol>` : ""}
       <form id="task-form" class="form-grid">
         <input name="id" type="hidden" required pattern="[a-z0-9_]+" value="${this._e(id || "")}">
+        <aside class="full rule-live-summary" aria-live="polite"><span class="eyebrow">SO WIRKT DIE REGEL</span><p data-rule-sentence>Die Klartext-Zusammenfassung wird aus den Eingaben erstellt.</p></aside>
+        <section class="full wizard-step-intro" data-task-step="1"><span class="step-purpose">SCHRITT 1 · INHALT</span><h3>Was soll erledigt werden?</h3><p>Ein klarer Name reicht zum Start. Beschreibung und Checkliste helfen nur dort, wo die Ausführung erklärt oder nachgewiesen werden muss.</p></section>
         <label class="full" data-task-step="1">Name<input name="name" required autofocus value="${this._e(task.name)}" placeholder="Bad putzen"><span class="hint">Die technische ID wird automatisch erzeugt.</span></label>
+        <section class="full wizard-step-intro" data-task-step="2"><span class="step-purpose">SCHRITT 2 · VERANTWORTUNG</span><h3>Wer soll die Aufgabe bekommen?</h3><p>„Fest“ eignet sich für persönliche Zuständigkeiten. „Fair“ verteilt nach Belastung, „Rotation“ der Reihe nach und „Je Person“ erzeugt eine eigene Aufgabe pro Person.</p></section>
         <label data-task-step="2">Zuweisung<select name="assignment_type">
           ${[["fixed","Fest"],["rotation","Rotation"],["fair","Fair"],["open","Offen"],["per_person","Je Person eine Aufgabe"]].map(([value, label]) =>
             `<option value="${value}" ${value === assignmentType ? "selected" : ""}>${label}</option>`
@@ -3432,14 +3885,20 @@ class HouseholdTasksPanel extends HTMLElement {
         <label class="full" data-task-step="1">Beschreibung<textarea name="description" rows="2">${this._e(task.description || "")}</textarea></label>
         <label class="full" data-task-step="1">Checkliste<textarea name="checklist" rows="4" placeholder="Ein Schritt pro Zeile">${this._e((task.checklist || []).map((item) => typeof item === "string" ? item : item.title).join("\n"))}</textarea><span class="hint">Jede Zeile wird zu einem einzeln abhakbaren Schritt. Standardmäßig kann die Aufgabe erst abgeschlossen werden, wenn alle Schritte erledigt sind.</span></label>
         <label class="full checkbox" data-task-step="1"><input name="require_checklist_completion" type="checkbox" ${task.require_checklist_completion !== false ? "checked" : ""}> Vollständige Checkliste vor Abschluss verlangen</label>
+        <section class="full wizard-step-intro" data-task-step="3"><span class="step-purpose">SCHRITT 3 · AUSLÖSER</span><h3>Wann soll eine Aufgabe entstehen?</h3><p>Wähle genau einen Hauptauslöser. Mit „Regel testen“ siehst du vor dem Speichern, ob die Regel aktuell greifen würde und wann sie das nächste Mal fällig wird.</p></section>
         <label data-task-step="3">Zeitplan<select name="type">
           ${[["manual","Manuell"],["weekly","Wöchentlich"],["monthly","Monatlich"],["yearly","Jährlich"],["interval_months","Alle N Monate"],["after_completion","Nach letzter Erledigung"],["flexible_after_completion","Flexibel nach Erledigung"],["calendar","Kalender / ICS"],["weather_trigger","Aktuelle Wetterregel"],["forecast_trigger","Wettervorhersage"],["state_trigger","Bei Zustandswechsel"],["daily_after_state","Einmal täglich nach Gerätestatus"]].map(([v,l]) => `<option value="${v}" ${v === s.type ? "selected" : ""}>${l}</option>`).join("")}
         </select></label>
         <div class="full schedule-fields" data-task-step="3">${this._scheduleFields(s, weather)}</div>
         <div class="full task-preview" data-task-step="3"><button type="button" data-preview-task>Regel testen / nächste Fälligkeit</button>${id && task.repeat?.mode === "once_per_season" ? `<button type="button" data-reset-season>Saisonsperren zurücksetzen</button>` : ""}<output class="preview-result" aria-live="polite"></output></div>
         <details class="full advanced-fields" data-task-step="4">
-          <summary>Expertenoptionen: Markt, Saison, NFC, Abhängigkeiten und Eskalation</summary>
+          <summary><span>Optionale Verfeinerungen</span><small>Nur öffnen, wenn die Aufgabe verknüpft, gescannt, saisonal begrenzt oder anders eskaliert werden soll.</small></summary>
           <div class="form-grid advanced-grid">
+        <section class="full option-group shadow-editor"><header><span class="option-icon">S</span><div><h4>Shadow Mode</h4><p>Die Regel wird virtuell ausgewertet. Es entstehen weder Aufgaben noch Benachrichtigungen, bis du sie ausdrücklich produktiv schaltest.</p></div></header>
+        <label class="full checkbox"><input name="shadow_enabled" type="checkbox" ${shadow.enabled ? "checked" : ""}> Neue automatische Auslösungen nur beobachten</label>
+        <label class="full shadow-review-settings ${shadow.enabled ? "" : "hidden"}">Prüfung empfohlen ab<input name="shadow_review_at" type="datetime-local" value="${this._localDateTimeValue(shadowReviewAt)}"><span class="hint">Nach diesem Zeitpunkt bleibt die Regel sicher im Shadow Mode, bis du sie manuell aktivierst.</span></label>
+        </section>
+        <section class="full option-group"><header><span class="option-icon">1</span><div><h4>Ablauf und Verknüpfungen</h4><p>Andere Aufgaben blockieren oder nach der Erledigung automatisch Folgeaufgaben starten.</p></div></header>
         <div class="full repeatable-editor">
           <span class="field-label">Vorlagen-Abhängigkeiten</span>
           <div class="candidate-grid">${Object.entries(this._data.tasks).filter(([taskId]) => taskId !== id).map(([taskId, dependency]) => `<label class="checkbox"><input type="checkbox" name="depends_on" value="${this._e(taskId)}" ${(task.depends_on || []).includes(taskId) ? "checked" : ""}> ${this._e(dependency.name)}</label>`).join("") || "<span class=\"hint\">Noch keine weitere Vorlage vorhanden.</span>"}</div>
@@ -3458,12 +3917,16 @@ class HouseholdTasksPanel extends HTMLElement {
           </div>
           <p class="hint">Wähle eine vorhandene Vorlage und den zeitlichen Abstand. Dadurch sind keine internen Aufgaben-IDs mehr nötig.</p>
         </div>
+        </section>
+        <section class="full option-group"><header><span class="option-icon">2</span><div><h4>NFC-Schnellaktion</h4><p>Einen Tag an einem Ort oder Gegenstand scannen, um diese Aufgabe zu erzeugen oder abzuschließen.</p></div></header>
         <div class="full">${this._tagInput(nfc.tag_id || "")}</div>
         <label class="full">Beim Scannen<select name="nfc_action">
           <option value="create_or_complete" ${nfc.action === "create_or_complete" || !nfc.action ? "selected" : ""}>Erzeugen oder erledigen</option>
           <option value="create" ${nfc.action === "create" ? "selected" : ""}>Nur erzeugen</option>
           <option value="complete" ${nfc.action === "complete" ? "selected" : ""}>Nur erledigen</option>
         </select><span class="hint">Die Tag-ID findest du nach einem Scan unter Einstellungen → Tags in Home Assistant.</span></label>
+        </section>
+        <section class="full option-group"><header><span class="option-icon">3</span><div><h4>Priorität, Wertung und Abschluss</h4><p>Bestimmt Sichtbarkeit und Punkte. Optional wird die Aufgabe nach einer Kulanzzeit automatisch gutgeschrieben.</p></div></header>
         <label>Priorität<select name="market_priority">${[["low","Niedrig"],["normal","Normal"],["high","Hoch"],["critical","Kritisch"]].map(([value, label]) => `<option value="${value}" ${market.priority === value ? "selected" : ""}>${label}</option>`).join("")}</select><span class="hint">Hohe und kritische Aufgaben bleiben bei reduziertem Urlaubsmodus aktiv.</span></label>
         <label>Punkte<input name="market_points" type="number" min="0" max="100" value="${Number(market.points ?? 1)}"><span class="hint">Wer übernimmt und erledigt, erhält diese Punkte.</span></label>
         <div class="full automatic-completion-editor form-grid">
@@ -3474,6 +3937,8 @@ class HouseholdTasksPanel extends HTMLElement {
           </div>
         </div>
         <label class="full">Belohnung (optional)<input name="market_reward" value="${this._e(market.reward || "")}" placeholder="Film aussuchen, Wunschessen …"></label>
+        </section>
+        <section class="full option-group"><header><span class="option-icon">4</span><div><h4>Haushaltsmodus und Saison</h4><p>Legt fest, ob die Vorlage im Urlaub, bei Gästen oder nur in bestimmten Monaten beziehungsweise Sensorzuständen gilt.</p></div></header>
         <label>Im Urlaub<select name="vacation_behavior">${[["pause","Pausieren"],["reduce","Nur bei hoher Priorität"],["delegate","Delegieren"],["always","Immer ausführen"]].map(([value, label]) => `<option value="${value}" ${modes.vacation === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
         <div>
           <label class="checkbox"><input name="guest_only" type="checkbox" ${modes.guest_only ? "checked" : ""}> Nur im Gastmodus</label>
@@ -3485,17 +3950,57 @@ class HouseholdTasksPanel extends HTMLElement {
         <label>Saisonbedingung<select name="season_condition"><option value="">Nur Monate</option>${[["below","Unter"],["at_most","Höchstens"],["above","Über"],["at_least","Mindestens"],["equals","Ist gleich"],["not_equals","Ist ungleich"]].map(([value, label]) => `<option value="${value}" ${season.condition === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
         <label class="full">Saison-Entität${this._entityInput("season_entity_id", season.entity_id || "", [], { placeholder: "Optionaler Sensor oder Warnstatus" })}</label>
         <label>Grenzwert<input name="season_threshold" value="${this._e(season.threshold ?? "")}" placeholder="2 oder high"></label>
+        </section>
+        <section class="full option-group"><header><span class="option-icon">5</span><div><h4>Eigene Eskalation</h4><p>Nur nötig, wenn diese Aufgabe von den globalen Benachrichtigungs- und Eskalationsregeln abweichen soll.</p></div></header>
         <label class="full checkbox"><input name="custom_escalation" type="checkbox" ${esc ? "checked" : ""}> Eigene Eskalationsregeln verwenden</label>
         <div class="full escalation-fields repeatable-editor escalation-editor ${esc ? "" : "hidden"}">
           <div class="repeatable-list">${this._escalationRows(esc || [])}</div>
           <button type="button" class="add-row" data-add-escalation>+ Eskalationsstufe</button>
         </div>
+        </section>
+        <section class="full option-group"><header><span class="option-icon">6</span><div><h4>Wartet auf Zustand</h4><p>Die Aufgabe wird sichtbar angelegt, aber erst freigegeben und benachrichtigt, wenn eine Entität den erwarteten Zustand erreicht.</p></div></header>
+        <label class="full checkbox"><input name="wait_enabled" type="checkbox" ${waitFor.enabled ? "checked" : ""}> Aufgabe zunächst in den Status „Wartend“ setzen</label>
+        <div class="full form-grid">
+          <label class="full">Entität${this._entityInput("wait_entity_id", waitCondition.entity_id || "", [], { placeholder: "sensor.paketstatus" })}</label>
+          <label>Attribut<input name="wait_attribute" value="${this._e(waitCondition.attribute || "")}" placeholder="Optional"></label>
+          <label>Vergleich<select name="wait_condition">${[["equals","Ist gleich"],["not_equals","Ist ungleich"],["below","Kleiner als"],["at_most","Höchstens"],["above","Größer als"],["at_least","Mindestens"]].map(([v,l]) => `<option value="${v}" ${waitCondition.condition === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <label>Wert<input name="wait_value" value="${this._e(waitCondition.value ?? waitCondition.threshold ?? "")}" placeholder="delivered oder 50"></label>
+          <label>Timeout in Stunden<input name="wait_timeout_hours" type="number" min="0" max="8760" step="0.5" value="${Number(waitFor.timeout_hours || 0)}"><span class="hint">0 bedeutet unbegrenzt.</span></label>
+          <label>Bei Timeout<select name="wait_timeout_action">${[["keep_waiting","Weiter warten"],["release","Trotzdem freigeben"],["cancel","Automatisch abbrechen"]].map(([v,l]) => `<option value="${v}" ${waitFor.timeout_action === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        </div></section>
+        <section class="full option-group"><header><span class="option-icon">7</span><div><h4>Energie- und Tarifoptimierung</h4><p>Startet eine Aufgabe erst bei günstigem Tarif, genügend PV-Überschuss und innerhalb des bevorzugten Zeitfensters.</p></div></header>
+        <label class="full checkbox"><input name="energy_enabled" type="checkbox" ${energy.enabled ? "checked" : ""}> Energieoptimierung aktivieren</label>
+        <label class="full checkbox"><input name="energy_wait" type="checkbox" ${energy.wait_until_match !== false ? "checked" : ""}> Bis zum passenden Energiefenster warten</label>
+        <div class="full form-grid">
+          <label>Tarif-/Preisentität${this._entityInput("energy_tariff_entity", energy.tariff_entity || "", ["sensor", "input_number"], { placeholder: "sensor.strompreis" })}</label>
+          <label>Maximaler Preis<input name="energy_max_price" type="number" step="any" value="${this._e(energy.max_price ?? "")}" placeholder="0.25"></label>
+          <label>PV-/Überschussentität${this._entityInput("energy_surplus_entity", energy.surplus_entity || "", ["sensor", "input_number"], { placeholder: "sensor.pv_ueberschuss" })}</label>
+          <label>Minimaler Überschuss<input name="energy_min_surplus" type="number" step="any" value="${this._e(energy.min_surplus ?? "")}" placeholder="1500"></label>
+          <label>Frühester Start<input name="energy_preferred_start" type="time" value="${this._e(energy.preferred_start || "")}"></label>
+          <label>Spätestes Ende<input name="energy_preferred_end" type="time" value="${this._e(energy.preferred_end || "")}"></label>
+        </div></section>
+        <section class="full option-group"><header><span class="option-icon">8</span><div><h4>Stille Stunden und Eskalationsbudget</h4><p>Begrenzt Unterbrechungen pro Tag. Kritische Aufgaben können die Einschränkung weiterhin umgehen.</p></div></header>
+        <div class="full form-grid">
+          <label>Stille Stunden ab<input name="quiet_start" type="time" value="${this._e(notificationPolicy.quiet_start || "")}"></label>
+          <label>Stille Stunden bis<input name="quiet_end" type="time" value="${this._e(notificationPolicy.quiet_end || "")}"></label>
+          <label>Tägliches Push-Budget<input name="daily_budget" type="number" min="0" max="100" value="${Number(notificationPolicy.daily_budget || 0)}"><span class="hint">0 bedeutet unbegrenzt.</span></label>
+          <label>Bei Sperre<select name="quiet_behavior">${[["defer","Später zustellen"],["digest","In Bündelung aufnehmen"],["allow","Trotzdem senden"]].map(([v,l]) => `<option value="${v}" ${notificationPolicy.quiet_behavior === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <label class="full checkbox"><input name="critical_bypass" type="checkbox" ${notificationPolicy.critical_bypass !== false ? "checked" : ""}> Kritische Aufgaben dürfen sofort benachrichtigen</label>
+        </div></section>
+        <section class="full option-group"><header><span class="option-icon">9</span><div><h4>Privat und sensibel</h4><p>Beschränkt Anzeige, Verlauf und Anhänge serverseitig auf zuständige oder ausdrücklich ausgewählte Personen.</p></div></header>
+        <label>Sichtbarkeit<select name="visibility_level">${[["household","Gesamter Haushalt"],["assignee","Nur zuständige Person"],["people","Ausgewählte Personen"]].map(([v,l]) => `<option value="${v}" ${visibility.level === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label class="checkbox"><input name="visibility_hide_details" type="checkbox" ${visibility.hide_details ? "checked" : ""}> Details für andere ausblenden</label>
+        <div class="full candidate-grid">${Object.entries(this._data.people).map(([pid, person]) => `<label class="checkbox"><input type="checkbox" name="visibility_person" value="${this._e(pid)}" ${(visibility.people || []).includes(pid) ? "checked" : ""}> ${this._e(person.name)}</label>`).join("")}</div>
+        <p class="hint full">Administratoren behalten standardmäßig Zugriff, damit Regeln repariert und exportiert werden können.</p></section>
           </div>
         </details>
         ${guided ? `<section class="full task-wizard-review" data-task-step="5" aria-live="polite">
           <div class="eyebrow">ZUSAMMENFASSUNG</div><h3>So wird die Aufgabe angelegt</h3>
-          <dl class="wizard-review-facts"><div><dt>Aufgabe</dt><dd data-review-name>–</dd></div><div><dt>Zuständigkeit</dt><dd data-review-assignment>–</dd></div><div><dt>Auslöser</dt><dd data-review-schedule>–</dd></div></dl>
+          <dl class="wizard-review-facts"><div><dt>Aufgabe</dt><dd data-review-name>–</dd></div><div><dt>Zuständigkeit</dt><dd data-review-assignment>–</dd></div><div><dt>Auslöser</dt><dd data-review-schedule>–</dd></div><div><dt>Betriebsart</dt><dd data-review-mode>Produktiv</dd></div></dl>
+          <div class="wizard-review-panel"><strong>In Klartext</strong><p data-review-rule>Wird aus der aktuellen Konfiguration erstellt.</p></div>
           <div class="wizard-review-preview"><strong>Regelprüfung</strong><output data-review-preview>Wird beim Öffnen dieses Schritts berechnet.</output></div>
+          <div class="wizard-review-panel"><strong>Nächste Simulationen</strong><p>Diese Vorschau verändert weder Aufgaben noch Verlauf.</p><ol class="simulation-timeline" data-simulation-timeline><li>Simulation wird beim Öffnen berechnet.</li></ol></div>
+          <div class="wizard-review-panel"><strong>${id ? "Änderungen gegenüber der gespeicherten Vorlage" : "Auswirkung beim Speichern"}</strong><div class="change-preview" data-review-changes></div></div>
         </section>` : ""}
         <div class="full modal-actions task-editor-actions"><button type="button" class="cancel">Abbrechen</button>${guided ? `<button type="button" data-wizard-prev>Zurück</button><button type="button" class="primary" data-wizard-next>Weiter</button>` : ""}<button class="primary save-task" type="submit">Speichern</button></div>
       </form></div></div>`;
@@ -3552,11 +4057,22 @@ class HouseholdTasksPanel extends HTMLElement {
     this._bindInlineTaskCreates(modal, id);
     const runPreview = this._bindTaskPreview(modal, id);
     if (guided) this._bindTaskWizard(modal, runPreview, id);
-    form.addEventListener("input", () => { dirty = true; });
-    form.addEventListener("change", () => { dirty = true; });
+    const updateRuleSentence = () => {
+      modal.querySelector("[data-rule-sentence]").textContent = this._taskRuleSentence(form);
+    };
+    modal.querySelector("[name=shadow_enabled]").onchange = (event) => {
+      modal.querySelector(".shadow-review-settings").classList.toggle("hidden", !event.target.checked);
+    };
+    form.addEventListener("input", () => { dirty = true; updateRuleSentence(); });
+    form.addEventListener("change", () => { dirty = true; updateRuleSentence(); });
+    updateRuleSentence();
     form.onsubmit = async (event) => {
       event.preventDefault();
       try {
+        if (guided && Number(modal.querySelector(".task-editor--wizard")?.dataset.currentStep) !== 5) {
+          await modal._showTaskReview?.();
+          return;
+        }
         const { taskId, value } = this._readTaskForm(event.target);
         this._preserveTaskDevice(value, task);
         const projection = await this._hass.callWS({ type: "household_tasks/task_projection", task: value });
@@ -3571,6 +4087,8 @@ class HouseholdTasksPanel extends HTMLElement {
 
   _preserveTaskDevice(value, task) {
     if (task.device) value.device = task.device;
+    if (task.community) value.community = task.community;
+    if (task.shadow?.started_at && value.shadow) value.shadow.started_at = task.shadow.started_at;
   }
 
   _bindTaskWizard(modal, runPreview, existingId = null) {
@@ -3592,6 +4110,7 @@ class HouseholdTasksPanel extends HTMLElement {
       if (step === 5) await this._updateTaskWizardReview(modal, form, runPreview);
       this._focusTaskWizardStep(modal, form, step);
     };
+    modal._showTaskReview = () => showStep(5);
 
     if (!existingId) {
       nameInput.addEventListener("input", generateId);
@@ -3635,6 +4154,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _displayTaskWizardStep(modal, state, existingId) {
+    modal.querySelector(".task-editor--wizard").dataset.currentStep = String(state.current);
     modal.querySelectorAll("[data-task-step]").forEach((section) => {
       section.classList.toggle("wizard-step-hidden", Number(section.dataset.taskStep) !== state.current);
     });
@@ -3656,12 +4176,155 @@ class HouseholdTasksPanel extends HTMLElement {
     modal.querySelector("[data-review-name]").textContent = form.elements.name.value.trim() || "Noch kein Name";
     modal.querySelector("[data-review-assignment]").textContent = assignment.options[assignment.selectedIndex]?.textContent || "–";
     modal.querySelector("[data-review-schedule]").textContent = schedule.options[schedule.selectedIndex]?.textContent || "–";
+    modal.querySelector("[data-review-mode]").textContent = form.elements.shadow_enabled?.checked ? "Shadow Mode · keine Seiteneffekte" : "Produktiv";
+    const ruleSentence = this._taskRuleSentence(form);
+    modal.querySelector("[data-review-rule]").textContent = ruleSentence;
     const reviewPreview = modal.querySelector("[data-review-preview]");
     reviewPreview.textContent = "Regel wird geprüft …";
-    await runPreview();
+    const simulation = await runPreview();
     const source = modal.querySelector(".preview-result");
     reviewPreview.textContent = source.textContent || "Für diese Konfiguration ist noch keine Vorschau verfügbar.";
     reviewPreview.classList.toggle("error", source.classList.contains("error"));
+    this._renderSimulationTimeline(modal, simulation?.preview);
+    try {
+      const { value } = this._readTaskForm(form);
+      this._renderTaskChanges(modal, value);
+    } catch (error) {
+      modal.querySelector("[data-review-changes]").textContent = this._errorText(error);
+    }
+  }
+
+  _taskRuleSentence(form) {
+    const values = new FormData(form);
+    const de = householdTasksLocale(this._hass) === "de";
+    const name = this._formText(values, "name").trim() || (de ? "Diese Aufgabe" : "This task");
+    const type = this._formText(values, "type", "manual");
+    const schedule = this._ruleScheduleSentence(values, type, de);
+    const assignment = this._ruleAssignmentSentence(form, values, de);
+    return de
+      ? `„${name}“ wird ${schedule} ${assignment}.`
+      : `“${name}” is ${schedule} ${assignment}.`;
+  }
+
+  _ruleScheduleSentence(values, type, de) {
+    const time = this._formText(values, "time", "18:00:00").slice(0, 5);
+    if (type === "manual") return de ? "nur manuell erzeugt" : "created manually only";
+    if (type === "weekly") {
+      const weekdays = values.getAll("weekday")
+        .map((day) => Object.fromEntries(this._weekdays())[day] || day).join(", ");
+      return de ? `jeden ${weekdays || "gewählten Wochentag"} um ${time} erzeugt` : `created every ${weekdays || "selected weekday"} at ${time}`;
+    }
+    if (type === "monthly") return de ? `monatlich um ${time} erzeugt` : `created monthly at ${time}`;
+    if (type === "yearly") return de ? `jährlich um ${time} erzeugt` : `created yearly at ${time}`;
+    if (type === "interval_months") return de ? `alle ${this._formText(values, "months", "N")} Monate erzeugt` : `created every ${this._formText(values, "months", "N")} months`;
+    if (["after_completion", "flexible_after_completion"].includes(type)) return de ? "abhängig von der letzten Erledigung erneut erzeugt" : "created again based on the last completion";
+    if (type === "calendar") {
+      const entity = this._formText(values, "entity_id") || (de ? "dem gewählten Kalender" : "the selected calendar");
+      return de ? `vor passenden Terminen aus ${entity} erzeugt` : `created before matching events from ${entity}`;
+    }
+    if (type === "weather_trigger") return de ? "erzeugt, sobald die aktuelle Wetterregel passt" : "created when the current weather rule matches";
+    if (type === "forecast_trigger") return de ? "vor dem ersten passenden Vorhersagezeitraum erzeugt" : "created before the first matching forecast period";
+    if (type === "state_trigger") return de ? "bei einem passenden Zustandswechsel erzeugt" : "created on a matching state change";
+    if (type === "daily_after_state") return de ? `einmal täglich nach einem passenden Gerätestatus um ${time} erzeugt` : `created once daily after a matching device state at ${time}`;
+    return de ? "durch die konfigurierte Regel erzeugt" : "created by the configured rule";
+  }
+
+  _ruleAssignmentSentence(form, values, de) {
+    const type = this._formText(values, "assignment_type", "fixed");
+    if (type === "fixed") {
+      const select = form.elements.assignee;
+      const name = select?.options[select.selectedIndex]?.textContent || (de ? "der gewählten Person" : "the selected person");
+      return de ? `und fest ${name} zugewiesen` : `and assigned to ${name}`;
+    }
+    const people = values.getAll("assignment_person")
+      .map((id) => this._data.people[id]?.name || id);
+    const targets = people.length ? people.join(", ") : (de ? "allen Personen" : "everyone");
+    if (type === "per_person") return de ? `und für ${targets} jeweils separat angelegt` : `and created separately for ${targets}`;
+    if (type === "open") return de ? `und für ${targets} zur Übernahme geöffnet` : `and opened for ${targets} to claim`;
+    if (type === "rotation") return de ? `und der Reihe nach zwischen ${targets} verteilt` : `and rotated between ${targets}`;
+    return de ? `und fair zwischen ${targets} verteilt` : `and fairly distributed between ${targets}`;
+  }
+
+  _renderSimulationTimeline(modal, preview) {
+    const timeline = modal.querySelector("[data-simulation-timeline]");
+    const entries = preview?.timeline || [];
+    const de = householdTasksLocale(this._hass) === "de";
+    if (!entries.length) {
+      timeline.innerHTML = `<li><span class="simulation-state">ℹ</span><div><strong>${de ? "Kein fester Zeitpunkt berechenbar" : "No fixed time can be calculated"}</strong><small>${de ? "Manuelle und zustandsbasierte Regeln werden stattdessen anhand ihres aktuellen Zustands geprüft." : "Manual and state-based rules are evaluated using their current state instead."}</small></div></li>`;
+      return;
+    }
+    timeline.innerHTML = entries.map((item) => {
+      const outcome = item.would_create
+        ? (de ? "Aufgabe würde erzeugt" : "Task would be created")
+        : (item.blocked_by?.join("; ") || (de ? "Aktuell blockiert" : "Currently blocked"));
+      return `<li><span class="simulation-state ${item.would_create ? "match" : "blocked"}">${item.would_create ? "✓" : "–"}</span><div><strong>${this._e(new Date(item.at).toLocaleString(this._locale(), { dateStyle: "medium", timeStyle: "short" }))}</strong><small>${this._e(this._simulationReason(item, de))} · ${this._e(outcome)}</small></div></li>`;
+    }).join("");
+  }
+
+  _simulationReason(item, de) {
+    if (item.kind === "scheduled") return de ? "Geplanter Auslösezeitpunkt" : "Scheduled trigger time";
+    if (item.kind === "calendar") return `${de ? "Kalender" : "Calendar"}: ${item.reason}`;
+    if (item.kind === "forecast_trigger") return de ? "Passender Vorhersagezeitraum" : "Matching forecast period";
+    return de ? item.reason : "Next calculated trigger time";
+  }
+
+  _renderTaskChanges(modal, current) {
+    const originalId = modal.querySelector("[name=id]")?.defaultValue;
+    const original = originalId ? this._data.tasks[originalId] : null;
+    const container = modal.querySelector("[data-review-changes]");
+    const de = householdTasksLocale(this._hass) === "de";
+    if (!original) {
+      container.innerHTML = `<div class="change-row added"><strong>${de ? "Neue Vorlage" : "New template"}</strong><span>${de ? "Wird aktiv gespeichert; bestehende Aufgaben und der Verlauf bleiben unverändert." : "Saved as active; existing tasks and history remain unchanged."}</span></div>`;
+      return;
+    }
+    const definitions = [
+      [de ? "Name" : "Name", original.name, current.name, (value) => value || "–"],
+      [de ? "Status" : "Status", { enabled: original.enabled, paused_until: original.paused_until, shadow: original.shadow }, { enabled: current.enabled, paused_until: current.paused_until, shadow: current.shadow }, (value) => value?.enabled === false ? (de ? "Deaktiviert" : "Disabled") : value?.shadow?.enabled ? "Shadow Mode" : value?.paused_until ? `${de ? "Pausiert bis" : "Paused until"} ${new Date(value.paused_until).toLocaleString(this._locale())}` : (de ? "Aktiv" : "Active")],
+      [de ? "Zuständigkeit" : "Assignment", { assignment: original.assignment, assignee: original.assignee }, { assignment: current.assignment, assignee: current.assignee }, (value) => this._taskAssignmentChangeSummary(value, de)],
+      [de ? "Auslöser" : "Trigger", { schedule: original.schedule, weather: original.weather, season: original.season, repeat: original.repeat }, { schedule: current.schedule, weather: current.weather, season: current.season, repeat: current.repeat }, (value) => this._taskTriggerChangeSummary(value, de)],
+      [de ? "Inhalt" : "Content", { description: original.description, checklist: original.checklist }, { description: current.description, checklist: current.checklist }, (value) => this._taskContentChangeSummary(value, de)],
+      [de ? "Ablauf" : "Flow", { depends_on: original.depends_on, follow_ups: original.follow_ups, automatic_completion: original.automatic_completion }, { depends_on: current.depends_on, follow_ups: current.follow_ups, automatic_completion: current.automatic_completion }, (value) => this._taskFlowChangeSummary(value, de)],
+      ["NFC", original.nfc, current.nfc, (value) => value?.tag_id ? `${value.tag_id} · ${value.action}` : (de ? "Nicht konfiguriert" : "Not configured")],
+      [de ? "Wertung" : "Scoring", original.market, current.market, (value) => `${value?.priority || "normal"} · ${value?.points ?? 1} ${de ? "Punkte" : "points"}${value?.reward ? ` · ${value.reward}` : ""}`],
+      [de ? "Eskalation und Modi" : "Escalation and modes", { escalation: original.escalation, modes: original.modes }, { escalation: current.escalation, modes: current.modes }, (value) => `${(value?.escalation || []).map((stage) => `${stage.after}:${stage.action}:${stage.recipients}`).join(", ") || (de ? "globale Eskalation" : "global escalation")} · ${de ? "Urlaub" : "Vacation"}: ${value?.modes?.vacation || "pause"} · ${de ? "Gast" : "Guest"}: ${value?.modes?.guest_only ? "only" : value?.modes?.skip_in_guest ? "skip" : "normal"}`],
+    ];
+    const changes = definitions.filter(([, before, after, format]) => format(before) !== format(after));
+    container.innerHTML = changes.length
+      ? changes.map(([label, before, after, format]) => `<div class="change-row"><strong>${label}</strong><span><del>${this._e(format(before))}</del><b>→</b><ins>${this._e(format(after))}</ins></span></div>`).join("")
+      : `<div class="change-row unchanged"><strong>${de ? "Keine Änderungen" : "No changes"}</strong><span>${de ? "Die Vorlage entspricht bereits dem gespeicherten Stand." : "The template already matches the saved version."}</span></div>`;
+  }
+
+  _taskAssignmentChangeSummary(value, de) {
+    const label = this._assignmentLabel(value).label;
+    if (!value?.assignment?.presence_required) return label;
+    const policy = value.assignment.absence_policy || "wait";
+    const fallback = (value.assignment.fallback_people || [])
+      .map((id) => this._data.people[id]?.name || id).join(", ");
+    return `${label} · ${de ? "Anwesenheit" : "presence"}: ${policy}${fallback ? ` (${fallback})` : ""}`;
+  }
+
+  _taskTriggerChangeSummary(value, de) {
+    const parts = [this._scheduleLabel(value?.schedule)];
+    const conditions = (value?.weather?.conditions || []).map((item) =>
+      `${item.entity_id}${item.attribute ? `.${item.attribute}` : ""} ${item.operator || ""} ${item.value ?? ""}`.trim()
+    );
+    if (conditions.length) parts.push(conditions.join(", "));
+    if (value?.season?.months?.length) parts.push(`${de ? "Monate" : "months"}: ${value.season.months.join(",")}`);
+    if (value?.repeat?.mode === "once_per_season") parts.push(de ? "einmal je Saison" : "once per season");
+    return parts.join(" · ");
+  }
+
+  _taskContentChangeSummary(value, de) {
+    const description = String(value?.description || "").trim();
+    const checklist = (value?.checklist || []).map((item) => typeof item === "string" ? item : item.title).filter(Boolean);
+    return `${description || (de ? "Keine Beschreibung" : "No description")} · ${checklist.length} ${de ? "Checklistenpunkte" : "checklist items"}`;
+  }
+
+  _taskFlowChangeSummary(value, de) {
+    const dependencies = (value?.depends_on || []).join(", ") || "–";
+    const followUps = (value?.follow_ups || []).map((item) => item.task_id).join(", ") || "–";
+    const automatic = value?.automatic_completion?.enabled ? (de ? "automatische Gutschrift" : "automatic credit") : (de ? "manueller Abschluss" : "manual completion");
+    return `${de ? "Abhängigkeiten" : "Dependencies"}: ${dependencies} · ${de ? "Folgeaufgaben" : "Follow-ups"}: ${followUps} · ${automatic}`;
   }
 
   _focusTaskWizardStep(modal, form, step) {
@@ -3671,6 +4334,7 @@ class HouseholdTasksPanel extends HTMLElement {
   }
 
   _editorTask(id, options) {
+    if (options.prefill) return structuredClone(options.prefill);
     if (id) return structuredClone(this._data.tasks[id]);
     return this._newTask(options);
   }
@@ -3707,9 +4371,11 @@ class HouseholdTasksPanel extends HTMLElement {
         ]);
         output.textContent = this._taskPreviewParts(preview, projection).join(" — ");
         output.className = "preview-result";
+        return { preview, projection, value };
       } catch (error) {
         output.textContent = this._errorText(error);
         output.className = "preview-result error";
+        return null;
       }
     };
     modal.querySelector("[data-preview-task]").onclick = runPreview;
@@ -4544,6 +5210,15 @@ class HouseholdTasksPanel extends HTMLElement {
       }
       value.paused_until = pausedUntil.toISOString();
     }
+    if (f.get("shadow_enabled") === "on") {
+      const reviewAt = new Date(String(f.get("shadow_review_at") || ""));
+      if (Number.isNaN(reviewAt.getTime())) throw new Error("Bitte einen gültigen Prüfzeitpunkt für den Shadow Mode auswählen.");
+      value.shadow = {
+        enabled: true,
+        started_at: new Date().toISOString(),
+        review_at: reviewAt.toISOString(),
+      };
+    }
     if (f.get("presence_required") === "on") value.assignment.presence_required = true;
     if (assignmentType === "fixed") {
       value.assignee = f.get("assignee");
@@ -4612,6 +5287,71 @@ class HouseholdTasksPanel extends HTMLElement {
       if (!value.season?.months?.length) throw new Error("Einmal pro Saison benötigt mindestens einen Saisonmonat.");
       value.repeat = { mode: "once_per_season" };
     }
+    if (f.get("wait_enabled") === "on") {
+      const entityId = String(f.get("wait_entity_id") || "").trim();
+      const expected = String(f.get("wait_value") || "").trim();
+      if (!entityId || !this._hass.states[entityId]) throw new Error("Bitte eine vorhandene Entität für den Wartezustand auswählen.");
+      if (!expected) throw new Error("Bitte einen erwarteten Wert für den Wartezustand angeben.");
+      value.wait_for = {
+        enabled: true,
+        match: "all",
+        conditions: [{
+          entity_id: entityId,
+          attribute: String(f.get("wait_attribute") || "").trim(),
+          condition: f.get("wait_condition") || "equals",
+          value: expected,
+        }],
+        timeout_hours: Math.max(0, Number(f.get("wait_timeout_hours") || 0)),
+        timeout_action: f.get("wait_timeout_action") || "keep_waiting",
+      };
+    }
+    if (f.get("energy_enabled") === "on") {
+      const tariffEntity = String(f.get("energy_tariff_entity") || "").trim();
+      const surplusEntity = String(f.get("energy_surplus_entity") || "").trim();
+      if (!tariffEntity && !surplusEntity && !(f.get("energy_preferred_start") && f.get("energy_preferred_end"))) {
+        throw new Error("Für die Energieoptimierung wird mindestens ein Tarif-, Überschuss- oder Zeitfenster benötigt.");
+      }
+      if (tariffEntity && !this._hass.states[tariffEntity]) throw new Error("Die Tarif-Entität existiert nicht.");
+      if (surplusEntity && !this._hass.states[surplusEntity]) throw new Error("Die Überschuss-Entität existiert nicht.");
+      value.energy = {
+        enabled: true,
+        wait_until_match: f.get("energy_wait") === "on",
+        match: "all",
+      };
+      if (tariffEntity) {
+        value.energy.tariff_entity = tariffEntity;
+        value.energy.max_price = Number(f.get("energy_max_price"));
+      }
+      if (surplusEntity) {
+        value.energy.surplus_entity = surplusEntity;
+        value.energy.min_surplus = Number(f.get("energy_min_surplus"));
+      }
+      if (f.get("energy_preferred_start") && f.get("energy_preferred_end")) {
+        value.energy.preferred_start = f.get("energy_preferred_start");
+        value.energy.preferred_end = f.get("energy_preferred_end");
+      }
+    }
+    const notificationPolicy = {
+      quiet_behavior: f.get("quiet_behavior") || "defer",
+      daily_budget: Math.max(0, Number(f.get("daily_budget") || 0)),
+      critical_bypass: f.get("critical_bypass") === "on",
+    };
+    if (f.get("quiet_start") && f.get("quiet_end")) {
+      notificationPolicy.quiet_start = f.get("quiet_start");
+      notificationPolicy.quiet_end = f.get("quiet_end");
+    }
+    if (notificationPolicy.daily_budget || notificationPolicy.quiet_start) value.notification_policy = notificationPolicy;
+    const visibilityLevel = f.get("visibility_level") || "household";
+    const visibilityPeople = f.getAll("visibility_person").map(String);
+    if (visibilityLevel === "people" && !visibilityPeople.length) throw new Error("Bitte mindestens eine sichtberechtigte Person auswählen.");
+    if (visibilityLevel !== "household" || f.get("visibility_hide_details") === "on") {
+      value.visibility = {
+        level: visibilityLevel,
+        people: visibilityPeople,
+        hide_details: f.get("visibility_hide_details") === "on",
+        admin_access: true,
+      };
+    }
     if (f.get("custom_escalation") === "on") value.escalation = this._readEscalation(form.querySelector(".escalation-editor"));
     return { taskId: f.get("id").trim(), value };
   }
@@ -4666,15 +5406,17 @@ class HouseholdTasksPanel extends HTMLElement {
     modal.innerHTML = `<div class="backdrop"><div class="modal-card small">
       <div class="modal-head"><div><div class="eyebrow">PERSON</div><h2>${id ? "Person bearbeiten" : "Neue Person"}</h2></div><button class="icon-button close">×</button></div>
       <form id="person-form" class="form-grid">
-        <label>ID<input name="id" required pattern="[a-z0-9_]+" ${id ? "readonly" : ""} value="${this._e(id || "")}" placeholder="vorname"></label>
-        <label>Name<input name="name" required value="${this._e(p.name)}"></label>
-        <label class="full">Push-Aktion${this._notifyInput(p.notify)}</label>
+        <section class="full wizard-step-intro"><span class="step-purpose">GRUNDLAGEN</span><h3>Wer nutzt Household Tasks?</h3><p>Die Person hier verbindet Aufgaben mit einer sichtbaren Bezeichnung. Die technische ID bleibt später stabil, auch wenn sich der Name ändert.</p></section>
+        <label>ID<input name="id" required pattern="[a-z0-9_]+" ${id ? "readonly" : ""} value="${this._e(id || "")}" placeholder="vorname"><span class="hint">Kleinbuchstaben, Zahlen und Unterstriche; zum Beispiel „dominik“.</span></label>
+        <label>Name<input name="name" required value="${this._e(p.name)}"><span class="hint">Wird in Aufgaben, Benachrichtigungen und Auswertungen angezeigt.</span></label>
+        <section class="full wizard-step-intro"><span class="step-purpose">HOME ASSISTANT VERBINDEN</span><h3>Benachrichtigung und Anwesenheit</h3><p>Diese Angaben sind optional. Ohne Push entstehen Aufgaben weiterhin; ohne Anwesenheits-Entität gilt die Person für anwesenheitsabhängige Regeln nicht als zuhause.</p></section>
+        <label class="full">Push-Aktion${this._notifyInput(p.notify)}<span class="hint">Wähle den <code>notify.mobile_app_…</code>-Dienst des persönlichen Geräts. Er wird für Fälligkeiten, Eskalationen und direkte Aktionen verwendet.</span></label>
         <label class="full">Anwesenheits-Entität${this._entityInput("presence", p.presence || "", ["person", "device_tracker", "binary_sensor"], {
           placeholder: "Person oder Tracker suchen",
-          hint: "Vorgeschlagen werden Personen, Geräte-Tracker und Anwesenheitssensoren aus Home Assistant.",
+          hint: "Am zuverlässigsten ist person.*: Home Assistant bündelt darin alle zugeordneten Tracker. Ein einzelner device_tracker kann veraltet oder doppelt vorhanden sein.",
         })}</label>
-        <label class="full">Home-Assistant-Benutzer-ID${this._userInput(p.user_id || "")}</label>
-        <label class="full">NFC-Geräte-ID (optional)${this._deviceInput(p.nfc_device_id || "")}</label>
+        <label class="full">Home-Assistant-Benutzer-ID${this._userInput(p.user_id || "")}<span class="hint">Ordnet den angemeldeten HA-Benutzer dieser Person zu – etwa für „Meine Aufgaben“, NFC-Scans und die korrekte Gutschrift.</span></label>
+        <label class="full">NFC-Geräte-ID (optional)${this._deviceInput(p.nfc_device_id || "")}<span class="hint">Nur nötig, wenn mehrere Geräte denselben HA-Benutzer verwenden und Scans trotzdem einer Person zugeordnet werden sollen.</span></label>
         <div class="full test-actions">
           <button type="button" data-test-presence>Anwesenheit prüfen</button>
           <button type="button" data-test-notification>Testbenachrichtigung senden</button>
@@ -4774,9 +5516,11 @@ class HouseholdTasksPanel extends HTMLElement {
       .task-status{display:inline-flex;padding:2px 7px;margin-right:5px;border-radius:99px;background:var(--divider-color,#eee);color:var(--primary-text-color,#202124);font-size:10px;font-weight:800;text-transform:uppercase}.status-in_progress{background:#dceeff;color:#075c9c}.status-waiting{background:#fff1c7;color:#735700}.status-blocked{background:#ffe1df;color:#9b1c16}.task-checklist{display:grid;gap:5px;margin-top:10px;padding:9px 10px;border-radius:10px;background:color-mix(in srgb,var(--primary-color) 5%,transparent)}.task-checklist label{display:flex;align-items:flex-start;gap:7px;font-size:13px}.task-checklist input{width:auto;margin-top:2px}.task-checklist input:checked+span{text-decoration:line-through;color:var(--secondary-text-color)}.task-dependencies{color:var(--warning-color,#b26a00)!important}.task-event-list{display:grid;gap:0;max-height:55vh;overflow:auto}.task-event-list article{display:grid;grid-template-columns:1fr auto;gap:3px 12px;padding:11px 2px;border-bottom:1px solid var(--divider-color)}.task-event-list time,.task-event-list small{font-size:12px;color:var(--secondary-text-color)}
       .toolbar{display:flex;align-items:end;justify-content:space-between;margin-bottom:18px}.toolbar p{margin:5px 0 0}.toolbar-actions{display:flex;gap:8px;flex-wrap:wrap}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}.config-card,.settings-card,.card{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:16px;padding:18px}.config-card.disabled{opacity:.65}.card-top{display:flex;align-items:center;gap:12px}.card-top>div:nth-child(2){flex:1}.card-top p{font-size:13px;margin:3px 0}.status{font-size:11px;font-weight:750;padding:4px 8px;border-radius:99px;background:var(--divider-color,#eee)}.status.home{background:#daf5df;color:#17752a}.description{font-size:14px}.actions{display:flex;gap:7px;margin-top:15px;flex-wrap:wrap}.danger-button{color:var(--error-color,#db4437)}dl{font-size:13px}dt{color:var(--secondary-text-color);margin-top:9px}dd{margin:2px 0;overflow-wrap:anywhere}.gallery-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}.gallery-strip article{display:flex;flex-direction:column;align-items:flex-start;padding:14px;border:1px solid var(--divider-color);border-radius:13px;background:var(--card-background-color)}.gallery-strip span,.gallery-modal span{font-size:10px;font-weight:800;color:var(--primary-color);text-transform:uppercase}.gallery-strip strong{margin:5px 0}.gallery-strip p{font-size:12px;flex:1}.gallery-modal{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:18px}.gallery-modal>button{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:5px}.gallery-modal>button.selected{border-color:var(--primary-color);box-shadow:0 0 0 1px var(--primary-color)}
       .timeline{background:var(--card-background-color,#fff);border-radius:16px;border:1px solid var(--divider-color,#ddd);padding:4px 18px}.history-row{display:flex;gap:13px;align-items:center;padding:14px 0;border-bottom:1px solid var(--divider-color,#ddd)}.history-row:last-child{border:0}.history-row p{margin:4px 0 0;font-size:13px}.check{display:grid;place-items:center;border-radius:50%;width:34px;height:34px;background:#daf5df;color:#17752a;font-weight:800}
-      .settings-card{max-width:760px;margin-bottom:14px}.settings-card>p{margin-top:6px}.info-row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--divider-color,#ddd);font-size:14px}.settings-card>.danger-button{margin-top:14px}.settings-heading{display:flex;justify-content:space-between;align-items:start;gap:12px}.settings-heading p{margin:5px 0}.health-summary{padding:10px 12px;border-radius:9px;background:#daf5df;color:#17752a;font-weight:700}.health-summary.warning{background:#fff1bf;color:#765600}.health-summary.critical{background:#fee2e2;color:#991b1b}.health-list{display:grid;gap:7px;margin-top:10px}.health-list>div{display:flex;gap:10px;padding:9px;border-left:4px solid var(--primary-color);background:var(--secondary-background-color)}.health-list>.warning{border-color:#f59e0b}.health-list>.critical{border-color:var(--error-color)}.health-list strong{text-transform:uppercase;font-size:10px}.decision-line{display:grid;gap:5px;padding:12px;margin-bottom:9px;border-left:4px solid #25a244;background:var(--secondary-background-color)}.decision-line.blocked{border-color:var(--error-color)}
+      .configuration-guide{display:grid;grid-template-columns:minmax(220px,1fr) minmax(320px,1.5fr);gap:18px;max-width:1040px;margin-bottom:26px;padding:20px;border:1px solid color-mix(in srgb,var(--primary-color) 35%,var(--divider-color));border-radius:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--primary-color) 9%,var(--card-background-color)),var(--card-background-color))}.configuration-guide h3{font-size:21px;margin:4px 0}.configuration-guide p{max-width:58ch;margin:6px 0;line-height:1.5}.settings-jump-links{display:grid;grid-template-columns:1fr 1fr;gap:8px}.settings-jump-links a{display:grid;padding:11px 12px;border:1px solid var(--divider-color);border-radius:11px;background:var(--card-background-color);color:var(--primary-text-color);font-weight:750;text-decoration:none}.settings-jump-links a:hover,.settings-jump-links a:focus-visible{border-color:var(--primary-color);box-shadow:0 0 0 2px color-mix(in srgb,var(--primary-color) 18%,transparent)}.settings-jump-links small{margin-top:3px;color:var(--secondary-text-color);font-weight:400}.configuration-path{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0;padding:14px 0 0;border-top:1px solid var(--divider-color);list-style:none}.configuration-path li{display:flex;align-items:center;gap:9px}.configuration-path b,.option-icon{display:grid;place-items:center;flex:none;width:30px;height:30px;border-radius:50%;background:var(--primary-color);color:#fff}.configuration-path span{display:grid}.configuration-path small{color:var(--secondary-text-color)}
+      .settings-search{grid-column:1/-1;display:grid;gap:5px;padding-top:14px;border-top:1px solid var(--divider-color);font-size:13px;font-weight:700}.settings-search input{width:100%;padding:11px 12px;border:1px solid var(--divider-color);border-radius:10px;background:var(--card-background-color)}.settings-search output{color:var(--ht-accent-text);font-size:12px}.recommendation-panel{display:grid;grid-template-columns:minmax(220px,.8fr) minmax(340px,1.4fr);gap:18px;max-width:1040px;margin:0 0 26px;padding:18px;border:1px solid color-mix(in srgb,#f59e0b 40%,var(--divider-color));border-radius:18px;background:color-mix(in srgb,#f59e0b 7%,var(--card-background-color))}.recommendation-panel h3{margin:4px 0}.recommendation-panel p{margin:4px 0;color:var(--secondary-text-color)}.recommendation-list{display:grid;gap:8px}.recommendation-list article{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px;border:1px solid var(--divider-color);border-radius:11px;background:var(--card-background-color)}.recommendation-list article>div{display:grid;gap:3px}.recommendation-list small{color:var(--secondary-text-color);overflow-wrap:anywhere}
+      .settings-group{max-width:1040px;margin:0 0 28px;padding:18px;border:1px solid var(--divider-color);border-radius:18px;background:color-mix(in srgb,var(--secondary-background-color) 48%,transparent);scroll-margin-top:18px}.settings-group>header{display:flex;justify-content:space-between;gap:18px;align-items:start;margin:0 2px 15px}.settings-group>header h3{font-size:20px;margin:4px 0}.settings-group>header p{margin:4px 0;max-width:68ch}.group-count{flex:none;padding:4px 9px;border-radius:99px;background:var(--divider-color);font-size:11px;font-weight:750}.settings-card{max-width:none;margin-bottom:12px}.settings-group>.settings-card:last-child{margin-bottom:0}.settings-card>p{margin-top:6px;line-height:1.5}.info-row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--divider-color,#ddd);font-size:14px}.settings-card>.danger-button{margin-top:14px}.settings-heading{display:flex;justify-content:space-between;align-items:start;gap:12px}.settings-heading p{margin:5px 0}.health-summary{padding:10px 12px;border-radius:9px;background:#daf5df;color:#17752a;font-weight:700}.health-summary.warning{background:#fff1bf;color:#765600}.health-summary.critical{background:#fee2e2;color:#991b1b}.health-list{display:grid;gap:7px;margin-top:10px}.health-list>div{display:flex;gap:10px;padding:9px;border-left:4px solid var(--primary-color);background:var(--secondary-background-color)}.health-list>.warning{border-color:#f59e0b}.health-list>.critical{border-color:var(--error-color)}.health-list strong{text-transform:uppercase;font-size:10px}.decision-line{display:grid;gap:5px;padding:12px;margin-bottom:9px;border-left:4px solid #25a244;background:var(--secondary-background-color)}.decision-line.blocked{border-color:var(--error-color)}
       .health-list span{flex:1}.health-list button{padding:5px 9px}.discovery-list{display:grid;gap:7px}.discovery-list>div{display:flex;align-items:center;gap:10px;padding:9px;border-radius:9px;background:var(--secondary-background-color)}.discovery-list span{display:grid;flex:1}.discovery-list small{color:var(--secondary-text-color);overflow-wrap:anywhere}.smart-capture{display:grid;grid-template-columns:1fr auto;align-items:end;gap:8px;padding:12px;border:1px solid color-mix(in srgb,var(--primary-color) 40%,var(--divider-color));border-radius:12px;background:color-mix(in srgb,var(--primary-color) 6%,transparent)}.smart-capture output{grid-column:1/-1}
-      .caldav-card code{overflow-wrap:anywhere}.caldav-credentials{display:grid;gap:8px}.caldav-credential{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--divider-color);border-radius:10px;background:var(--secondary-background-color)}.caldav-credential>div{display:grid;gap:3px;min-width:0}.caldav-credential small{color:var(--secondary-text-color);overflow-wrap:anywhere}.setup-steps{padding-left:22px}.setup-steps li{margin:8px 0}.credential-secret dd{display:flex;align-items:center;gap:8px;margin:4px 0 12px}.credential-secret code{flex:1;padding:9px;background:var(--secondary-background-color);border-radius:7px;overflow-wrap:anywhere;user-select:all}
+      .settings-collection{border:1px solid var(--divider-color);border-radius:14px;background:var(--card-background-color)}.settings-collection>summary{display:grid;gap:4px;padding:15px 17px;cursor:pointer;font-weight:750}.settings-collection>summary small{color:var(--secondary-text-color);font-weight:400}.settings-collection[open]>summary{border-bottom:1px solid var(--divider-color)}.settings-collection-body{padding:12px}.caldav-card code{overflow-wrap:anywhere}.caldav-credentials{display:grid;gap:8px}.caldav-credential{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--divider-color);border-radius:10px;background:var(--secondary-background-color)}.caldav-credential>div{display:grid;gap:3px;min-width:0}.caldav-credential small{color:var(--secondary-text-color);overflow-wrap:anywhere}.setup-steps{padding-left:22px}.setup-steps li{margin:8px 0}.credential-secret dd{display:flex;align-items:center;gap:8px;margin:4px 0 12px}.credential-secret code{flex:1;padding:9px;background:var(--secondary-background-color);border-radius:7px;overflow-wrap:anywhere;user-select:all}
       .config-transfer{border-top:1px solid var(--divider-color,#ddd);margin-top:12px;padding-top:16px}.config-transfer p{font-size:13px}.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}.metric,.analytics-card{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:16px;padding:18px}.metric{display:flex;flex-direction:column;gap:8px}.metric span{font-size:13px;color:var(--secondary-text-color)}.metric b{font-size:26px}.metric.danger b{color:var(--error-color,#db4437)}.analytics-card{margin-bottom:14px}.analytics-card h3{margin-bottom:12px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:10px;border-top:1px solid var(--divider-color,#ddd);white-space:nowrap}th{font-size:12px;color:var(--secondary-text-color)}.insight-list{display:grid;gap:8px}.insight{padding:11px 13px;border-radius:10px;background:var(--secondary-background-color,#f3f4f6);border-left:4px solid var(--primary-color)}.insight.warning{border-color:#f59e0b}.insight.critical{border-color:var(--error-color,#db4437)}.positive{color:#17752a}.handover-note{padding:9px 11px;border-radius:9px;background:color-mix(in srgb,var(--primary-color) 10%,transparent);font-size:13px}
       .monitor-form{margin-top:16px}.printer-list{display:flex;gap:7px;flex-wrap:wrap;margin:2px 0 10px}.printer-list span{font-size:12px;padding:5px 9px;border-radius:99px;background:var(--divider-color,#eee)}
       .reference-help{padding:12px;border:1px solid var(--divider-color,#bbb);border-radius:11px;background:var(--secondary-background-color,#f3f4f6)}.reference-controls{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -4785,15 +5529,20 @@ class HouseholdTasksPanel extends HTMLElement {
       .resource-list{display:grid;gap:12px;margin:14px 0}.resource-row{border:1px solid var(--divider-color,#bbb);border-radius:12px;padding:13px;background:var(--secondary-background-color,#f3f4f6)}.resource-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.resource-head .remove-row{width:38px;height:38px;padding:0;color:var(--error-color,#db4437);font-size:20px}
       .empty{text-align:center;padding:50px 20px}.big-icon{font-size:42px;color:#25a244}.spinner{width:32px;height:32px;border:3px solid var(--divider-color);border-top-color:var(--primary-color);border-radius:50%;animation:spin .8s linear infinite;margin:auto}@keyframes spin{to{transform:rotate(360deg)}}
       .backdrop{position:fixed;z-index:1000;inset:0;background:#0009;display:grid;place-items:center;padding:18px}.modal-card{width:min(760px,100%);max-height:92vh;overflow:auto;background:var(--card-background-color,#fff);border-radius:20px;padding:22px}.modal-card.small{width:min(580px,100%)}.modal-head{display:flex;justify-content:space-between;align-items:start;margin-bottom:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.form-grid label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:650}.form-grid .full{grid-column:1/-1}.form-grid .checkbox{flex-direction:row;flex-wrap:wrap;align-items:center;align-self:end;min-height:42px}.form-grid input,.form-grid select,.form-grid textarea{width:100%;padding:10px 11px;border:1px solid var(--divider-color,#bbb);border-radius:9px;background:var(--primary-background-color,#fafafa)}.form-grid [aria-invalid="true"]{border-color:var(--error-color,#db4437)}.checkbox input{width:auto}.checkbox .hint{flex-basis:100%;padding-left:24px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:5px}.hidden{display:none!important}.hint{display:block;color:var(--secondary-text-color,#6b7280);font-size:12px;font-weight:400;line-height:1.45;margin:2px 0}.field-help{max-width:68ch}.field-error{display:block;color:var(--error-color,#db4437);font-size:12px;font-weight:650}.group-help{margin-top:-8px}.weekdays{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.weekdays input{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.weekdays span{display:grid;place-items:center;width:40px;height:36px;border:1px solid var(--divider-color);border-radius:9px;cursor:pointer}.weekdays input:focus-visible+span{outline:3px solid color-mix(in srgb,var(--primary-color,#03a9f4) 70%,white);outline-offset:2px}.weekdays input:checked+span{background:color-mix(in srgb,var(--primary-color,#03a9f4) 88%,#000);color:#fff;border-color:var(--primary-color)}.advanced-fields{border:1px solid var(--divider-color);border-radius:12px;padding:12px}.advanced-fields>summary{cursor:pointer;font-weight:750}.advanced-grid{margin-top:15px}.setup-step{display:flex!important;flex-direction:row!important;align-items:center;gap:10px!important;border-bottom:1px solid var(--divider-color);padding-bottom:8px}.setup-step>b{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--primary-color);color:#fff}.setup-step span{display:grid}.setup-step small{font-weight:400;color:var(--secondary-text-color)}.wizard-preview,.gallery-preview{padding:12px;border-radius:10px;background:var(--secondary-background-color)}.wizard-preview p,.gallery-preview p{margin:5px 0}
+      .advanced-fields>summary{display:grid;gap:3px}.advanced-fields>summary small{color:var(--secondary-text-color);font-weight:400;line-height:1.4}.wizard-step-intro{padding:13px 14px;border-left:4px solid var(--primary-color);border-radius:0 11px 11px 0;background:color-mix(in srgb,var(--primary-color) 7%,var(--secondary-background-color))}.wizard-step-intro h3{font-size:17px;margin:3px 0}.wizard-step-intro p{margin:4px 0;line-height:1.5;color:var(--secondary-text-color)}.step-purpose{font-size:10px;font-weight:800;color:var(--ht-accent-text);letter-spacing:.05em}.option-group{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px;border:1px solid var(--divider-color);border-radius:13px;background:color-mix(in srgb,var(--secondary-background-color) 65%,transparent)}.option-group>header{grid-column:1/-1;display:flex;align-items:start;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--divider-color)}.option-group>header h4{margin:0;font-size:15px}.option-group>header p{margin:4px 0 0;color:var(--secondary-text-color);font-size:12px;line-height:1.45}
       .field-label{display:block;font-size:13px;font-weight:650;margin-bottom:7px}.candidate-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:5px 12px;padding:7px 10px;border:1px solid var(--divider-color,#bbb);border-radius:9px}.candidate-grid .checkbox{min-height:32px;font-weight:500}
       .task-wizard-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:0;margin:0 0 22px;list-style:none}.task-wizard-steps button{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;padding:8px 6px;border-color:transparent;background:var(--secondary-background-color);font-size:12px}.task-wizard-steps button span{display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;background:var(--divider-color);font-weight:800}.task-wizard-steps button[aria-current=step]{border-color:var(--primary-color);background:color-mix(in srgb,var(--primary-color) 10%,var(--card-background-color));color:var(--ht-accent-text)}.task-wizard-steps button[aria-current=step] span{background:var(--primary-color);color:#fff}.task-wizard-steps button:disabled{cursor:not-allowed}.task-editor--wizard:not(.wizard-ready) [data-task-step]:not([data-task-step="1"]),.wizard-step-hidden{display:none!important}.task-editor-actions{position:sticky;z-index:4;bottom:-22px;margin-top:14px;padding:14px 0 0;background:var(--card-background-color);border-top:1px solid var(--divider-color)}.task-wizard-review{display:grid;gap:14px}.task-wizard-review h3{font-size:22px}.wizard-review-facts{display:grid;gap:0;margin:0;border:1px solid var(--divider-color);border-radius:12px;overflow:hidden}.wizard-review-facts div{display:grid;grid-template-columns:minmax(120px,1fr) 2fr;gap:16px;padding:12px 14px;border-top:1px solid var(--divider-color)}.wizard-review-facts div:first-child{border-top:0}.wizard-review-facts dt{margin:0}.wizard-review-facts dd{margin:0;font-weight:700;text-align:right}.wizard-review-preview{display:grid;gap:7px;padding:14px;border-radius:12px;background:var(--secondary-background-color)}.wizard-review-preview output{line-height:1.5}.wizard-review-preview output.error{color:var(--error-color)}
+      .rule-live-summary{position:sticky;z-index:3;top:-22px;padding:11px 14px;border:1px solid color-mix(in srgb,var(--primary-color) 40%,var(--divider-color));border-radius:12px;background:color-mix(in srgb,var(--primary-color) 8%,var(--card-background-color));box-shadow:0 2px 8px #0000000d}.rule-live-summary p{margin:3px 0;font-weight:700;line-height:1.45}.wizard-review-panel{padding:14px;border:1px solid var(--divider-color);border-radius:12px}.wizard-review-panel>p{margin:5px 0;color:var(--secondary-text-color)}.simulation-timeline{display:grid;gap:8px;padding:0;margin:12px 0 0;list-style:none}.simulation-timeline li{display:flex;align-items:center;gap:10px;padding:9px;border-radius:10px;background:var(--secondary-background-color)}.simulation-timeline li>div{display:grid;gap:2px}.simulation-timeline small{color:var(--secondary-text-color)}.simulation-state{display:grid;place-items:center;flex:none;width:29px;height:29px;border-radius:50%;background:var(--divider-color);font-weight:800}.simulation-state.match{background:#daf5df;color:#17752a}.simulation-state.blocked{background:#fff1bf;color:#765600}.change-preview{display:grid;gap:0;margin-top:10px}.change-row{display:grid;grid-template-columns:minmax(130px,.7fr) 2fr;gap:12px;padding:10px 0;border-top:1px solid var(--divider-color)}.change-row:first-child{border-top:0}.change-row>span{display:flex;align-items:center;justify-content:flex-end;gap:7px;text-align:right}.change-row del{color:var(--secondary-text-color)}.change-row ins{color:#17752a;font-weight:700;text-decoration:none}.change-row.added,.change-row.unchanged{grid-template-columns:1fr}.change-row.added>span,.change-row.unchanged>span{justify-content:flex-start;text-align:left}
       .repeatable-editor{border:1px solid var(--divider-color,#bbb);border-radius:11px;padding:12px}.repeatable-list{display:grid;gap:9px}.repeatable-row{display:grid;grid-template-columns:minmax(150px,2fr) minmax(130px,1fr) auto;gap:9px;align-items:end;padding:10px;background:var(--secondary-background-color,#f3f4f6);border-radius:9px}.repeatable-row.trigger-row{grid-template-columns:minmax(180px,2fr) repeat(3,minmax(105px,1fr)) auto}.repeatable-row .remove-row{width:38px;height:38px;padding:0;color:var(--error-color,#db4437);font-size:20px}.add-row{margin-top:10px}.empty-row{margin:2px 0 8px;font-size:13px;font-style:italic}
       .repeatable-row.escalation-row{grid-template-columns:repeat(4,minmax(120px,1fr)) minmax(150px,1fr) auto}
       .command-card{width:min(680px,100%)}.command-input{width:100%;padding:13px;border:1px solid var(--divider-color);border-radius:11px;background:var(--primary-background-color)}.command-results{display:grid;gap:4px;margin-top:10px;max-height:55vh;overflow:auto}.command-result{display:grid;grid-template-columns:80px 1fr;align-items:center;text-align:left}.command-result>span:last-child{display:grid}.command-result small{color:var(--secondary-text-color);overflow-wrap:anywhere}.command-type{font-size:10px;color:var(--ht-accent-text);font-weight:800}.mobile-quick{display:none}
+      .rules-section{display:grid;gap:14px;margin-bottom:22px;padding:18px;border:1px solid var(--divider-color);border-radius:16px;background:var(--card-background-color)}.rules-section>header{display:flex;justify-content:space-between;gap:16px}.rules-section>header h3,.rules-section>header p{margin:0 0 5px}.rule-suggestion-list,.shadow-list{display:grid;gap:10px}.rule-suggestion,.shadow-card,.observation-banner{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px;border-radius:12px;background:var(--secondary-background-color)}.rule-suggestion h3,.rule-suggestion p,.shadow-card h3,.shadow-card p,.observation-banner p{margin:4px 0}.shadow-card>div:first-child{display:grid;gap:3px}.shadow-card small{display:block;color:var(--secondary-text-color)}.observation-banner{margin-bottom:16px;border-left:4px solid var(--primary-color)}.rule-graph-scroll{overflow:auto;border:1px solid var(--divider-color);border-radius:12px;background:var(--primary-background-color)}.rule-graph .edge{fill:none;stroke:var(--divider-color);stroke-width:2}.rule-graph .edge.blocks{stroke:var(--error-color)}.rule-graph .edge.follows{stroke:var(--warning-color,#f59e0b)}.rule-graph .node rect{fill:var(--card-background-color);stroke:var(--divider-color)}.rule-graph .node.rule rect{stroke:var(--primary-color)}.rule-graph .node text{font-size:10px;fill:var(--secondary-text-color);font-weight:700}.rule-graph .node .node-label{font-size:12px;fill:var(--primary-text-color);font-weight:700}.graph-issues p{padding:10px;border-radius:9px;background:var(--secondary-background-color)}.graph-issues .critical{border-left:4px solid var(--error-color)}.graph-accessible{padding:10px}.decision-dossier>ol{list-style:none;padding:0}.decision-dossier li{display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--divider-color)}.decision-dossier li>span{display:grid;place-items:center;flex:0 0 26px;height:26px;border-radius:50%;background:#daf5df;color:#17752a}.decision-dossier li.blocked>span{background:#fde2e2;color:#a11}.decision-dossier li div{display:grid;gap:3px}.decision-dossier small,.signature-status span{color:var(--secondary-text-color)}.reevaluation-result,.signature-status{margin-top:12px;padding:12px;border-radius:10px;background:var(--secondary-background-color)}.signature-status{display:grid;gap:4px}.signature-status.trusted{border-left:4px solid #2e9d50}.signature-status.untrusted{border-left:4px solid var(--warning-color,#f59e0b)}.community-source-list{display:grid;gap:8px;margin-top:14px}.community-source-list>div{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px;background:var(--secondary-background-color);border-radius:9px}.community-source-list span{display:grid}.community-origin{font-size:12px;color:var(--primary-color);font-weight:700}.trust-publisher{padding:12px;border:1px solid var(--warning-color,#f59e0b);border-radius:10px}
+      @media(max-width:650px){.configuration-guide,.recommendation-panel{grid-template-columns:1fr;padding:16px}.settings-jump-links,.configuration-path{grid-template-columns:1fr}.configuration-path{grid-column:auto}.settings-group{padding:13px}.settings-group>header{flex-direction:column}.recommendation-list article{align-items:flex-start;flex-direction:column}.option-group,.change-row{grid-template-columns:1fr}.change-row>span{align-items:flex-start;flex-direction:column;text-align:left}.rule-live-summary{top:-18px}}
       .toast{position:fixed;z-index:2000;left:50%;bottom:28px;transform:translateX(-50%);background:#263238;color:#fff;padding:12px 18px;border-radius:10px;box-shadow:0 4px 20px #0005}.toast.error{background:var(--error-color,#db4437)}
       .history-main{flex:1;min-width:0}.history-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.history-evidence,.history-count{display:inline-flex;padding:3px 8px;border-radius:99px;font-size:12px}.history-count,.has-evidence{background:color-mix(in srgb,var(--primary-color) 15%,transparent);color:var(--ht-accent-text)}.no-evidence{background:var(--secondary-background-color);color:var(--secondary-text-color)}.check{flex:0 0 34px}.history-record>section,.history-record-grid>section{margin:16px 0;padding:14px;border:1px solid var(--divider-color);border-radius:12px}.history-record-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.history-record-grid>section{margin:0}.history-facts{display:grid;gap:7px;margin:0}.history-facts div{display:flex;justify-content:space-between;gap:12px}.history-facts dt{color:var(--secondary-text-color)}.history-facts dd{margin:0;text-align:right}.preserve-lines{white-space:pre-wrap}.history-checklist{display:grid;gap:7px}.history-checklist>div{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center}.history-checklist small,.task-event-list .event-details{color:var(--secondary-text-color)}.task-event-list .event-details{grid-column:1/-1}.readonly-attachments>div{justify-content:flex-start}
       @media(max-width:650px){.history-record-grid{grid-template-columns:1fr}.history-row{align-items:flex-start;flex-wrap:wrap}.history-actions{width:100%;padding-left:47px;justify-content:flex-start}.history-checklist>div{grid-template-columns:auto 1fr}.history-checklist small{grid-column:2}}
-      @media(max-width:650px){main{padding:16px 12px 82px}header{margin-bottom:8px;align-items:flex-start}h1{font-size:24px}.header-actions{flex-wrap:wrap;justify-content:flex-end}.search-button{font-size:0}.search-button::after{content:"⌕";font-size:20px}.mode-badge{order:-1}nav{margin-bottom:16px}.hero{padding:20px;align-items:flex-start}.hero h2{font-size:21px}.hero-side{flex-direction:column-reverse;align-items:flex-end;gap:10px}.hero-button{padding:8px 10px}.context-add{right:18px;bottom:18px}.mobile-quick{display:grid;gap:6px;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:14px;padding:13px;margin-bottom:14px}.mobile-quick button{display:flex;justify-content:space-between;gap:8px;text-align:left}.mobile-quick small{color:var(--secondary-text-color)}.cards,.gallery-strip{grid-template-columns:1fr}.task-card{align-items:flex-start}.occurrence-actions{flex-direction:column;align-items:stretch}.complete{padding:8px}.form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}.modal-card{padding:18px 15px}.toolbar{align-items:flex-start;flex-direction:column;gap:12px}.toolbar-actions{width:100%}.people-grid{grid-template-columns:1fr}.ranking-row{grid-template-columns:27px 34px 1fr auto}.ranking-row .avatar{width:34px;height:34px}.month-points{display:none}.ranking-head>span{display:none}.repeatable-row,.repeatable-row.trigger-row,.repeatable-row.escalation-row,.reference-controls,.smart-capture{grid-template-columns:1fr}.repeatable-row .remove-row{justify-self:end}.bulk-toolbar{position:static}.week-board{grid-template-columns:repeat(7,80vw)}.task-wizard-steps{grid-template-columns:repeat(5,44px);justify-content:space-between;gap:2px}.task-wizard-steps button{width:44px;height:44px;padding:0;font-size:0}.task-wizard-steps button span{font-size:12px}.task-editor-actions{bottom:-18px;display:grid;grid-template-columns:1fr 1fr;padding-bottom:1px}.task-editor-actions .cancel{grid-column:1}.task-editor-actions .primary:last-child{grid-column:2}.wizard-review-facts div{grid-template-columns:1fr}.wizard-review-facts dd{text-align:left}}
+      .effect-list,.insight-list{display:grid;gap:10px}.effect-card,.insight-finding,.counterexample-list article{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px;border-radius:11px;background:var(--secondary-background-color)}.effect-card h3,.effect-card p,.insight-finding p,.counterexample-list p{margin:3px 0}.effect-card small{color:var(--secondary-text-color)}.insight-finding.warning{border-left:4px solid var(--warning-color,#f59e0b)}.insight-finding.critical{border-left:4px solid var(--error-color)}.simulator-value-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.simulator-verdict{display:flex;justify-content:space-between;gap:12px;padding:14px;border-radius:11px;background:var(--secondary-background-color);margin:16px 0}.simulator-verdict.match{border-left:4px solid #2e9d50}.simulator-verdict.blocked{border-left:4px solid var(--error-color)}.simulator-result>ol{list-style:none;padding:0}.simulator-result>ol li{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--divider-color)}.simulator-result>ol li>span{display:grid;place-items:center;width:25px;height:25px;border-radius:50%;background:#daf5df;color:#17752a}.simulator-result>ol li.blocked>span{background:#fde2e2;color:#a11}.simulator-result>ol li>div{display:grid}.simulator-result small{color:var(--secondary-text-color)}.counterexample-list{display:grid;gap:8px}.gallery-filters{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-bottom:12px}.gallery-filters input,.gallery-filters select{padding:10px;border:1px solid var(--divider-color);border-radius:9px;background:var(--primary-background-color)}.gallery-requirements{display:grid;gap:12px}.gallery-modal>[hidden]{display:none!important}
+      @media(max-width:650px){main{padding:16px 12px 82px}header{margin-bottom:8px;align-items:flex-start}h1{font-size:24px}.header-actions{flex-wrap:wrap;justify-content:flex-end}.search-button{font-size:0}.search-button::after{content:"⌕";font-size:20px}.mode-badge{order:-1}nav{margin-bottom:16px}.hero{padding:20px;align-items:flex-start}.hero h2{font-size:21px}.hero-side{flex-direction:column-reverse;align-items:flex-end;gap:10px}.hero-button{padding:8px 10px}.context-add{right:18px;bottom:18px}.mobile-quick{display:grid;gap:6px;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:14px;padding:13px;margin-bottom:14px}.mobile-quick button{display:flex;justify-content:space-between;gap:8px;text-align:left}.mobile-quick small{color:var(--secondary-text-color)}.cards,.gallery-strip{grid-template-columns:1fr}.task-card{align-items:flex-start}.occurrence-actions{flex-direction:column;align-items:stretch}.complete{padding:8px}.form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}.modal-card{padding:18px 15px}.toolbar{align-items:flex-start;flex-direction:column;gap:12px}.toolbar-actions{width:100%}.people-grid{grid-template-columns:1fr}.ranking-row{grid-template-columns:27px 34px 1fr auto}.ranking-row .avatar{width:34px;height:34px}.month-points{display:none}.ranking-head>span{display:none}.repeatable-row,.repeatable-row.trigger-row,.repeatable-row.escalation-row,.reference-controls,.smart-capture{grid-template-columns:1fr}.repeatable-row .remove-row{justify-self:end}.bulk-toolbar{position:static}.week-board{grid-template-columns:repeat(7,80vw)}.task-wizard-steps{grid-template-columns:repeat(5,44px);justify-content:space-between;gap:2px}.task-wizard-steps button{width:44px;height:44px;padding:0;font-size:0}.task-wizard-steps button span{font-size:12px}.task-editor-actions{bottom:-18px;display:grid;grid-template-columns:1fr 1fr;padding-bottom:1px}.task-editor-actions .cancel{grid-column:1}.task-editor-actions .primary:last-child{grid-column:2}.wizard-review-facts div{grid-template-columns:1fr}.wizard-review-facts dd{text-align:left}.effect-card,.insight-finding,.counterexample-list article,.simulator-verdict{align-items:flex-start;flex-direction:column}.gallery-filters{grid-template-columns:1fr}}
     `;
   }
 }

@@ -48,6 +48,62 @@ Benutzer, Geräte, Benachrichtigungsaktionen, Kalender und NFC-Tags werden aus
 Home Assistant vorgeschlagen, damit keine technischen IDs blind eingegeben
 werden müssen.
 
+### Konfiguration ohne Vorwissen
+
+Für einen funktionierenden Start sind nur zwei Schritte erforderlich:
+
+1. Unter **Personen** mindestens eine Person anlegen. Für anwesenheitsabhängige
+   Regeln sollte bevorzugt eine `person.*`-Entität gewählt werden, weil Home
+   Assistant darin mehrere Geräte-Tracker zusammenführt. Push-Dienst,
+   Home-Assistant-Benutzer und NFC-Gerät bleiben optional und werden direkt im
+   Formular erklärt.
+2. Unter **Aufgaben** eine Vorlage aus der Galerie wählen oder den Assistenten
+   öffnen. Die fünf Schritte trennen Inhalt, Zuständigkeit, Auslöser, optionale
+   Verfeinerungen und die abschließende Regelprüfung.
+
+Die Seite **Einstellungen** ist nach Wirkung gruppiert: aktueller Betrieb,
+Verbindungen, optionale Automatik sowie Daten und Sicherheit. Die optionale
+Automatik ist zunächst eingeklappt. CalDAV, Sensorregeln, Drucker, NFC-Feedback
+und individuelle Eskalationen müssen nur geöffnet werden, wenn der jeweilige
+Anwendungsfall gebraucht wird. Die Konfigurations-Gesundheit zeigt ungültige
+Referenzen und bietet – soweit möglich – direkt eine passende Aktion an.
+
+Im vierten Schritt des Aufgabenassistenten sind Erweiterungen nach ihrer Wirkung
+geordnet: **Ablauf und Verknüpfungen**, **NFC-Schnellaktion**, **Priorität,
+Wertung und Abschluss**, **Haushaltsmodus und Saison** sowie **Eigene
+Eskalation**. Unbenötigte Gruppen können unverändert bleiben; ihre Standardwerte
+beeinflussen die einfache Regel nicht.
+
+### Suchen, Empfehlungen und sichere Regelprüfung
+
+Die Einstellungssuche filtert alle Einstellungsbereiche während der Eingabe und
+öffnet passende eingeklappte Gruppen automatisch. Eine Suche nach „NFC“,
+„Kalender“ oder „Benachrichtigung“ verändert noch keine Konfiguration. Nach dem
+Leeren des Suchfelds wird die vorherige kompakte Ansicht wiederhergestellt.
+
+Unter **Sinnvolle nächste Schritte** erscheinen lokale Empfehlungen aus bereits
+vorhandenen Home-Assistant-Entitäten. So kann ein erkannter Abfallkalender direkt
+als Kalenderregel vorbereitet werden. Auch fehlende Anwesenheitszuordnungen
+werden dort sichtbar. Die Erkennung bleibt lokal und speichert nichts, bevor der
+Vorschlag ausdrücklich bestätigt wird.
+
+Im Aufgabeneditor bleibt eine Klartext-Zusammenfassung sichtbar, zum Beispiel:
+„Biotonne rausstellen wird vor passenden Terminen aus `calendar.waste` erzeugt
+und fair zwischen Dominik und Alina verteilt.“ Sie aktualisiert sich direkt mit
+den Formularwerten.
+
+Der letzte Assistentenschritt führt einen schreibgeschützten Dry Run aus. Für
+regelmäßige Zeitpläne werden bis zu fünf kommende Auslösezeitpunkte, für
+Kalenderregeln die kommenden passenden Termine und für Prognoseregeln der erste
+passende Vorhersagezeitraum dargestellt. Simulationen erzeugen keine Aufgaben
+und verändern weder Saisonsperren noch Verlauf.
+
+Beim Bearbeiten einer bestehenden Vorlage führt **Speichern** zunächst zur
+Änderungsprüfung. Sie zeigt den gespeicherten und neuen Wert für Name, Status,
+Zuständigkeit, Auslöser, Inhalt, Verknüpfungen, NFC, Wertung und Eskalation.
+Erst eine zweite Bestätigung im Prüfschritt speichert die Änderungen. Bereits
+laufende Aufgaben werden durch die Vorlagenänderung nicht rückwirkend ersetzt.
+
 ## Zeitpläne
 
 Der Aufgabeneditor unterstützt:
@@ -797,3 +853,159 @@ reduzierten Aufgabendaten. Für Zugriffe außerhalb des lokalen Netzes sollte
 Home Assistant über HTTPS, Home Assistant Cloud oder ein vertrauenswürdiges VPN
 erreichbar sein. Die vollständige Installation und Fehlerhilfe steht in
 `clients/scriptable/README.md`.
+
+## Regelintelligenz und sichere Einführung
+
+Die Ansicht **Regeln** bündelt Diagnose und Weiterentwicklung automatischer
+Aufgaben. Der Abhängigkeitsgraph zeigt Entitäten, Regeln, erzeugte Aufgaben,
+Zuweisungen, Folgeaufgaben und blockierende Abhängigkeiten. Eine barrierearme
+Textdarstellung steht direkt unter dem Graphen bereit. Erkannte Zyklen und
+mögliche Duplikate werden oberhalb des Graphen hervorgehoben.
+
+### Regel aus Beobachtung
+
+Bei einer manuell erzeugten Aufgabe merkt sich Household Tasks höchstens fünf
+Zustandswechsel der letzten 30 Minuten. Gespeichert werden nur Entitäts-ID,
+alter Zustand, neuer Zustand und Zeitpunkt – keine Attribute oder Messhistorie.
+Wenn derselbe Zustandswechsel bei mindestens drei manuellen Erzeugungen und in
+mindestens 60 Prozent der Fälle vorkam, erscheint im Verlauf und unter
+**Regeln → Aus Beobachtungen lernen** ein Vorschlag.
+
+**Daraus eine Regel machen** öffnet den normalen Aufgabenassistenten mit einem
+Zustandsauslöser und dem typischen zeitlichen Abstand. Der Entwurf ist zunächst
+im Shadow Mode. Nichts wird automatisch gespeichert oder sofort produktiv
+geschaltet.
+
+### Shadow Mode
+
+Im Aufgabenassistenten lässt sich unter **Optionale Verfeinerungen → Shadow
+Mode** eine Regel zunächst virtuell betreiben. Automatische Auslösungen werden
+mit Zeitpunkt, vorgesehener Zuweisung und geplanten Empfängern protokolliert.
+Es werden weder Aufgaben angelegt noch Benachrichtigungen versendet und keine
+Punkte vergeben. Manuell ausgelöste Aufgaben bleiben weiterhin möglich.
+
+Der Prüfzeitpunkt ist eine Erinnerung und kein automatischer Produktivschalter.
+Die Regel bleibt sicher im Shadow Mode, bis ein Administrator sie in der
+Regelansicht ausdrücklich über **Produktiv schalten** aktiviert.
+
+### Entscheidungsakte und erneute Auswertung
+
+In der Aufgabenakte zeigt die **Entscheidungsakte** den Weg vom Auslöser über
+Filter, Zeitversatz und Zuweisung bis zur Benachrichtigung. Ältere Aufgaben
+können weniger Details enthalten. **Mit aktuellen Daten erneut auswerten**
+führt die heutige Regelvorschau aus, ohne Aufgaben, Benachrichtigungen oder
+Verlaufseinträge zu erzeugen. So lassen sich historische und aktuelle
+Entscheidungen vergleichen.
+
+## Versionierte Community-Vorlagen
+
+Unter **Einstellungen → Apps und Home Assistant verbinden → Versionierte
+Community-Vorlagen** kann ein Administrator ein Paket per HTTPS-URL prüfen.
+Vor der Installation zeigt Household Tasks Paketversion, Publisher-Fingerprint,
+gültige Ed25519-Signatur, enthaltene Vorlagen und erforderliche Entitäten.
+
+Beim ersten Paket eines Publishers muss dessen Fingerprint ausdrücklich über
+einen unabhängigen Kanal geprüft und bestätigt werden. Spätere Pakete werden
+nur akzeptiert, wenn derselbe Publisher-Schlüssel verwendet wird. Downloads
+sind auf öffentlich erreichbare HTTPS-Ziele, Port 443, 256 KiB und JSON ohne
+Weiterleitung begrenzt. Vor der Installation wird das Paket erneut geladen;
+weicht sein Digest von der Vorschau ab, wird der Vorgang abgebrochen.
+
+Verknüpfte Vorlagen erhalten Update-Hinweise. **Vorlage übernehmen** löst die
+Verknüpfung und behält die aktuelle lokale Konfiguration; danach erfolgen keine
+Paketupdates mehr. Das Paketformat und der Signaturprozess sind in
+[`docs/community-templates.md`](community-templates.md) dokumentiert.
+
+## Regelsimulator, Gegenbeispiele und Wirkung
+
+Unter **Regeln** kann jede Regel mit frei gewählten Szenariodaten ausgewertet
+werden. Der Simulator verändert weder Aufgaben noch Zuweisungen oder
+Benachrichtigungen. Einstellbar sind Zeitpunkt, Haushaltsmodus, Anwesenheit,
+Entitätswerte und ein beispielhafter Kalendertitel.
+
+Das Ergebnis zeigt jeden Entscheidungsschritt, die voraussichtliche Zuweisung
+und geplante Benachrichtigungen. Zusätzlich erzeugt Household Tasks passende
+Gegenbeispiele: Werte knapp außerhalb eines Grenzwerts, niemand zuhause, ein
+Datum außerhalb der Saison und aktiver Urlaubsmodus.
+
+Die **Wirkung der Regeln** wird lokal für die letzten 90 Tage berechnet. Pro
+Regel werden erzeugte, erledigte, abgebrochene und überfällige Aufgaben,
+Erledigungsquote, mediane Verspätung, Verschiebungen, Delegationen, blockierte
+Auswertungen und virtuelle Shadow-Treffer dargestellt.
+
+Der **Rauschfilter** kennzeichnet Regeln mit vielen Auslösungen und niedriger
+Erledigungsquote sowie anwachsende Rückstände. Daraus entstehen prüfbare
+Verbesserungsvorschläge, etwa ein längerer Cooldown, das Überspringen offener
+Duplikate, ein passenderer Termin oder die Prüfung häufig genutzter
+Fallback-Zuweisungen. Kein Vorschlag wird automatisch gespeichert.
+
+### Was-wäre-wenn-Labor
+
+Unter **Regeln → Was-wäre-wenn-Labor** kann der gesamte Haushalt für einen bis
+31 Tage vorausberechnet werden. Der Lauf kombiniert feste Zeitpläne,
+Kalendertermine und bis zu 100 optionale Zustands-Snapshots. Haushaltsmodus und
+Anwesenheit lassen sich für das Szenario überschreiben. Die Ergebniszeitleiste
+zeigt für jede Auswertung, ob eine Aufgabe entstehen würde, wem sie zugeordnet
+wäre und ob sie zunächst auf einen Zustand oder ein Energiefenster warten würde.
+Der Lauf ist strikt schreibgeschützt und sendet keine Benachrichtigungen.
+
+## Wartende und energieoptimierte Aufgaben
+
+Im Schritt **Optionen** einer Aufgabenvorlage stehen zwei zusätzliche
+Ausführungsregeln zur Verfügung:
+
+- **Wartet auf Zustand** legt die Aufgabe sofort nachvollziehbar mit dem Status
+  `Wartet` an. Zustand oder Attribut werden numerisch beziehungsweise als Text
+  verglichen. Optional kann ein Timeout die Aufgabe weiter warten lassen,
+  freigeben oder abbrechen.
+- **Energie- und Tarifoptimierung** kombiniert einen maximalen Strompreis,
+  minimalen PV-Überschuss und ein bevorzugtes – auch über Mitternacht gehendes –
+  Zeitfenster. Sind mehrere Angaben gesetzt, müssen alle passen. Die Aufgabe
+  bleibt bis dahin sichtbar und wird noch nicht eskaliert.
+
+Alle beteiligten Entitäten werden von Home Assistant beobachtet. Sobald alle
+Bedingungen passen, wechselt die Aufgabe auf `Offen`; Zeitpunkt und
+Entscheidungsgrund landen im Verlauf.
+
+## Stille Stunden und Eskalationsbudget
+
+Eine Vorlage kann ein tägliches Push-Budget sowie stille Stunden definieren.
+Außerhalb des Budgets oder während der Ruhezeit wird eine Benachrichtigung je
+nach Auswahl später zugestellt, in die Bündelung aufgenommen oder ausdrücklich
+trotzdem gesendet. Kritische Aufgaben dürfen die Sperre optional umgehen.
+Zurückgestellte Nachrichten werden lokal und idempotent gespeichert; Inhalt und
+Aktionsbuttons bleiben bei der späteren Zustellung erhalten.
+
+## Private und sensible Aufgaben
+
+Die Sichtbarkeit lässt sich auf den gesamten Haushalt, die zuständige Person
+oder eine explizite Personenliste begrenzen. Die Prüfung erfolgt im Backend und
+nicht nur per CSS: Panelantworten, Anhänge, Verlauf und Entscheidungsakte werden
+entsprechend gefiltert. Administratoren behalten standardmäßig Zugriff für
+Reparatur, Export und Support. Mit **Details für andere ausblenden** kann bei
+teilbaren Metadaten zusätzlich ein neutraler Platzhalter statt Beschreibung und
+Checkliste ausgegeben werden.
+
+## Selbstheilende Konfiguration
+
+Der Gesundheitscheck erkennt fehlende Anwesenheits-, Wetter-, Saison-, Warte-
+und Energieentitäten. Für eine fehlende Entität werden ausschließlich Kandidaten
+derselben Home-Assistant-Domain anhand technischer ID und Anzeigename bewertet.
+**Beheben** zeigt Kandidat und Ähnlichkeit zuerst an. Erst nach Bestätigung wird
+genau das betroffene Feld atomar ersetzt und die vollständige Konfiguration
+erneut validiert. Es gibt keine unbeaufsichtigte automatische Änderung.
+
+## Erweiterte Vorlagengalerie
+
+Die lokale Galerie enthält unter anderem Vorlagen für:
+
+- Waschmaschine, Trockner, Spülmaschine und laufzeitbasierte Gerätewartung,
+- offene Fenster bei Regen oder Kälte, Frost, Hitze, Sturm, Schnee und UV,
+- Rauchmelder-Batterien, Gefrierschrank und ungewöhnlichen Verbrauch,
+- Toner, Mindestbestände, Pakete und Entsorgungskalender mit Regex-Mapping,
+- Urlaubsabreise, Rückkehr, Gastankunft, Monats- und Wochenabschluss,
+- Schulmorgen, Haustier-Medikamente, Luftqualität und Fahrzeugpflege.
+
+Vorlagen mit mehreren Datenquellen fragen jede benötigte Entität separat ab.
+Die zulässigen Domains werden in der Oberfläche eingeschränkt und beim
+Installieren erneut im Backend validiert.

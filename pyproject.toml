@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools>=84"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,38 +7,33 @@ name = "ha-household-tasks"
 version = "3.0.0"
 description = "A local-first household task orchestration integration for Home Assistant"
 readme = "README.md"
-requires-python = ">=3.12"
-license = { text = "MIT" }
+requires-python = ">=3.14"
+license = "MIT"
 authors = [{ name = "Household Tasks contributors" }]
 classifiers = [
   "Development Status :: 4 - Beta",
-  "License :: OSI Approved :: MIT License",
-  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.14",
 ]
 
 [project.optional-dependencies]
 test = [
   "defusedxml==0.7.1",
-  "homeassistant>=2024.10.0",
-  # pycares 4.9+ starts a process-wide shutdown thread on client cleanup, which
-  # pytest-homeassistant-custom-component currently reports as a leaked thread.
-  "pycares>=4,<4.9; python_version < '3.14'",
-  "pytest>=8.3",
-  "pytest-cov>=6.0",
-  "pytest-homeassistant-custom-component>=0.13.190",
-  "pytest-xdist>=3.6",
+  "homeassistant>=2026.8.1",
+  "pytest>=9.0.3",
+  "pytest-cov>=7.1",
+  "pytest-homeassistant-custom-component>=0.13.355",
+  "pytest-xdist>=3.8",
 ]
 dev = [
   "defusedxml==0.7.1",
-  "homeassistant>=2024.10.0",
-  "pycares>=4,<4.9; python_version < '3.14'",
-  "pytest>=8.3",
-  "pytest-cov>=6.0",
-  "pytest-homeassistant-custom-component>=0.13.190",
-  "pytest-xdist>=3.6",
-  "mypy>=1.13",
-  "pre-commit>=4.0",
-  "ruff>=0.9",
+  "homeassistant>=2026.8.1",
+  "pytest>=9.0.3",
+  "pytest-cov>=7.1",
+  "pytest-homeassistant-custom-component>=0.13.355",
+  "pytest-xdist>=3.8",
+  "mypy>=2.3",
+  "pre-commit>=4.6",
+  "ruff>=0.16",
 ]
 
 [tool.setuptools]

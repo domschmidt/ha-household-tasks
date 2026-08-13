@@ -36,6 +36,73 @@ def _require_household_access(
     raise Unauthorized
 
 
+def _viewer_person(
+    connection: websocket_api.ActiveConnection, engine: Any
+) -> str | None:
+    """Return the household person linked to the current HA user."""
+    return next(
+        (
+            person_id
+            for person_id, person in engine.people.items()
+            if person.get("user_id") == connection.user.id
+        ),
+        None,
+    )
+
+
+def _ui_data_for(
+    connection: websocket_api.ActiveConnection, engine: Any
+) -> dict[str, Any]:
+    """Return panel data filtered for the current HA user."""
+    result = engine.ui_data(
+        viewer_person=_viewer_person(connection, engine),
+        is_admin=connection.user.is_admin,
+    )
+    result["is_admin"] = connection.user.is_admin
+    return result
+
+
+def _require_occurrence_visibility(
+    connection: websocket_api.ActiveConnection, engine: Any, occurrence_id: str
+) -> None:
+    """Block direct-ID access to a private occurrence."""
+    if connection.user.is_admin:
+        return
+    from .automation_policy import visible_to
+
+    occurrence = engine.state.get("occurrences", {}).get(occurrence_id)
+    if occurrence is None:
+        return
+    task = occurrence.get("task") or engine.tasks.get(occurrence.get("task_id"), {})
+    if not visible_to(
+        task,
+        occurrence,
+        viewer_person=_viewer_person(connection, engine),
+        is_admin=connection.user.is_admin,
+    ):
+        raise Unauthorized
+
+
+def _require_task_visibility(
+    connection: websocket_api.ActiveConnection, engine: Any, task_id: str
+) -> None:
+    """Block direct-ID access to a private task template."""
+    if connection.user.is_admin:
+        return
+    from .automation_policy import visible_to
+
+    task = engine.tasks.get(task_id)
+    if task is None:
+        return
+    if not visible_to(
+        task,
+        {"assignee": task.get("assignee")},
+        viewer_person=_viewer_person(connection, engine),
+        is_admin=False,
+    ):
+        raise Unauthorized
+
+
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get"})
 @callback
 def websocket_get(
@@ -44,8 +111,8 @@ def websocket_get(
     msg: dict[str, Any],
 ) -> None:
     """Return panel configuration and runtime state."""
-    result = _engine(hass).ui_data()
-    result["is_admin"] = connection.user.is_admin
+    engine = _engine(hass)
+    result = _ui_data_for(connection, engine)
     connection.send_result(msg["id"], result)
 
 
@@ -59,7 +126,12 @@ async def websocket_week_preview(
     """Return live calendar-backed and deterministic weekly projections."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
-    connection.send_result(msg["id"], await engine.async_week_preview())
+    visible_tasks = set(_ui_data_for(connection, engine)["tasks"])
+    preview = await engine.async_week_preview()
+    connection.send_result(
+        msg["id"],
+        [item for item in preview if item.get("task_id") in visible_tasks],
+    )
 
 
 @websocket_api.require_admin
@@ -180,6 +252,72 @@ async def websocket_preview_task(
 @websocket_api.async_response
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): f"{DOMAIN}/simulate_task",
+        vol.Required("task_id"): SLUG,
+        vol.Required("scenario"): dict,
+    }
+)
+async def websocket_simulate_task(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Evaluate one configured rule and its generated boundary cases."""
+    result = await _engine(hass).async_simulate_task(msg["task_id"], msg["scenario"])
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/simulate_period",
+        vol.Required("scenario"): dict,
+    }
+)
+async def websocket_simulate_period(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Run the bounded household what-if laboratory."""
+    result = await _engine(hass).async_simulate_period(msg["scenario"])
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/repair_entity",
+        vol.Required("scope"): vol.In({"task", "person"}),
+        vol.Required("owner_id"): SLUG,
+        vol.Required("path"): [vol.Any(str, int)],
+        vol.Required("old_entity_id"): str,
+        vol.Required("new_entity_id"): str,
+    }
+)
+async def websocket_repair_entity(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Apply one explicitly selected self-healing configuration repair."""
+    engine = _engine(hass)
+    await engine.async_apply_entity_repair(
+        scope=msg["scope"],
+        owner_id=msg["owner_id"],
+        path=msg["path"],
+        old_entity_id=msg["old_entity_id"],
+        new_entity_id=msg["new_entity_id"],
+    )
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): f"{DOMAIN}/reset_seasonal_executions",
         vol.Required("task_id"): SLUG,
     }
@@ -192,7 +330,7 @@ async def websocket_reset_seasonal_executions(
     """Reset once-per-season locks for one task rule."""
     engine = _engine(hass)
     removed = await engine.async_reset_seasonal_executions(msg["task_id"])
-    result = engine.ui_data()
+    result = _ui_data_for(connection, engine)
     result["seasonal_reset_count"] = removed
     connection.send_result(msg["id"], result)
 
@@ -335,10 +473,11 @@ async def websocket_create(
     """Create a task occurrence."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_task_visibility(connection, engine, msg["task_id"])
     await engine.async_create_manual(
         msg["task_id"], Context(user_id=connection.user.id)
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.async_response
@@ -374,7 +513,7 @@ async def websocket_create_ad_hoc(
         points=msg["points"],
         context=Context(user_id=connection.user.id),
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.websocket_command(
@@ -409,12 +548,14 @@ async def websocket_bulk(
     """Apply one task action to multiple occurrences."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    for occurrence_id in msg["occurrence_ids"]:
+        _require_occurrence_visibility(connection, engine, occurrence_id)
     bulk_result = await engine.async_bulk_occurrences(
         msg["occurrence_ids"],
         msg["action"],
         Context(user_id=connection.user.id),
     )
-    result = engine.ui_data()
+    result = _ui_data_for(connection, engine)
     result["bulk_result"] = bulk_result
     connection.send_result(msg["id"], result)
 
@@ -436,8 +577,9 @@ async def websocket_toggle_favorite(
     person_id = engine._person_for_context(Context(user_id=connection.user.id))
     if person_id is None:
         raise Unauthorized
+    _require_task_visibility(connection, engine, msg["task_id"])
     enabled = await engine.async_toggle_favorite(person_id, msg["task_id"])
-    result = engine.ui_data()
+    result = _ui_data_for(connection, engine)
     result["favorite_enabled"] = enabled
     connection.send_result(msg["id"], result)
 
@@ -464,7 +606,7 @@ async def websocket_install_discovery(
         msg["task_id"],
         msg["assignee"],
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.websocket_command(
@@ -502,7 +644,7 @@ async def websocket_create_batch(
         msg["text"],
         Context(user_id=connection.user.id),
     )
-    result = engine.ui_data()
+    result = _ui_data_for(connection, engine)
     result["batch_result"] = batch_result
     connection.send_result(msg["id"], result)
 
@@ -523,10 +665,11 @@ async def websocket_move_occurrence(
     """Move one task using a natural-language instruction."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     move_result = await engine.async_move_occurrence(
         msg["occurrence_id"], msg["instruction"]
     )
-    result = engine.ui_data()
+    result = _ui_data_for(connection, engine)
     result["move_result"] = move_result
     connection.send_result(msg["id"], result)
 
@@ -548,7 +691,7 @@ async def websocket_save_task_stack(
     """Create, update, or delete a task stack."""
     engine = _engine(hass)
     await engine.async_save_task_stack(msg["stack_id"], msg.get("stack"))
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.async_response
@@ -569,7 +712,7 @@ async def websocket_launch_task_stack(
     created = await engine.async_launch_task_stack(
         msg["stack_id"], Context(user_id=connection.user.id)
     )
-    result = engine.ui_data()
+    result = _ui_data_for(connection, engine)
     result["stack_created"] = created
     connection.send_result(msg["id"], result)
 
@@ -592,13 +735,14 @@ async def websocket_add_attachment(
     """Attach one bounded local file to an occurrence."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_add_attachment(
         msg["occurrence_id"],
         msg["name"],
         msg["mime_type"],
         msg["content"],
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.async_response
@@ -622,6 +766,7 @@ async def websocket_add_attachment_chunk(
     """Receive one WebSocket-safe block of a large attachment."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     result = await engine.async_add_attachment_chunk(
         msg["occurrence_id"],
         msg["upload_id"],
@@ -650,6 +795,7 @@ def websocket_attachment_content(
     """Return attachment data only when explicitly opened."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     connection.send_result(
         msg["id"],
         engine.attachment_content(msg["occurrence_id"], msg["attachment_id"]),
@@ -673,6 +819,7 @@ def websocket_attachment_content_chunk(
     """Return one WebSocket-safe block of an attachment."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     connection.send_result(
         msg["id"],
         engine.attachment_content_chunk(
@@ -697,8 +844,9 @@ async def websocket_delete_attachment(
     """Delete one occurrence attachment."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_delete_attachment(msg["occurrence_id"], msg["attachment_id"])
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.websocket_command(
@@ -732,10 +880,11 @@ async def websocket_complete(
     """Complete a tracked occurrence."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_complete_occurrence(
         msg["occurrence_id"], Context(user_id=connection.user.id)
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.async_response
@@ -757,13 +906,14 @@ async def websocket_set_status(
     """Transition one native task occurrence."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_set_occurrence_status(
         msg["occurrence_id"],
         msg["status"],
         expected_revision=msg.get("expected_revision"),
         context=Context(user_id=connection.user.id),
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.async_response
@@ -784,6 +934,7 @@ async def websocket_set_checklist_item(
     """Toggle one item in a native task checklist."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_set_checklist_item(
         msg["occurrence_id"],
         msg["item_id"],
@@ -791,7 +942,7 @@ async def websocket_set_checklist_item(
         expected_revision=msg.get("expected_revision"),
         context=Context(user_id=connection.user.id),
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.async_response
@@ -811,12 +962,15 @@ async def websocket_set_dependencies(
     """Replace the dependencies of one native task."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
+    for dependency_id in msg["dependencies"]:
+        _require_occurrence_visibility(connection, engine, dependency_id)
     await engine.async_set_occurrence_dependencies(
         msg["occurrence_id"],
         msg["dependencies"],
         expected_revision=msg.get("expected_revision"),
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.websocket_command(
@@ -834,7 +988,50 @@ def websocket_task_history(
     """Return the immutable history of one task."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     connection.send_result(msg["id"], engine.task_history(msg["occurrence_id"]))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/decision_dossier",
+        vol.Required("occurrence_id"): str,
+    }
+)
+@callback
+def websocket_decision_dossier(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return the persisted rule decision dossier for an occurrence."""
+    engine = _engine(hass)
+    _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
+    connection.send_result(
+        msg["id"], engine.occurrence_decision_dossier(msg["occurrence_id"])
+    )
+
+
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/reevaluate_occurrence",
+        vol.Required("occurrence_id"): str,
+    }
+)
+async def websocket_reevaluate_occurrence(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Re-evaluate a historical occurrence without creating work."""
+    engine = _engine(hass)
+    _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
+    connection.send_result(
+        msg["id"], await engine.async_reevaluate_occurrence(msg["occurrence_id"])
+    )
 
 
 @websocket_api.async_response
@@ -852,10 +1049,11 @@ async def websocket_claim(
     """Claim an open tracked occurrence."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_claim_occurrence(
         msg["occurrence_id"], Context(user_id=connection.user.id)
     )
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.require_admin
@@ -898,6 +1096,7 @@ async def websocket_set_household_mode(
         vol.Optional("assignee"): SLUG,
         vol.Optional("people"): [SLUG],
         vol.Optional("entity_id"): str,
+        vol.Optional("mappings"): {str: str},
     }
 )
 async def websocket_install_gallery_template(
@@ -912,6 +1111,7 @@ async def websocket_install_gallery_template(
         msg.get("assignee"),
         msg.get("entity_id"),
         msg.get("people"),
+        msg.get("mappings"),
     )
     connection.send_result(msg["id"], _engine(hass).ui_data())
 
@@ -945,6 +1145,112 @@ def websocket_explain_task(
 ) -> None:
     """Explain why a template can or cannot currently generate work."""
     connection.send_result(msg["id"], _engine(hass).explain_task(msg["task_id"]))
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/promote_shadow_task",
+        vol.Required("task_id"): SLUG,
+    }
+)
+async def websocket_promote_shadow_task(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Promote a shadow rule after explicit review."""
+    engine = _engine(hass)
+    await engine.async_promote_shadow_task(msg["task_id"])
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/community_preview",
+        vol.Required("url"): str,
+    }
+)
+async def websocket_community_preview(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Preview and authenticate a remote community template pack."""
+    connection.send_result(
+        msg["id"], await _engine(hass).async_preview_community_pack(msg["url"])
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/community_install",
+        vol.Required("url"): str,
+        vol.Required("digest"): str,
+        vol.Required("template_id"): str,
+        vol.Required("task_id"): SLUG,
+        vol.Optional("mappings", default={}): {str: str},
+        vol.Optional("assignee"): SLUG,
+        vol.Optional("trust_publisher", default=False): bool,
+    }
+)
+async def websocket_community_install(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Install one previewed, signed community template."""
+    engine = _engine(hass)
+    await engine.async_install_community_template(
+        msg["url"],
+        msg["digest"],
+        msg["template_id"],
+        msg["task_id"],
+        msg["mappings"],
+        assignee=msg.get("assignee"),
+        trust_publisher=msg["trust_publisher"],
+    )
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/community_check_updates"}
+)
+async def websocket_community_check_updates(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Check all installed community sources for newer versions."""
+    engine = _engine(hass)
+    await engine.async_check_community_updates()
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/community_take_control",
+        vol.Required("task_id"): SLUG,
+    }
+)
+async def websocket_community_take_control(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Detach an installed community template for local customization."""
+    engine = _engine(hass)
+    await engine.async_take_control_of_community_task(msg["task_id"])
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.require_admin
@@ -1060,8 +1366,9 @@ async def websocket_snooze(
     """Snooze an occurrence from the panel."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_snooze_occurrence(msg["occurrence_id"], msg["choice"])
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.async_response
@@ -1079,8 +1386,9 @@ async def websocket_request_help(
     """Request voluntary help for an occurrence."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_request_help(msg["occurrence_id"])
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 @websocket_api.async_response
@@ -1098,8 +1406,9 @@ async def websocket_decline(
     """Decline and redistribute an occurrence."""
     engine = _engine(hass)
     _require_household_access(connection, engine)
+    _require_occurrence_visibility(connection, engine, msg["occurrence_id"])
     await engine.async_decline_occurrence(msg["occurrence_id"])
-    connection.send_result(msg["id"], engine.ui_data())
+    connection.send_result(msg["id"], _ui_data_for(connection, engine))
 
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
@@ -1113,6 +1422,9 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
         websocket_save_defaults,
         websocket_save_monitors,
         websocket_preview_task,
+        websocket_simulate_task,
+        websocket_simulate_period,
+        websocket_repair_entity,
         websocket_reset_seasonal_executions,
         websocket_test_notification,
         websocket_set_handover,
@@ -1143,11 +1455,18 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
         websocket_set_checklist_item,
         websocket_set_dependencies,
         websocket_task_history,
+        websocket_decision_dossier,
+        websocket_reevaluate_occurrence,
         websocket_claim,
         websocket_set_household_mode,
         websocket_install_gallery_template,
         websocket_undo,
         websocket_explain_task,
+        websocket_promote_shadow_task,
+        websocket_community_preview,
+        websocket_community_install,
+        websocket_community_check_updates,
+        websocket_community_take_control,
         websocket_health,
         websocket_caldav_save_settings,
         websocket_caldav_create_credential,

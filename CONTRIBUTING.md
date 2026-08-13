@@ -26,7 +26,7 @@ issue before implementation. Security reports must follow
 
 ## Development setup
 
-Requirements are Python 3.12+, Node.js 24, and Git.
+Requirements are Python 3.14+, Node.js 24, and Git.
 
 ```bash
 git clone https://github.com/domschmidt/ha-household-tasks.git
