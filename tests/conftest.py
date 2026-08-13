@@ -28,7 +28,7 @@ def pytest_fixture_setup(fixturedef, request):
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Enable loading custom integrations in Home Assistant tests."""
-    yield
+    return None
 
 
 @pytest.fixture

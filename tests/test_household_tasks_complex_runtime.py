@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import voluptuous as vol
 from homeassistant.core import SupportsResponse
+from homeassistant.util import dt as dt_util
 
 from custom_components.household_tasks.bootstrap import initial_config
 from custom_components.household_tasks.engine import HouseholdTaskEngine
@@ -154,7 +155,7 @@ async def test_notification_budget_defers_and_later_releases_exact_message(hass)
         "resolved": False,
     }
     engine.state["occurrences"]["one"] = occurrence
-    day = datetime.now(UTC).astimezone().date().isoformat()
+    day = dt_util.now().date().isoformat()
     engine.state["notification_counters"] = {"alex": {day: 1}}
     engine._send_notification = AsyncMock(return_value=True)
 
@@ -1549,3 +1550,286 @@ async def test_gallery_install_maps_multiple_required_entities(hass):
         == "binary_sensor.kitchen_window"
     )
     assert installed["weather"]["conditions"][0]["entity_id"] == "weather.home"
+
+
+def test_advanced_policy_validation_reports_every_invalid_section(hass):
+    config = initial_config()
+    config["people"] = {"alex": {"name": "Alex", "notify": "notify.mobile_app_alex"}}
+    invalid_condition = {
+        "entity_id": "invalid",
+        "condition": "unsupported",
+        "value": "",
+    }
+    config["tasks"] = {
+        "wrong_types": {
+            **_manual("Wrong types"),
+            "wait_for": "invalid",
+            "energy": "invalid",
+            "visibility": "invalid",
+            "notification_policy": "invalid",
+        },
+        "invalid_values": {
+            **_manual("Invalid values"),
+            "wait_for": {
+                "enabled": True,
+                "conditions": ["invalid", invalid_condition],
+                "match": "neither",
+                "timeout_action": "explode",
+                "timeout_hours": -1,
+            },
+            "energy": {
+                "conditions": "invalid",
+                "tariff_entity": "invalid",
+                "surplus_entity": "also-invalid",
+                "preferred_start": "bad",
+                "max_price": "free",
+                "min_surplus": "lots",
+            },
+            "visibility": {
+                "level": "secret",
+                "people": ["missing"],
+                "hide_details": "yes",
+                "admin_access": 1,
+            },
+            "notification_policy": {
+                "quiet_behavior": "interrupt",
+                "daily_budget": -1,
+                "quiet_start": "bad",
+                "critical_bypass": "yes",
+            },
+        },
+        "empty_wait": {
+            **_manual("Empty wait"),
+            "wait_for": {"enabled": True, "conditions": []},
+            "visibility": {"people": "alex"},
+        },
+    }
+    engine = HouseholdTaskEngine(hass, config)
+
+    with pytest.raises(vol.Invalid) as error:
+        engine._validate_config()
+
+    message = str(error.value)
+    expected = [
+        "wait_for must be a mapping",
+        "energy must be a mapping",
+        "visibility must be a mapping",
+        "notification_policy must be a mapping",
+        "condition 1 must be a mapping",
+        "condition 2 needs entity_id",
+        "condition 2 has invalid comparator",
+        "condition 2 needs value",
+        "invalid match mode",
+        "invalid wait timeout action",
+        "invalid wait timeout",
+        "energy conditions are invalid",
+        "invalid tariff_entity",
+        "invalid surplus_entity",
+        "invalid preferred_start",
+        "energy preferred window needs start and end",
+        "invalid max_price",
+        "invalid min_surplus",
+        "invalid visibility level",
+        "unknown visibility people",
+        "invalid visibility hide_details",
+        "invalid visibility admin_access",
+        "invalid quiet behavior",
+        "invalid notification policy",
+        "quiet hours need both start and end",
+        "invalid critical bypass",
+        "wait_for needs conditions",
+        "visibility people must be a list",
+    ]
+    for fragment in expected:
+        assert fragment in message
+
+
+async def test_health_check_reports_missing_wait_and_energy_entities(hass):
+    task = {
+        **_manual("Smart charging"),
+        "wait_for": {
+            "conditions": [{"entity_id": "binary_sensor.missing_ready", "value": "on"}]
+        },
+        "energy": {
+            "conditions": [{"entity_id": "sensor.missing_gate", "value": "cheap"}],
+            "tariff_entity": "sensor.missing_tariff",
+            "surplus_entity": "sensor.missing_surplus",
+        },
+    }
+    engine, _ = await _native_engine(hass, {"smart": task})
+    codes = [item["code"] for item in engine.configuration_health()["findings"]]
+    assert codes.count("wait_for_entity_missing") == 1
+    assert codes.count("energy_entity_missing") == 3
+
+
+async def test_rule_lifecycle_and_community_install_are_atomic(hass):
+    shadow = {
+        **_manual("Shadow task"),
+        "shadow": {"enabled": True},
+        "community": {"managed": True},
+    }
+    engine, _ = await _native_engine(hass, {"shadow": shadow})
+    engine.async_save_task = AsyncMock()
+    engine._save = AsyncMock()
+
+    await engine.async_promote_shadow_task("shadow")
+    promoted = engine.async_save_task.await_args.args[1]
+    assert promoted["shadow"]["enabled"] is False
+    assert "promoted_at" in promoted["shadow"]
+
+    engine.state["community_sources"]["shadow"] = {"url": "https://example.com"}
+    await engine.async_take_control_of_community_task("shadow")
+    detached = engine.async_save_task.await_args.args[1]
+    assert "community" not in detached
+    assert "shadow" not in engine.state["community_sources"]
+
+    with pytest.raises(vol.Invalid, match="Unknown task_id"):
+        await engine.async_promote_shadow_task("missing")
+    engine.tasks["plain"] = _manual("Plain")
+    with pytest.raises(vol.Invalid, match="nicht im Shadow Mode"):
+        await engine.async_promote_shadow_task("plain")
+    with pytest.raises(vol.Invalid, match="nicht mit einem Community-Paket"):
+        await engine.async_take_control_of_community_task("plain")
+
+    hass.states.async_set("binary_sensor.washer", "off")
+    preview = {
+        "digest": "digest",
+        "pack_id": "example.pack",
+        "version": "1.2.3",
+        "publisher": {
+            "id": "publisher",
+            "name": "Publisher",
+            "fingerprint": "fingerprint",
+            "trusted": False,
+        },
+        "templates": [
+            {
+                "id": "washer",
+                "required_entities": [{"key": "washer", "domains": ["binary_sensor"]}],
+                "task": {
+                    **_manual("Empty washer"),
+                    "schedule": {
+                        "type": "state_trigger",
+                        "triggers": [{"entity_id": "{{washer}}", "to": "off"}],
+                    },
+                },
+            }
+        ],
+    }
+    engine.async_preview_community_pack = AsyncMock(return_value=preview)
+    await engine.async_install_community_template(
+        "https://example.com/pack.json",
+        "digest",
+        "washer",
+        "installed",
+        {"washer": "binary_sensor.washer"},
+        assignee="alex",
+        trust_publisher=True,
+    )
+    installed = engine.async_save_task.await_args.args[1]
+    assert installed["assignee"] == "alex"
+    assert installed["community"]["managed"] is True
+    assert engine.state["trusted_template_publishers"] == {"publisher": "fingerprint"}
+    assert engine.state["community_sources"]["installed"]["version"] == "1.2.3"
+
+
+async def test_community_install_rejects_changed_untrusted_or_invalid_inputs(hass):
+    engine, _ = await _native_engine(hass, {})
+    base = {
+        "digest": "current",
+        "pack_id": "pack",
+        "version": "1.0.0",
+        "publisher": {
+            "id": "publisher",
+            "name": "Publisher",
+            "fingerprint": "fingerprint",
+            "trusted": False,
+        },
+        "templates": [],
+    }
+    engine.async_preview_community_pack = AsyncMock(return_value=base)
+    with pytest.raises(vol.Invalid, match="seit der Vorschau"):
+        await engine.async_install_community_template(
+            "https://example.com",
+            "old",
+            "missing",
+            "task",
+            {},
+            assignee=None,
+            trust_publisher=False,
+        )
+    with pytest.raises(vol.Invalid, match="Publisher"):
+        await engine.async_install_community_template(
+            "https://example.com",
+            "current",
+            "missing",
+            "task",
+            {},
+            assignee=None,
+            trust_publisher=False,
+        )
+    with pytest.raises(vol.Invalid, match="Vorlage fehlt"):
+        await engine.async_install_community_template(
+            "https://example.com",
+            "current",
+            "missing",
+            "task",
+            {},
+            assignee=None,
+            trust_publisher=True,
+        )
+
+    template = {
+        **base,
+        "templates": [
+            {
+                "id": "one",
+                "required_entities": [{"key": "device", "domains": ["sensor"]}],
+                "task": _manual("One"),
+            }
+        ],
+    }
+    engine.async_preview_community_pack.return_value = template
+    with pytest.raises(vol.Invalid, match="existiert nicht"):
+        await engine.async_install_community_template(
+            "https://example.com",
+            "current",
+            "one",
+            "task",
+            {"device": "sensor.missing"},
+            assignee=None,
+            trust_publisher=True,
+        )
+    hass.states.async_set("binary_sensor.present", "on")
+    with pytest.raises(vol.Invalid, match="erwartete Domain"):
+        await engine.async_install_community_template(
+            "https://example.com",
+            "current",
+            "one",
+            "task",
+            {"device": "binary_sensor.present"},
+            assignee=None,
+            trust_publisher=True,
+        )
+
+
+async def test_community_update_check_records_updates_and_failures(hass):
+    engine, _ = await _native_engine(hass, {})
+    engine.state["community_sources"] = {
+        "new": {"url": "https://example.com/new", "version": "1.0.0"},
+        "broken": {"url": "https://example.com/broken", "version": "1.0.0"},
+    }
+
+    async def preview(url):
+        if url.endswith("broken"):
+            raise vol.Invalid("invalid pack")
+        return {"version": "1.1.0"}
+
+    engine.async_preview_community_pack = AsyncMock(side_effect=preview)
+    engine._save = AsyncMock()
+    result = await engine.async_check_community_updates()
+    assert result["new"]["update_available"] == "1.1.0"
+    assert result["new"]["last_error"] is None
+    assert result["broken"]["last_error"] == "invalid pack"
+    assert "checked_at" in result["broken"]
+    engine._save.assert_awaited_once()

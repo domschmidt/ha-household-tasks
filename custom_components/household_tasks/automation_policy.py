@@ -186,15 +186,13 @@ def notification_policy_decision(
     exhausted = bool(budget and sent_today >= budget)
     behavior = str(policy.get("quiet_behavior", "defer"))
     allowed = bypass or behavior == "allow" or not (quiet or exhausted)
-    reason = (
-        "critical_bypass"
-        if bypass
-        else "quiet_hours"
-        if quiet
-        else "budget_exhausted"
-        if exhausted
-        else "allowed"
-    )
+    reason = "allowed"
+    if exhausted:
+        reason = "budget_exhausted"
+    if quiet:
+        reason = "quiet_hours"
+    if bypass:
+        reason = "critical_bypass"
     return {
         "allowed": allowed,
         "reason": reason,

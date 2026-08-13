@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from custom_components.household_tasks.automation_policy import (
+    compare_value,
+    condition_value,
     energy_decision,
     evaluate_conditions,
     notification_policy_decision,
@@ -122,9 +124,12 @@ def test_quiet_hours_budget_and_critical_bypass_are_explainable():
         sent_today=2,
         priority="critical",
     )
-    assert quiet["reason"] == "quiet_hours" and not quiet["allowed"]
-    assert exhausted["reason"] == "budget_exhausted" and not exhausted["allowed"]
-    assert critical["reason"] == "critical_bypass" and critical["allowed"]
+    assert quiet["reason"] == "quiet_hours"
+    assert not quiet["allowed"]
+    assert exhausted["reason"] == "budget_exhausted"
+    assert not exhausted["allowed"]
+    assert critical["reason"] == "critical_bypass"
+    assert critical["allowed"]
 
 
 def test_private_visibility_and_detail_redaction():
@@ -165,3 +170,57 @@ def test_replacement_candidates_stay_in_domain_and_rank_similar_names():
     candidates = replacement_candidates("sensor.outside_temperature", states)
     assert candidates[0]["entity_id"] == "sensor.outdoor_temperature"
     assert all(item["entity_id"].startswith("sensor.") for item in candidates)
+
+
+def test_policy_helpers_fail_closed_for_missing_and_malformed_inputs():
+    assert not compare_value("on", "unsupported", "on")
+    assert compare_value(" ON ", "equals", "on")
+    assert condition_value({"entity_id": "sensor.missing"}, {}) is None
+    assert (
+        condition_value(
+            {"entity_id": "sensor.value", "attribute": "missing"},
+            {"sensor.value": {"state": "1", "attributes": "invalid"}},
+        )
+        is None
+    )
+    unavailable = evaluate_conditions(
+        [{"entity_id": "sensor.value", "condition": "equals", "value": "on"}],
+        {"sensor.value": {"state": "unavailable", "attributes": {}}},
+    )
+    assert not unavailable["allowed"]
+    assert not unavailable["conditions"][0]["available"]
+
+
+def test_disabled_and_empty_policies_have_safe_defaults():
+    now = datetime(2026, 8, 13, 12, tzinfo=BERLIN)
+    assert wait_state_decision(None, {}, now=now) == {
+        "waiting": False,
+        "reason": "disabled",
+    }
+    assert energy_decision(None, {}, now=now)["reason"] == "disabled"
+    assert energy_decision(
+        {"enabled": True, "preferred_start": "bad", "preferred_end": "also-bad"},
+        {},
+        now=now,
+    )["allowed"]
+    assert notification_policy_decision(
+        None, now=now, sent_today=99, priority="normal"
+    )["allowed"]
+
+
+def test_visibility_defaults_and_admin_override_are_explicit():
+    occurrence = {"assignee": "alex", "target_person": "sam"}
+    assert visible_to({}, occurrence, viewer_person=None, is_admin=False)
+    assert visible_to(
+        {"visibility": {"level": "assignee"}},
+        occurrence,
+        viewer_person="sam",
+        is_admin=False,
+    )
+    assert visible_to(
+        {"visibility": {"level": "people", "people": []}},
+        occurrence,
+        viewer_person=None,
+        is_admin=True,
+    )
+    assert replacement_candidates("invalid", {}) == []

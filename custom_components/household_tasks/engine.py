@@ -2241,13 +2241,11 @@ class HouseholdTaskEngine:
         """Atomically apply a verified health-check entity replacement."""
         if self.hass.states.get(new_entity_id) is None:
             raise vol.Invalid("Die Ersatz-Entität ist nicht verfügbar.")
-        source = (
-            self.tasks.get(owner_id)
-            if scope == "task"
-            else self.people.get(owner_id)
-            if scope == "person"
-            else None
-        )
+        source = None
+        if scope == "task":
+            source = self.tasks.get(owner_id)
+        elif scope == "person":
+            source = self.people.get(owner_id)
         if source is None:
             raise vol.Invalid("Das Konfigurationsobjekt existiert nicht mehr.")
         updated = deepcopy(source)
@@ -2953,7 +2951,7 @@ class HouseholdTaskEngine:
     async def async_check_community_updates(self) -> dict[str, Any]:
         """Check installed managed templates and persist bounded update metadata."""
         sources = self.state.setdefault("community_sources", {})
-        for _task_id, source in list(sources.items()):
+        for _task_id, source in sources.copy().items():
             try:
                 preview = await self.async_preview_community_pack(source["url"])
                 source["update_available"] = (
@@ -5023,7 +5021,7 @@ class HouseholdTaskEngine:
                     self.hass, delay.total_seconds(), _confirm
                 )
 
-    async def _observe_state_change(self, event: Event) -> None:
+    def _observe_state_change(self, event: Event) -> None:
         """Keep a small, attribute-free buffer for opt-in rule suggestions."""
         entity_id = str(event.data.get("entity_id", ""))
         domain = entity_id.split(".", 1)[0]
@@ -7712,7 +7710,7 @@ class HouseholdTaskEngine:
     async def _process_deferred_notifications(self, now: datetime) -> None:
         """Release deferred interruptions when their policy permits delivery."""
         pending = self.state.setdefault("deferred_notifications", {})
-        for key, item in list(pending.items()):
+        for key, item in pending.copy().items():
             occurrence = self.state["occurrences"].get(item["occurrence_id"])
             person_id = item.get("person_id")
             if (
