@@ -34,5 +34,5 @@ export default defineConfig({
       testIgnore: /visual[.]spec[.]js/,
     },
   ],
-  snapshotPathTemplate: "{testDir}/__screenshots__/{testFilePath}/{arg}-{projectName}{ext}",
+  snapshotPathTemplate: "{testDir}/__screenshots__/{testFilePath}/{arg}-{projectName}-{platform}{ext}",
 });

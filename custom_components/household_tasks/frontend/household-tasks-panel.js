@@ -1755,7 +1755,7 @@ class HouseholdTasksPanel extends HTMLElement {
     if (pausedUntil) pauseAction = `<button data-resume-task="${this._e(id)}">Jetzt fortsetzen</button>`;
     else if (task.enabled !== false) pauseAction = `<button data-pause-task="${this._e(id)}">Temporär pausieren</button>`;
     const adminActions = this._data.is_admin
-      ? `${pauseAction}<button data-edit-task="${this._e(id)}">Bearbeiten</button>${task.community?.managed ? `<button data-community-control="${this._e(id)}">Vorlage übernehmen</button>` : ""}${task.shadow?.enabled ? `<button class="primary" data-promote-shadow="${this._e(id)}">Produktiv schalten</button>` : ""}<button class="danger-button" data-delete-task="${this._e(id)}">Löschen</button>`
+      ? `${pauseAction}<button data-edit-task="${this._e(id)}">Bearbeiten</button>${task.community?.managed ? `<button data-community-control="${this._e(id)}">Lokale Kontrolle übernehmen</button>` : ""}${task.shadow?.enabled ? `<button class="primary" data-promote-shadow="${this._e(id)}">Produktiv schalten</button>` : ""}<button class="danger-button" data-delete-task="${this._e(id)}">Löschen</button>`
       : "";
     return `<article class="config-card ${disabledClass}">
       <div class="card-top"><span class="avatar">${this._e(assignment.icon)}</span>
@@ -2544,7 +2544,7 @@ class HouseholdTasksPanel extends HTMLElement {
   _communityTemplateSettings() {
     const sources = Object.entries(this._data.community_sources || {});
     const installed = sources.length
-      ? `<div class="community-source-list">${sources.map(([taskId, source]) => `<div><span><strong>${this._e(this._data.tasks[taskId]?.name || taskId)}</strong><small>${this._e(source.publisher)} · ${this._e(source.version)}${source.update_available ? ` · Update ${this._e(source.update_available)} verfügbar` : ""}${source.last_error ? ` · ${this._e(source.last_error)}` : ""}</small></span><span class="community-source-actions">${source.update_available ? `<button data-community-update="${this._e(taskId)}" data-community-url="${this._e(source.url)}" data-community-template="${this._e(source.template_id)}">Update ansehen</button>` : ""}${this._data.tasks[taskId]?.community?.managed ? `<button data-community-control="${this._e(taskId)}">Vorlage übernehmen</button>` : ""}</span></div>`).join("")}</div>`
+      ? `<div class="community-source-list">${sources.map(([taskId, source]) => `<div><span><strong>${this._e(this._data.tasks[taskId]?.name || taskId)}</strong><small>${this._e(source.publisher)} · ${this._e(source.version)}${source.update_available ? ` · Update ${this._e(source.update_available)} verfügbar` : ""}${source.last_error ? ` · ${this._e(source.last_error)}` : ""}</small></span><span class="community-source-actions">${source.update_available ? `<button data-community-update="${this._e(taskId)}" data-community-url="${this._e(source.url)}" data-community-template="${this._e(source.template_id)}">Update ansehen</button>` : ""}${this._data.tasks[taskId]?.community?.managed ? `<button data-community-control="${this._e(taskId)}">Lokale Kontrolle übernehmen</button>` : ""}</span></div>`).join("")}</div>`
       : '<p class="hint">Noch keine Community-Vorlage installiert.</p>';
     return `<article class="settings-card community-card"><div class="settings-heading"><div><h3>Versionierte Community-Vorlagen</h3><p>Signierte Pakete per HTTPS prüfen, benötigte Entitäten zuordnen und kontrolliert installieren.</p></div>${this._data.is_admin && sources.length ? '<button id="check-community-updates">Updates prüfen</button>' : ""}</div>
       ${this._data.is_admin ? `<form id="community-import-form" class="form-grid"><label class="full">Paket-URL<input name="url" type="url" required pattern="https://.*" placeholder="https://…/household-tasks-pack.json"><span class="hint">Vor der Installation werden Version, Signatur, Publisher und Entitätsanforderungen angezeigt.</span></label><div class="full"><button type="submit">URL prüfen</button></div></form>` : ""}
@@ -3282,7 +3282,7 @@ class HouseholdTasksPanel extends HTMLElement {
       }
       if (data.get("entity_id")?.trim()) payload.entity_id = data.get("entity_id").trim();
       if (entry?.required_entities?.length) {
-        payload.mappings = Object.fromEntries(entry.required_entities.map((item) => [item.key, String(data.get(`mapping_${item.key}`) || "").trim()]));
+        payload.mappings = Object.fromEntries(entry.required_entities.map((item) => [item.key, this._formText(data, `mapping_${item.key}`).trim()]));
       }
       await this._call("install_gallery_template", payload);
       close();
@@ -3684,7 +3684,8 @@ class HouseholdTasksPanel extends HTMLElement {
       const output = modal.querySelector(".simulator-result");
       let snapshots = [];
       try {
-        snapshots = String(data.get("snapshots") || "").trim() ? JSON.parse(data.get("snapshots")) : [];
+        const snapshotText = this._formText(data, "snapshots").trim();
+        snapshots = snapshotText ? JSON.parse(snapshotText) : [];
         if (!Array.isArray(snapshots)) throw new Error("Snapshots müssen eine JSON-Liste sein.");
       } catch (error) { output.textContent = this._errorText(error); return; }
       const selectedPresence = data.getAll("presence");
@@ -3788,7 +3789,7 @@ class HouseholdTasksPanel extends HTMLElement {
     modal.querySelector("#community-install-form").onsubmit = async (submitEvent) => {
       submitEvent.preventDefault();
       const form = submitEvent.currentTarget; const values = new FormData(form); const mappings = {};
-      selected.required_entities.forEach((item) => { mappings[item.key] = String(values.get(`mapping_${item.key}`) || "").trim(); });
+      selected.required_entities.forEach((item) => { mappings[item.key] = this._formText(values, `mapping_${item.key}`).trim(); });
       try {
         await this._call("community_install", {
           url: pack.url, digest: pack.digest, template_id: selected.id,
@@ -4278,8 +4279,8 @@ class HouseholdTasksPanel extends HTMLElement {
       return;
     }
     const definitions = [
-      [de ? "Name" : "Name", original.name, current.name, (value) => value || "–"],
-      [de ? "Status" : "Status", { enabled: original.enabled, paused_until: original.paused_until, shadow: original.shadow }, { enabled: current.enabled, paused_until: current.paused_until, shadow: current.shadow }, (value) => value?.enabled === false ? (de ? "Deaktiviert" : "Disabled") : value?.shadow?.enabled ? "Shadow Mode" : value?.paused_until ? `${de ? "Pausiert bis" : "Paused until"} ${new Date(value.paused_until).toLocaleString(this._locale())}` : (de ? "Aktiv" : "Active")],
+      ["Name", original.name, current.name, (value) => value || "–"],
+      ["Status", { enabled: original.enabled, paused_until: original.paused_until, shadow: original.shadow }, { enabled: current.enabled, paused_until: current.paused_until, shadow: current.shadow }, (value) => value?.enabled === false ? (de ? "Deaktiviert" : "Disabled") : value?.shadow?.enabled ? "Shadow Mode" : value?.paused_until ? `${de ? "Pausiert bis" : "Paused until"} ${new Date(value.paused_until).toLocaleString(this._locale())}` : (de ? "Aktiv" : "Active")],
       [de ? "Zuständigkeit" : "Assignment", { assignment: original.assignment, assignee: original.assignee }, { assignment: current.assignment, assignee: current.assignee }, (value) => this._taskAssignmentChangeSummary(value, de)],
       [de ? "Auslöser" : "Trigger", { schedule: original.schedule, weather: original.weather, season: original.season, repeat: original.repeat }, { schedule: current.schedule, weather: current.weather, season: current.season, repeat: current.repeat }, (value) => this._taskTriggerChangeSummary(value, de)],
       [de ? "Inhalt" : "Content", { description: original.description, checklist: original.checklist }, { description: current.description, checklist: current.checklist }, (value) => this._taskContentChangeSummary(value, de)],
@@ -5211,7 +5212,7 @@ class HouseholdTasksPanel extends HTMLElement {
       value.paused_until = pausedUntil.toISOString();
     }
     if (f.get("shadow_enabled") === "on") {
-      const reviewAt = new Date(String(f.get("shadow_review_at") || ""));
+      const reviewAt = new Date(this._formText(f, "shadow_review_at"));
       if (Number.isNaN(reviewAt.getTime())) throw new Error("Bitte einen gültigen Prüfzeitpunkt für den Shadow Mode auswählen.");
       value.shadow = {
         enabled: true,
@@ -5288,8 +5289,8 @@ class HouseholdTasksPanel extends HTMLElement {
       value.repeat = { mode: "once_per_season" };
     }
     if (f.get("wait_enabled") === "on") {
-      const entityId = String(f.get("wait_entity_id") || "").trim();
-      const expected = String(f.get("wait_value") || "").trim();
+      const entityId = this._formText(f, "wait_entity_id").trim();
+      const expected = this._formText(f, "wait_value").trim();
       if (!entityId || !this._hass.states[entityId]) throw new Error("Bitte eine vorhandene Entität für den Wartezustand auswählen.");
       if (!expected) throw new Error("Bitte einen erwarteten Wert für den Wartezustand angeben.");
       value.wait_for = {
@@ -5297,7 +5298,7 @@ class HouseholdTasksPanel extends HTMLElement {
         match: "all",
         conditions: [{
           entity_id: entityId,
-          attribute: String(f.get("wait_attribute") || "").trim(),
+          attribute: this._formText(f, "wait_attribute").trim(),
           condition: f.get("wait_condition") || "equals",
           value: expected,
         }],
@@ -5306,8 +5307,8 @@ class HouseholdTasksPanel extends HTMLElement {
       };
     }
     if (f.get("energy_enabled") === "on") {
-      const tariffEntity = String(f.get("energy_tariff_entity") || "").trim();
-      const surplusEntity = String(f.get("energy_surplus_entity") || "").trim();
+      const tariffEntity = this._formText(f, "energy_tariff_entity").trim();
+      const surplusEntity = this._formText(f, "energy_surplus_entity").trim();
       if (!tariffEntity && !surplusEntity && !(f.get("energy_preferred_start") && f.get("energy_preferred_end"))) {
         throw new Error("Für die Energieoptimierung wird mindestens ein Tarif-, Überschuss- oder Zeitfenster benötigt.");
       }

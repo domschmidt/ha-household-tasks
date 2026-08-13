@@ -10,6 +10,8 @@ HOUSEHOLD_MODES = {"normal", "vacation", "guest"}
 MODE_POLICIES = {"pause", "reduce", "delegate"}
 PRIORITIES = {"low", "normal", "high", "critical"}
 SEASON_CONDITIONS = {"below", "at_most", "above", "at_least", "equals", "not_equals"}
+GUEST_ROOM_TASK = "Gästezimmer vorbereiten"
+DEVICE_CATEGORY = "Geräte"
 
 
 def task_activation_decision(
@@ -478,11 +480,11 @@ def template_gallery() -> list[dict[str, Any]]:
         {
             "id": "gaestezimmer",
             "category": "Gastmodus",
-            "name": "Gästezimmer vorbereiten",
+            "name": GUEST_ROOM_TASK,
             "description": "Ist ausschließlich aktiv, solange der Gastmodus eingeschaltet ist.",
             "task": {
                 "enabled": True,
-                "name": "Gästezimmer vorbereiten",
+                "name": GUEST_ROOM_TASK,
                 "assignment": {"type": "open"},
                 "schedule": {"type": "manual"},
                 "modes": {"guest_only": True},
@@ -653,7 +655,7 @@ def template_gallery() -> list[dict[str, Any]]:
         [
             _state_template(
                 "washer_finished",
-                "Geräte",
+                DEVICE_CATEGORY,
                 "Waschmaschine fertig",
                 "Erstellt zehn Minuten nach Programmende eine Aufgabe und verhindert offene Duplikate.",
                 "Waschmaschine ausräumen",
@@ -664,7 +666,7 @@ def template_gallery() -> list[dict[str, Any]]:
             ),
             _state_template(
                 "dryer_finished_fold",
-                "Geräte",
+                DEVICE_CATEGORY,
                 "Trockner fertig und Wäsche falten",
                 "Verbindet Ausräumen und Zusammenlegen als nachvollziehbare Checkliste.",
                 "Trockner leeren und Wäsche zusammenlegen",
@@ -679,7 +681,7 @@ def template_gallery() -> list[dict[str, Any]]:
             ),
             _state_template(
                 "dishwasher_morning",
-                "Geräte",
+                DEVICE_CATEGORY,
                 "Spülmaschine morgens ausräumen",
                 "Merkt sich ein nächtliches Programmende und stellt die Aufgabe erst morgens bereit.",
                 "Spülmaschine ausräumen",
@@ -860,7 +862,7 @@ def template_gallery() -> list[dict[str, Any]]:
                     "schedule": {"type": "manual"},
                     "modes": {"guest_only": True},
                     "checklist": [
-                        "Gästezimmer vorbereiten",
+                        GUEST_ROOM_TASK,
                         "Handtücher bereitlegen",
                         "WLAN-Zugang prüfen",
                         "Getränke und Frühstück einkaufen",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
@@ -15,6 +16,7 @@ from custom_components.household_tasks.community_templates import (
     is_newer,
     substitute_entities,
     validate_pack,
+    validate_resolved_host,
     validate_source_url,
 )
 from custom_components.household_tasks.rule_intelligence import (
@@ -286,3 +288,42 @@ def test_community_source_and_version_boundaries():
         validate_source_url("http://example.com/pack.json")
     with pytest.raises(vol.Invalid):
         validate_source_url("https://127.0.0.1/pack.json")
+
+
+@pytest.mark.asyncio
+async def test_community_dns_validation_rejects_empty_private_and_failed_results():
+    loop = __import__("asyncio").get_running_loop()
+    with (
+        patch.object(loop, "getaddrinfo", AsyncMock(return_value=[])),
+        pytest.raises(vol.Invalid, match="keine Adresse"),
+    ):
+        await validate_resolved_host("example.com")
+    private_record = [(None, None, None, None, ("127.0.0.1", 443))]
+    with (
+        patch.object(loop, "getaddrinfo", AsyncMock(return_value=private_record)),
+        pytest.raises(vol.Invalid, match="Lokale oder private"),
+    ):
+        await validate_resolved_host("example.com")
+    with (
+        patch.object(loop, "getaddrinfo", AsyncMock(side_effect=OSError)),
+        pytest.raises(vol.Invalid, match="aufgelöst"),
+    ):
+        await validate_resolved_host("example.com")
+
+
+def test_community_validation_rejects_malformed_sources_and_placeholders():
+    invalid_urls = [
+        "https://user:secret@example.com/pack.json",
+        "https://example.com:444/pack.json",
+        "not-a-url",
+    ]
+    for url in invalid_urls:
+        with pytest.raises(vol.Invalid):
+            validate_source_url(url)
+    with pytest.raises(vol.Invalid, match="erforderliche Entität"):
+        substitute_entities({"entity_id": "{{missing}}"}, {})
+    assert substitute_entities(
+        {"items": ["plain", {"entity_id": "{{sensor}}"}]},
+        {"sensor": "sensor.valid"},
+    ) == {"items": ["plain", {"entity_id": "sensor.valid"}]}
+    assert not is_newer("invalid", "1.0.0")
